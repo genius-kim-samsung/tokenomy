@@ -6,6 +6,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# PyInstaller 빌드 산출물
+build/
+dist/
+
 # venv
 .venv/
 venv/
