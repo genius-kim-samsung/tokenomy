@@ -70,12 +70,26 @@ def test_main_uses_window_when_webview_available(monkeypatch):
     monkeypatch.setattr(launcher, "find_free_port", lambda: 9999)
     monkeypatch.setattr(launcher, "_webview_available", lambda: True)
     monkeypatch.setattr(launcher, "_wait_until_ready", lambda port, **k: True)
-    monkeypatch.setattr(launcher, "_serve", lambda port: None)
     monkeypatch.setattr(launcher, "_launch_window",
                         lambda port: calls.__setitem__("window", port))
     monkeypatch.setattr(launcher, "_open_browser_when_ready",
                         lambda port: calls.__setitem__("browser", port))
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), **kw):
+            calls["thread_target"] = target
+            calls["thread_args"] = args
+
+        def start(self):
+            calls["thread_started"] = True
+
+    monkeypatch.setattr(launcher.threading, "Thread", FakeThread)
+
     launcher.main([])
+    # 서버는 데몬 스레드로 기동, 창은 메인 스레드에서 직접
+    assert calls.get("thread_target") is launcher._serve
+    assert calls.get("thread_args") == (9999,)
+    assert calls.get("thread_started") is True
     assert calls.get("window") == 9999
     assert "browser" not in calls
 
@@ -88,9 +102,21 @@ def test_main_falls_back_to_browser_when_no_webview(monkeypatch):
     monkeypatch.setattr(launcher, "_serve", lambda port: calls.__setitem__("serve", port))
     monkeypatch.setattr(launcher, "_launch_window",
                         lambda port: calls.__setitem__("window", port))
-    monkeypatch.setattr(launcher, "_open_browser_when_ready",
-                        lambda port: calls.__setitem__("browser", port))
+
+    class FakeThread:
+        def __init__(self, target=None, args=(), **kw):
+            calls["thread_target"] = target
+            calls["thread_args"] = args
+
+        def start(self):
+            calls["thread_started"] = True
+
+    monkeypatch.setattr(launcher.threading, "Thread", FakeThread)
+
     launcher.main([])
+    # 브라우저 오프너는 데몬 스레드, _serve는 메인 스레드 블로킹
+    assert calls.get("thread_target") is launcher._open_browser_when_ready
+    assert calls.get("thread_args") == (9999,)
+    assert calls.get("thread_started") is True
     assert calls.get("serve") == 9999
-    assert calls.get("browser") == 9999
     assert "window" not in calls
