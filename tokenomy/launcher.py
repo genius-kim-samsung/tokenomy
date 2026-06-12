@@ -47,6 +47,16 @@ def _safe_ingest() -> None:
         print(f"[launcher] ingest 건너뜀: {e}")
 
 
+def _wait_until_ready(port: int, timeout: float = 10.0, interval: float = 0.25) -> bool:
+    """서버가 127.0.0.1:port에서 응답할 때까지 대기. 준비되면 True, 타임아웃이면 False."""
+    for _ in range(max(1, int(timeout / interval))):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                return True
+        time.sleep(interval)
+    return False
+
+
 def _open_browser_when_ready(port: int) -> None:
     for _ in range(40):  # 최대 ~10초 대기
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

@@ -46,3 +46,19 @@ def test_api_open_external_ignores_non_http(monkeypatch):
     launcher.Api().open_external("/settings")
     launcher.Api().open_external(None)
     assert opened == []
+
+
+def test_wait_until_ready_true_when_serving():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen()
+        port = srv.getsockname()[1]
+        assert launcher._wait_until_ready(port, timeout=1.0) is True
+
+
+def test_wait_until_ready_false_when_closed():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    # 위 with 블록 종료로 포트는 닫힘 — listen하는 곳이 없음
+    assert launcher._wait_until_ready(port, timeout=0.5) is False
