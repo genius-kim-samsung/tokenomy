@@ -120,3 +120,19 @@ def test_main_falls_back_to_browser_when_no_webview(monkeypatch):
     assert calls.get("thread_started") is True
     assert calls.get("serve") == 9999
     assert "window" not in calls
+
+
+def test_ensure_std_streams_replaces_none(monkeypatch):
+    monkeypatch.setattr(launcher.sys, "stdout", None)
+    monkeypatch.setattr(launcher.sys, "stderr", None)
+    launcher._ensure_std_streams()
+    assert launcher.sys.stdout is not None
+    assert launcher.sys.stderr is not None
+
+
+def test_ensure_std_streams_keeps_existing(monkeypatch):
+    import io
+    fake = io.StringIO()
+    monkeypatch.setattr(launcher.sys, "stdout", fake)
+    launcher._ensure_std_streams()
+    assert launcher.sys.stdout is fake  # 살아 있으면 그대로 둔다

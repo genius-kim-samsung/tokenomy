@@ -26,6 +26,16 @@ class Api:
             webbrowser.open(url)
 
 
+def _ensure_std_streams() -> None:
+    """windowed(PyInstaller noconsole) 실행에서 sys.stdout/stderr가 None이면
+    devnull로 대체 — print/로깅이 AttributeError로 죽지 않게 한다.
+    CLI 파이프로 실행될 때는 stdout이 살아 있으므로 건드리지 않는다."""
+    import os
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+
+
 def find_free_port(start: int = 8765, tries: int = 20) -> int:
     for port in range(start, start + tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -90,6 +100,7 @@ def _open_browser_when_ready(port: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    _ensure_std_streams()
     argv = argv if argv is not None else sys.argv[1:]
     if argv and argv[0] in ("--version", "-V"):
         print(__version__)
