@@ -22,7 +22,7 @@ def find_free_port(start: int = 8765, tries: int = 20) -> int:
                 return port
             except OSError:
                 continue
-    raise RuntimeError(f"빈 포트를 찾지 못함 ({start}~{start + tries})")
+    raise RuntimeError(f"빈 포트를 찾지 못함 ({start}~{start + tries - 1})")
 
 
 def _safe_ingest() -> None:
@@ -39,9 +39,10 @@ def _open_browser_when_ready(port: int) -> None:
     for _ in range(40):  # 최대 ~10초 대기
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             if s.connect_ex(("127.0.0.1", port)) == 0:
-                break
+                webbrowser.open(f"http://127.0.0.1:{port}/")
+                return
         time.sleep(0.25)
-    webbrowser.open(f"http://127.0.0.1:{port}/")
+    print(f"[launcher] 서버가 {port}에서 응답하지 않아 브라우저를 열지 않습니다")
 
 
 def main(argv: list[str] | None = None) -> None:
