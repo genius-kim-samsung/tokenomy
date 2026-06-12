@@ -2,7 +2,7 @@ from datetime import datetime
 
 from tokenomy.aggregate import (
     KST, burndown, by_project, by_session, combined_burndown, daily_series, insights,
-    month_bounds, parse_ts, session_detail,
+    month_bounds, parse_ts, period_bounds, session_detail,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
@@ -437,3 +437,44 @@ def test_dashboard_context_has_active_tab(monkeypatch, tmp_path):
     conn = connect(":memory:")
     ctx = dashboard_context(conn, provider="codex", sort="cost", now_kst=_NOW_STATUS)
     assert ctx["active_tab"] == "codex"
+
+
+# ─── period_bounds: 일/주/월 경계 + 라벨 ──────────────────────────────────────
+
+_ANCHOR_SAT = datetime(2026, 6, 13, 15, 0, tzinfo=KST)  # 토요일 15:00 KST
+
+
+def test_period_bounds_day():
+    start, nxt, label = period_bounds("day", _ANCHOR_SAT)
+    assert start == datetime(2026, 6, 13, 0, 0, tzinfo=KST)
+    assert nxt == datetime(2026, 6, 14, 0, 0, tzinfo=KST)
+    assert label == "2026-06-13 (토)"
+
+
+def test_period_bounds_week_starts_monday():
+    start, nxt, label = period_bounds("week", _ANCHOR_SAT)
+    assert start == datetime(2026, 6, 8, 0, 0, tzinfo=KST)   # 월요일
+    assert nxt == datetime(2026, 6, 15, 0, 0, tzinfo=KST)
+    assert label == "2026-06-08 ~ 06-14"
+
+
+def test_period_bounds_month():
+    start, nxt, label = period_bounds("month", _ANCHOR_SAT)
+    assert start == datetime(2026, 6, 1, 0, 0, tzinfo=KST)
+    assert nxt == datetime(2026, 7, 1, 0, 0, tzinfo=KST)
+    assert label == "2026-06"
+
+
+def test_period_bounds_month_year_rollover():
+    start, nxt, label = period_bounds("month", datetime(2026, 12, 20, tzinfo=KST))
+    assert start == datetime(2026, 12, 1, 0, 0, tzinfo=KST)
+    assert nxt == datetime(2027, 1, 1, 0, 0, tzinfo=KST)
+    assert label == "2026-12"
+
+
+def test_period_bounds_week_crosses_month():
+    # 2026-07-01(수)가 속한 주 → 월요일 2026-06-29 시작
+    start, nxt, label = period_bounds("week", datetime(2026, 7, 1, tzinfo=KST))
+    assert start == datetime(2026, 6, 29, 0, 0, tzinfo=KST)
+    assert nxt == datetime(2026, 7, 6, 0, 0, tzinfo=KST)
+    assert label == "2026-06-29 ~ 07-05"

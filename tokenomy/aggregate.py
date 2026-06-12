@@ -41,6 +41,25 @@ def month_bounds(now_kst: datetime) -> tuple[datetime, datetime]:
     return start, nxt
 
 
+def period_bounds(period: str, anchor_kst: datetime) -> tuple[datetime, datetime, str]:
+    """기간 [start, nxt) 경계와 표시 라벨. period ∈ {day, week, month}.
+
+    anchor가 속한 일/주/월을 KST 기준으로 반환. 주는 월요일 시작.
+    화이트리스트 밖 period는 월간으로 폴백(라우트에서도 검증하지만 이중 안전).
+    """
+    a = anchor_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "day":
+        nxt = a + timedelta(days=1)
+        return a, nxt, f"{a.strftime('%Y-%m-%d')} ({'월화수목금토일'[a.weekday()]})"
+    if period == "week":
+        start = a - timedelta(days=a.weekday())   # 월요일(weekday: 월=0)
+        nxt = start + timedelta(days=7)
+        end = nxt - timedelta(days=1)
+        return start, nxt, f"{start.strftime('%Y-%m-%d')} ~ {end.strftime('%m-%d')}"
+    start, nxt = month_bounds(a)                   # month (기본/폴백)
+    return start, nxt, start.strftime("%Y-%m")
+
+
 @dataclass
 class Burndown:
     provider: str
