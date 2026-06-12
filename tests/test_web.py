@@ -10,6 +10,7 @@ def _client(tmp_path, monkeypatch):
     """app.connect를 임시 DB로 교체한 TestClient."""
     db = tmp_path / "t.db"
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "cfg.json"))  # 개인 config 격리(미존재 → 예산 0)
+    monkeypatch.setenv("TOKENOMY_SKIP_UPDATE_CHECK", "1")  # 웹 테스트는 업데이트 네트워크 미사용
 
     def fake_connect(*a, **k):
         return connect(str(db))
@@ -146,3 +147,19 @@ def test_dashboard_has_settings_link_even_with_budget(tmp_path, monkeypatch):
     cfg.write_text('{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
     r = client.get("/")
     assert "/settings" in r.text   # 예산 설정 후에도 설정 페이지 접근 링크 존재
+
+
+def test_dashboard_shows_update_banner(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "check_update", lambda conn: "v9.9.9")
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "새 버전 v9.9.9" in r.text
+    assert "releases/latest" in r.text
+
+
+def test_dashboard_no_update_banner_when_current(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "check_update", lambda conn: None)
+    r = client.get("/")
+    assert "새 버전" not in r.text

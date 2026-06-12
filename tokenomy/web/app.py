@@ -11,6 +11,7 @@ from tokenomy.budget import budget_from_config, load_config, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
 from tokenomy.paths import resource_path
+from tokenomy.update import check_update
 from tokenomy.web.views import dashboard_context, session_context
 
 _BASE = resource_path("tokenomy/web")
@@ -38,7 +39,11 @@ def dashboard(request: Request, provider: str = "claude", sort: str = "cost",
     sort = sort if sort in _SORTS else "cost"
     conn = connect()
     ctx = dashboard_context(conn, provider, sort)
-    return templates.TemplateResponse(request, "dashboard.html", {"notice": notice, **ctx})
+    update_tag = check_update(conn)
+    return templates.TemplateResponse(
+        request, "dashboard.html",
+        {"notice": notice, "update_tag": update_tag, **ctx},
+    )
 
 
 @app.get("/session/{session_id}")
