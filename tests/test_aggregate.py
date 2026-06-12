@@ -338,3 +338,19 @@ def test_dashboard_context_empty_db(monkeypatch, tmp_path):
 def test_session_context_missing():
     conn = connect(":memory:")
     assert session_context(conn, "nope") is None
+
+
+def test_providers_constant():
+    from tokenomy.aggregate import PROVIDERS
+    assert PROVIDERS == ("claude", "codex")
+
+
+def test_by_project_combines_providers_when_none():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 5.0, project="/p", session="a", provider="claude")
+    _insert(conn, "2026-06-06T00:00:00Z", 7.0, project="/p", session="b", provider="codex")
+    rows = by_project(conn, None, NOW)
+    assert len(rows) == 1
+    assert rows[0].project == "/p"
+    assert rows[0].cost == 12.0      # claude 5 + codex 7 합산
+    assert rows[0].sessions == 2

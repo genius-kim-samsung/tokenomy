@@ -12,6 +12,9 @@ from tokenomy.budget import Budget
 
 KST = timezone(timedelta(hours=9))
 
+# 합산/탭바가 도는 provider 목록. 3번째 AI 추가 시 여기 + Budget 필드 + 파서 + 단가만 보강.
+PROVIDERS = ("claude", "codex")
+
 # 효율 코치 휴리스틱 임계값 — 실데이터 캘리브레이션 전 튜닝값(단정 금지, 신호로만 사용)
 INSIGHT_CACHE_READ_MIN = 0.30   # 월 cache_read 비율이 이 미만이면 경고
 INSIGHT_WEB_SEARCH_MAX = 50     # 월 web_search 합이 이 초과면 정보 카드
@@ -63,14 +66,14 @@ class ProjectRow:
     cache_ratio: float
 
 
-def _month_rows(conn, provider: str, now_kst: datetime) -> list:
+def _month_rows(conn, provider: str | None, now_kst: datetime) -> list:
     start, nxt = month_bounds(now_kst)
-    rows = conn.execute(
-        "SELECT ts, cost_usd, priced, session_id, project, "
-        "input_tokens, cache_creation, cache_read, web_search "
-        "FROM messages WHERE provider=?",
-        (provider,),
-    ).fetchall()
+    cols = ("SELECT ts, cost_usd, priced, session_id, project, "
+            "input_tokens, cache_creation, cache_read, web_search FROM messages")
+    if provider is None:
+        rows = conn.execute(cols).fetchall()          # 전 AI 합산
+    else:
+        rows = conn.execute(cols + " WHERE provider=?", (provider,)).fetchall()
     out = []
     for r in rows:
         dt = parse_ts(r["ts"])
