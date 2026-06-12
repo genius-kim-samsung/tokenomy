@@ -82,13 +82,11 @@ def _month_rows(conn, provider: str | None, now_kst: datetime) -> list:
     return out
 
 
-def burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude") -> Burndown:
-    rows = _month_rows(conn, provider, now_kst)
+def _compute_burndown(provider: str, spent: float, limit: float,
+                      unpriced: int, now_kst: datetime) -> Burndown:
+    """집계된 (spent, limit, unpriced)로 Burndown을 산출하는 순수 함수.
+    provider별 burndown과 통합 combined_burndown이 공유한다."""
     start, nxt = month_bounds(now_kst)
-
-    spent = sum((r["cost_usd"] or 0) for r in rows)
-    unpriced = sum(1 for r in rows if not r["priced"])
-    limit = budget.limit_for(provider)
     days_in_month = (nxt - start).days
     day_of_month = now_kst.day
     days_left = days_in_month - day_of_month
@@ -118,6 +116,14 @@ def burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude") 
         exhaust_day=exhaust_day, on_track=on_track, unpriced_count=unpriced,
         status=status,
     )
+
+
+def burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude") -> Burndown:
+    rows = _month_rows(conn, provider, now_kst)
+    spent = sum((r["cost_usd"] or 0) for r in rows)
+    unpriced = sum(1 for r in rows if not r["priced"])
+    limit = budget.limit_for(provider)
+    return _compute_burndown(provider, spent, limit, unpriced, now_kst)
 
 
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None) -> list[ProjectRow]:
