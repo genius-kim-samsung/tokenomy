@@ -1,4 +1,5 @@
 # PyInstaller onefile spec — Tokenomy.exe
+# 선행: pip install pyinstaller   (런타임 아님 — requirements.txt 미포함, CI는 별도 설치)
 # 빌드: pyinstaller tokenomy.spec   →   dist/Tokenomy.exe
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
