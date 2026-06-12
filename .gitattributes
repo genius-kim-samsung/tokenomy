@@ -1,0 +1,4 @@
+# Windows 배치 파일은 항상 CRLF로 체크아웃 (cmd.exe 파싱 안정성).
+# LF로 저장되면 --reload 등 줄 끝 토큰이 깨질 수 있음.
+*.bat text eol=crlf
+*.cmd text eol=crlf

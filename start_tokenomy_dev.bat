@@ -16,5 +16,5 @@ echo [Tokenomy DEV] 세션 로그 수집 중...
 
 echo [Tokenomy DEV] 대시보드 기동 중 (--reload: 코드 변경 시 자동 재시작).
 echo 종료하려면 이 창에서 Ctrl+C. (http://127.0.0.1:8765)
-start "" cmd /c "for /l %%i in (1,1,30) do (timeout /t 1 /nobreak >nul & curl -s -o nul http://127.0.0.1:8765/ >nul 2>&1 && (start "" http://127.0.0.1:8765 & exit))"
+start "" cmd /c "@echo off & for /l %%i in (1,1,30) do (timeout /t 1 /nobreak >nul & curl -s -o nul http://127.0.0.1:8765/ >nul 2>&1 && (start "" http://127.0.0.1:8765 & exit))"
 "%PY%" -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765 --reload

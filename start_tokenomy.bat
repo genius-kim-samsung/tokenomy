@@ -13,5 +13,5 @@ echo [Tokenomy] 세션 로그 수집 중...
 
 echo [Tokenomy] 대시보드 기동 중... 서버가 뜨면 브라우저가 자동으로 열립니다.
 echo 종료하려면 이 창을 닫으세요. (http://127.0.0.1:8765)
-start "" cmd /c "for /l %%i in (1,1,30) do (timeout /t 1 /nobreak >nul & curl -s -o nul http://127.0.0.1:8765/ >nul 2>&1 && (start "" http://127.0.0.1:8765 & exit))"
+start "" cmd /c "@echo off & for /l %%i in (1,1,30) do (timeout /t 1 /nobreak >nul & curl -s -o nul http://127.0.0.1:8765/ >nul 2>&1 && (start "" http://127.0.0.1:8765 & exit))"
 "%PY%" -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765
