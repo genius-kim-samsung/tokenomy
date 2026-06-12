@@ -1,8 +1,8 @@
-"""L0 Raw Archive — raw JSONL 원문을 휘발(기본 30일) 전에 보존.
+"""Raw Archive — raw JSONL 원문을 (로그 휘발 전, 기본 30일) 로컬에 보존.
 
-ingest(L1 파싱)와 별개로, raw 라인을 data/archive/<provider>/<상대경로>로
+ingest 파싱과 별개로, raw 라인을 data/archive/<provider>/<상대경로>로
 증분 바이트 복사한다. parser를 거치지 않으므로 원문이 손실 없이 남는다.
-미래 LLM 고도화 복기의 진실의 원천. 로컬 고정(반출 금지 — 설계 D3).
+로컬 전용 — 네트워크로 내보내지 않는다.
 """
 from __future__ import annotations
 

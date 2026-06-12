@@ -15,7 +15,7 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 data/*.sqlite*
-# L0 raw archive 원문 — 로컬 고정·반출 금지(설계 D3). 인라인 주석은 gitignore에서 패턴의 일부로 해석되므로 반드시 별도 줄로 둘 것.
+# raw archive 원문 — 로컬 전용, 커밋하지 않음. 인라인 주석은 gitignore에서 패턴의 일부로 해석되므로 반드시 별도 줄로 둘 것.
 data/archive/
 
 # env / secrets
@@ -33,5 +33,5 @@ Thumbs.db
 .gstack/
 .claude/
 
-# 내부 설계 문서 — 조직 맥락 포함. public 제외(정리 후 선별 공개).
+# 로컬 설계 메모 — 커밋하지 않음.
 docs/
