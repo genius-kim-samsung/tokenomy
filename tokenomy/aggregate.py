@@ -172,6 +172,7 @@ def combined_burndown(cards: list[Burndown], now_kst: datetime) -> Burndown:
 
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None,
                *, start: datetime | None = None, nxt: datetime | None = None) -> list[ProjectRow]:
+    assert (start is None) == (nxt is None), "start/nxt는 함께 지정해야 한다"
     rows = _range_rows(conn, provider, start, nxt) if (start and nxt) else _month_rows(conn, provider, now_kst)
     agg: dict = {}
     for r in rows:
@@ -217,11 +218,12 @@ def by_session(
     start: datetime | None = None,
     nxt: datetime | None = None,
 ) -> list[SessionRow]:
-    """이번 달 세션별 비용·효율 + 라벨/작업요약.
+    """세션별 비용·효율 + 라벨/작업요약. start/nxt 미지정 시 이번 달 기준.
 
     label = 수동 귀속 라벨, summary = Claude Code aiTitle 캐시(sessions.summary).
     order="cost"(비용순) | "recent"(last_ts 최신순). project가 주어지면 그 프로젝트만.
     """
+    assert (start is None) == (nxt is None), "start/nxt는 함께 지정해야 한다"
     rows = _range_rows(conn, provider, start, nxt) if (start and nxt) else _month_rows(conn, provider, now_kst)
     meta = {
         r["session_id"]: (r["label"], r["summary"])

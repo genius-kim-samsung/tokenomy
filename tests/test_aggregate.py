@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from tokenomy.aggregate import (
     KST, burndown, by_project, by_session, combined_burndown, daily_series, insights,
     month_bounds, parse_ts, period_bounds, session_detail,
@@ -507,3 +509,10 @@ def test_by_session_range_restricts_to_day():
     start, nxt, _ = period_bounds("day", datetime(2026, 6, 13, tzinfo=KST))
     rows = by_session(conn, "claude", NOW, start=start, nxt=nxt)
     assert [r.session_id for r in rows] == ["d13"]
+
+
+def test_by_project_partial_range_args_raise():
+    conn = connect(":memory:")
+    start, nxt, _ = period_bounds("day", datetime(2026, 6, 13, tzinfo=KST))
+    with pytest.raises(AssertionError):
+        by_project(conn, "claude", NOW, start=start)   # nxt 누락 → 가드 발동
