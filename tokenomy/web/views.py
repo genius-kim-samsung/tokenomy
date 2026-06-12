@@ -4,7 +4,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from tokenomy.aggregate import (
-    KST, burndown, by_project, by_session, daily_series, insights, session_detail,
+    KST, PROVIDERS, burndown, by_project, by_session, combined_burndown,
+    daily_series, insights, session_detail,
 )
 from tokenomy.budget import budget_from_config, load_config, user_label
 
@@ -37,11 +38,59 @@ def dashboard_context(conn, provider: str, sort: str, now_kst: datetime | None =
 
     return {
         "provider": provider, "sort": sort,
+        "active_tab": provider,
         "user_label": user_label(config),
         "budget_configured": budget.total > 0,
         "month": now.strftime("%Y-%m"),
         "burndown": bd, "projects": projects, "sessions": sessions,
         "insights": cards,
+        "daily_labels": [p.day for p in daily],
+        "daily_actual": [p.cumulative_cost for p in daily],
+        "daily_pace": pace,
+        "last_ts": last["t"] if has_data else None,
+        "has_data": has_data,
+    }
+
+
+def _provider_has_data(conn, provider: str) -> bool:
+    row = conn.execute(
+        "SELECT MAX(ts) t FROM messages WHERE provider=?", (provider,)
+    ).fetchone()
+    return row is not None and row["t"] is not None
+
+
+def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
+    now = now_kst or datetime.now(KST)
+    config = load_config()
+    budget = budget_from_config(config)
+
+    cards = [
+        {"provider": p, "name": p.capitalize(),
+         "bd": burndown(conn, budget, now, p),
+         "has_data": _provider_has_data(conn, p)}
+        for p in PROVIDERS
+    ]
+    combined = combined_burndown([c["bd"] for c in cards], now)
+
+    projects = by_project(conn, None, now)
+    projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
+    projects = projects[:10]
+    sessions = by_session(conn, None, now, limit_n=10)
+    coach = insights(conn, combined, now, None)
+    daily = daily_series(conn, None, now)
+    pace = [round(combined.limit / combined.days_in_month * p.day, 4)
+            if combined.limit else 0.0 for p in daily]
+
+    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    has_data = last is not None and last["t"] is not None
+
+    return {
+        "active_tab": "overview", "sort": sort,
+        "user_label": user_label(config),
+        "budget_configured": combined.limit > 0,
+        "month": now.strftime("%Y-%m"),
+        "combined": combined, "cards": cards,
+        "projects": projects, "sessions": sessions, "insights": coach,
         "daily_labels": [p.day for p in daily],
         "daily_actual": [p.cumulative_cost for p in daily],
         "daily_pace": pace,

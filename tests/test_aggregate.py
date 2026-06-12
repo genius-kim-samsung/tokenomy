@@ -6,7 +6,7 @@ from tokenomy.aggregate import (
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
-from tokenomy.web.views import dashboard_context, session_context
+from tokenomy.web.views import dashboard_context, overview_context, session_context
 
 # June 2026 has 30 days
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
@@ -397,3 +397,43 @@ def test_combined_burndown_empty_cards():
     assert cb.limit == 0.0
     assert cb.spent == 0.0
     assert cb.status == "ok"
+
+
+def test_overview_context_shape(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"budget": {"claude": 100, "codex": 50}}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0, project="/p")
+    _msg(conn, dedup_key="b", provider="codex", ts="2026-06-11T10:00:00Z", cost_usd=4.0, project="/p")
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["active_tab"] == "overview"
+    assert ctx["combined"].spent == 14.0           # 10 + 4
+    assert ctx["combined"].limit == 150.0
+    assert ctx["budget_configured"] is True
+    assert len(ctx["cards"]) == 2
+    assert {c["provider"] for c in ctx["cards"]} == {"claude", "codex"}
+    assert all(c["has_data"] for c in ctx["cards"])
+    assert ctx["projects"][0].project == "/p"
+    assert ctx["projects"][0].cost == 14.0          # provider 무관 합산
+    assert len(ctx["projects"]) <= 10
+    assert ctx["has_data"] is True
+    assert "daily_labels" in ctx and "insights" in ctx and "sessions" in ctx
+
+
+def test_overview_context_provider_without_data(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    by_p = {c["provider"]: c for c in ctx["cards"]}
+    assert by_p["claude"]["has_data"] is True
+    assert by_p["codex"]["has_data"] is False       # codex 로그 없음
+    assert ctx["budget_configured"] is False         # 예산 미설정 → 사용량만
+
+
+def test_dashboard_context_has_active_tab(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    ctx = dashboard_context(conn, provider="codex", sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["active_tab"] == "codex"
