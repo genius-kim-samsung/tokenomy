@@ -132,6 +132,7 @@ def combined_burndown(cards: list[Burndown], now_kst: datetime) -> Burndown:
     한도(limit>0)가 있는 provider만 spent·limit·unpriced를 합산해 분자/분모 범위를
     일치시킨다(예: claude 한도만 있으면 codex 지출은 통합 바에서 제외). 한도 있는
     provider가 하나도 없으면 limit=0(사용량만, spent=전체 합산)으로 둔다.
+    호출부는 PROVIDERS 전체를 넘기므로 cards는 비어있지 않다(빈 리스트는 한도 0·지출 0).
     """
     capped = [c for c in cards if c.limit > 0]
     if capped:

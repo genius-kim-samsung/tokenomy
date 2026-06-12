@@ -388,3 +388,12 @@ def test_combined_burndown_mixed_caps_only_capped():
     cb = combined_burndown(cards, NOW)
     assert cb.limit == 100.0         # claude만
     assert cb.spent == 30.0          # codex(미설정) 지출 제외 → 분자/분모 범위 일치
+    assert cb.status == "ok"     # spent 30, limit 100, projected 90 < 100 → ok
+
+
+def test_combined_burndown_empty_cards():
+    # 실제론 PROVIDERS가 비어있지 않아 발생하지 않지만, 빈 입력의 안전 동작을 고정한다.
+    cb = combined_burndown([], NOW)
+    assert cb.limit == 0.0
+    assert cb.spent == 0.0
+    assert cb.status == "ok"
