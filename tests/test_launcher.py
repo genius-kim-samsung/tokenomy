@@ -79,6 +79,7 @@ def test_main_uses_window_when_webview_available(monkeypatch):
         def __init__(self, target=None, args=(), **kw):
             calls["thread_target"] = target
             calls["thread_args"] = args
+            calls["thread_kwargs"] = kw
 
         def start(self):
             calls["thread_started"] = True
@@ -90,6 +91,7 @@ def test_main_uses_window_when_webview_available(monkeypatch):
     assert calls.get("thread_target") is launcher._serve
     assert calls.get("thread_args") == (9999,)
     assert calls.get("thread_started") is True
+    assert calls.get("thread_kwargs", {}).get("daemon") is True
     assert calls.get("window") == 9999
     assert "browser" not in calls
 
@@ -107,6 +109,7 @@ def test_main_falls_back_to_browser_when_no_webview(monkeypatch):
         def __init__(self, target=None, args=(), **kw):
             calls["thread_target"] = target
             calls["thread_args"] = args
+            calls["thread_kwargs"] = kw
 
         def start(self):
             calls["thread_started"] = True
@@ -118,6 +121,7 @@ def test_main_falls_back_to_browser_when_no_webview(monkeypatch):
     assert calls.get("thread_target") is launcher._open_browser_when_ready
     assert calls.get("thread_args") == (9999,)
     assert calls.get("thread_started") is True
+    assert calls.get("thread_kwargs", {}).get("daemon") is True
     assert calls.get("serve") == 9999
     assert "window" not in calls
 

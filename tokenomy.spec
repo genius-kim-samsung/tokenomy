@@ -14,7 +14,7 @@ a = Analysis(
     hiddenimports=(
         collect_submodules('uvicorn')
         + collect_submodules('webview')
-        + ['clr']  # pythonnet(.NET interop) — Windows EdgeChromium 백엔드
+        + ['clr']  # pywebview→pythonnet(.NET interop), Windows EdgeChromium 백엔드
     ),
     hookspath=[],
     runtime_hooks=[],

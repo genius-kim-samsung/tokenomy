@@ -1,7 +1,8 @@
 """exe 진입점 — 더블클릭 실행.
 
-데이터 디렉토리 보장 → ingest 1회 → 빈 포트 탐색 → 브라우저 자동 오픈 →
-uvicorn 기동(127.0.0.1, 로컬 전용). PyInstaller 엔트리 스크립트.
+ingest 1회 → 빈 포트 탐색 → uvicorn 기동(127.0.0.1, 로컬 전용) →
+WebView 가용 시 자체 앱 창, 미가용 시 기본 브라우저로 fallback.
+PyInstaller 엔트리 스크립트.
 """
 from __future__ import annotations
 

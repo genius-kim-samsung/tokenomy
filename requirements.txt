@@ -9,6 +9,6 @@ pytest>=8.0
 httpx>=0.27        # FastAPI TestClient
 
 # Desktop GUI
-pywebview>=5.0
+pywebview>=6.0
 
 # (stdlib used: sqlite3, json, pathlib, datetime, dataclasses)
