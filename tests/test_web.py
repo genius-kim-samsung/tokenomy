@@ -59,10 +59,10 @@ def test_dashboard_renders_sections_with_data(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    for section in ("번다운", "일별 추세", "효율 코치", "업무별", "복기"):
+    for section in ("번다운", "일별 추세", "효율 코치", "프로젝트별", "복기"):
         assert section in r.text
     assert "공개 API 단가 기준 추정" in r.text   # §5.2 비용 신뢰도 표기
-    assert "proj" in r.text                       # 업무별 행
+    assert "proj" in r.text                       # 프로젝트별 행
 
 
 def test_ingest_failure_shows_banner(tmp_path, monkeypatch):

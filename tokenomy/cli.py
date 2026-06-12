@@ -1,7 +1,7 @@
 """CLI — 빠른 검증/복기용.
 
   python -m tokenomy.cli ingest   # 세션 로그 파싱 → DB (증분)
-  python -m tokenomy.cli report   # 터미널 요약(번다운 + Top 업무)
+  python -m tokenomy.cli report   # 터미널 요약(번다운 + Top 프로젝트)
   python -m tokenomy.cli all      # ingest 후 report
 """
 from __future__ import annotations
@@ -77,7 +77,7 @@ def cmd_report(conn) -> None:
 
         rows = by_project(conn, prov, now, 12)
         if rows:
-            print("  Top 업무(프로젝트):")
+            print("  Top 프로젝트:")
             for p in rows:
                 name = p.project or "(unknown)"
                 print(
