@@ -1,0 +1,46 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Verify tag matches __version__
+        shell: bash
+        run: |
+          TAG=${GITHUB_REF_NAME#v}
+          VER=$(python -c "import tokenomy; print(tokenomy.__version__)")
+          echo "tag=$TAG  __version__=$VER"
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error::git tag ($TAG) != tokenomy.__version__ ($VER)"
+            exit 1
+          fi
+
+      - name: Build exe
+        run: pyinstaller tokenomy.spec
+
+      - name: Smoke test exe
+        shell: bash
+        run: |
+          OUT=$(./dist/Tokenomy.exe --version)
+          echo "exe --version: $OUT"
+          test "$OUT" = "$(python -c "import tokenomy; print(tokenomy.__version__)")"
+
+      - name: Upload exe to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Tokenomy.exe
