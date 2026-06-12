@@ -20,17 +20,26 @@ still track usage — costs show as *public-list-price estimates*.
 - Runs fully locally. The web dashboard binds to `127.0.0.1` only — do not
   expose it to a network.
 
-## Quick start
+## Quick start (non-developer — Windows)
+
+1. Download `Tokenomy.exe` from
+   [Releases](https://github.com/genius-kim-samsung/tokenomy/releases/latest).
+2. Double-click it. (If Windows SmartScreen warns, click **More info → Run
+   anyway** — it's the normal warning for an unsigned personal tool.)
+3. A console window opens and the dashboard opens in your browser. Data is
+   stored under `C:\Users\<you>\.tokenomy\`. **Close the window to quit.**
+4. When a new version ships, the dashboard shows an update banner — click it,
+   download the new `Tokenomy.exe`, and overwrite the old one.
+
+## Quick start (developer — from source)
 
 ```bash
 pip install -r requirements.txt
 cp config/tokenomy.config.example.json config/tokenomy.config.json   # then edit your budget
-python -m tokenomy.cli ingest       # parse local session logs into the DB
-python -m tokenomy.cli report       # terminal summary
-python -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765   # web dashboard
+python -m tokenomy.cli ingest
+python -m tokenomy.cli report
+python -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765
 ```
-
-On Windows you can double-click `start_tokenomy.bat` (ingest -> dashboard -> opens browser).
 
 ## Configure your budget
 
