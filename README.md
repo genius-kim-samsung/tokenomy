@@ -41,6 +41,8 @@ python -m tokenomy.cli report
 python -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765
 ```
 
+On Windows, double-click `start_tokenomy.bat` (ingest → dashboard → opens browser).
+
 ## Configure your budget
 
 Edit `config/tokenomy.config.json`, or use the **Settings** page in the
