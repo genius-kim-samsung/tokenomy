@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block body %}
+<header class="topbar">
+  <div>🪙 Tokenomy · {{ month }} (KST) · {{ user_label }}</div>
+  <div class="topbar-right">
+    {% if last_ts %}<span class="muted">데이터 최신: {{ last_ts|kstfmt }}</span>{% endif %}
+    <a class="btn" href="/settings">⚙ 설정</a>
+    <form method="post" action="/ingest" class="inline"><button class="btn">↻ 새로고침</button></form>
+  </div>
+</header>
+
+{% if notice == "ingest-failed" %}
+<div class="banner error">새로고침(ingest) 중 오류 — 기존 데이터를 표시합니다.</div>
+{% endif %}
+
+{% if not budget_configured %}
+<div class="banner">예산을 설정하세요 → <a href="/settings">설정</a> (지금은 사용량 추적만)</div>
+{% endif %}
+
+<section class="card">
+  <div class="card-head">
+    <h2>번다운</h2>
+    <nav class="toggle">
+      <a href="/?provider=claude&sort={{ sort }}" class="{{ 'on' if provider == 'claude' }}">Claude</a>
+      <a href="/?provider=codex&sort={{ sort }}" class="{{ 'on' if provider == 'codex' }}">Codex</a>
+    </nav>
+  </div>
+  {% set bd = burndown %}
+  {% if not has_data and provider == "codex" %}
+    <p class="muted">(이 머신에 Codex 로그 없음)</p>
+  {% elif not has_data %}
+    <p class="muted">데이터 없음 · [↻ 새로고침]을 누르세요</p>
+  {% elif bd.limit == 0 %}
+    <p class="muted">예산 미설정 · 지출 ${{ '%.2f'|format(bd.spent) }} · <a href="/settings">예산 설정</a></p>
+    <p class="disclaimer">ⓘ 공개 API 단가 기준 추정 · 이 머신 데이터만</p>
+  {% else %}
+    <div class="bd-row">
+      <span class="bd-label">{{ provider|capitalize }}</span>
+      <span class="bd-num">${{ '%.2f'|format(bd.spent) }} / ${{ '%.0f'|format(bd.limit) }}</span>
+      <span class="bar"><span class="fill s-{{ bd.status }}" style="width: {{ [bd.pct * 100, 100]|min }}%"></span></span>
+      <span class="bd-pct">{{ '%.1f'|format(bd.pct * 100) }}%</span>
+      <span class="status s-{{ bd.status }}">{{ {'ok':'✅ OK','warn':'⚠ 초과예상','exceeds':'⛔ 초과'}[bd.status] }}</span>
+    </div>
+    <p class="muted">
+      {{ bd.day_of_month }}/{{ bd.days_in_month }}일 경과 · 일평균 ${{ '%.2f'|format(bd.daily_avg) }} ·
+      예상 월말 ${{ '%.0f'|format(bd.projected_month) }}
+      {% if bd.exhaust_day %}· → 이대로면 {{ bd.exhaust_day }}일에 소진 (남은 {{ bd.days_left }}일){% endif %}
+    </p>
+    <p class="disclaimer">ⓘ 공개 API 단가 기준 추정 · 이 머신 데이터만{% if bd.unpriced_count %} · <span class="badge">단가 미식별 {{ bd.unpriced_count }}건</span>{% endif %}</p>
+  {% endif %}
+</section>
+
+{% if has_data %}
+<section class="card">
+  <h2>일별 추세</h2>
+  <canvas id="trend" height="120"></canvas>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>⚠ 효율 코치</h2>
+  <ul class="coach">
+    {% for c in insights %}<li class="lvl-{{ c.level }}">{{ c.text }}</li>{% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>업무별 비용</h2>
+    <nav class="toggle small">
+      <a href="/?provider={{ provider }}&sort=cost" class="{{ 'on' if sort == 'cost' }}">비용</a>
+      <a href="/?provider={{ provider }}&sort=sessions" class="{{ 'on' if sort == 'sessions' }}">세션</a>
+      <a href="/?provider={{ provider }}&sort=cache" class="{{ 'on' if sort == 'cache' }}">캐시</a>
+    </nav>
+  </div>
+  <table class="grid">
+    <thead><tr><th>비용</th><th>캐시</th><th>세션</th><th>프로젝트</th></tr></thead>
+    <tbody>
+      {% for p in projects %}
+      <tr><td>${{ '%.2f'|format(p.cost) }}</td><td>{{ '%.0f'|format(p.cache_ratio * 100) }}%</td>
+          <td>{{ p.sessions }}</td><td>{{ p.project or '(unknown)' }}</td></tr>
+      {% else %}<tr><td colspan="4" class="muted">데이터 없음</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>복기 — 최근 비싼 세션</h2>
+  <table class="grid">
+    <thead><tr><th>기간</th><th>비용</th><th>프로젝트</th><th>라벨</th><th></th></tr></thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr><td>{{ s.first_ts|kstfmt }}</td><td>${{ '%.2f'|format(s.cost) }}</td>
+          <td>{{ s.project or '(unknown)' }}</td><td>{{ s.label or '[라벨 없음]' }}</td>
+          <td><a href="/session/{{ s.session_id }}">▸</a></td></tr>
+      {% else %}<tr><td colspan="5" class="muted">데이터 없음</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+{% block scripts %}
+{% if has_data %}
+<script src="/static/vendor/chart.min.js"></script>
+<script>
+  const trendLabels = {{ daily_labels|tojson }};
+  const trendActual = {{ daily_actual|tojson }};
+  const trendPace   = {{ daily_pace|tojson }};
+  new Chart(document.getElementById('trend'), {
+    type: 'line',
+    data: { labels: trendLabels, datasets: [
+      { label: '누적 실제', data: trendActual, borderColor: '#58a6ff', tension: .2 },
+      { label: '예산 페이스', data: trendPace, borderColor: '#9aa0a6', borderDash: [5,4], pointRadius: 0 },
+    ]},
+    options: { plugins:{ legend:{ labels:{ color:'#e6e8eb' } } },
+      scales:{ x:{ ticks:{ color:'#9aa0a6' } }, y:{ ticks:{ color:'#9aa0a6' } } } }
+  });
+</script>
+{% endif %}
+{% endblock %}

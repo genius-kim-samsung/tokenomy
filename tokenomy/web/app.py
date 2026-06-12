@@ -1,0 +1,89 @@
+"""FastAPI 라우트 (얇게 — 라우팅+입력검증만). 데이터 조립은 views.py."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from tokenomy.aggregate import parse_ts
+from tokenomy.budget import budget_from_config, load_config, save_config
+from tokenomy.cli import cmd_ingest
+from tokenomy.db import connect
+from tokenomy.web.views import dashboard_context, session_context
+
+_BASE = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(_BASE / "templates"))
+
+
+def _kstfmt(ts):
+    dt = parse_ts(ts)
+    return dt.strftime("%m-%d %H:%M") if dt else (ts or "")
+
+
+templates.env.filters["kstfmt"] = _kstfmt
+
+app = FastAPI(title="Tokenomy")
+app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static")
+
+_PROVIDERS = ("claude", "codex")
+_SORTS = ("cost", "sessions", "cache")
+
+
+@app.get("/")
+def dashboard(request: Request, provider: str = "claude", sort: str = "cost",
+              notice: str | None = None):
+    provider = provider if provider in _PROVIDERS else "claude"
+    sort = sort if sort in _SORTS else "cost"
+    conn = connect()
+    ctx = dashboard_context(conn, provider, sort)
+    return templates.TemplateResponse(request, "dashboard.html", {"notice": notice, **ctx})
+
+
+@app.get("/session/{session_id}")
+def session_view(request: Request, session_id: str):
+    conn = connect()
+    ctx = session_context(conn, session_id)
+    if ctx is None:
+        return templates.TemplateResponse(
+            request, "session.html", {"detail": None}, status_code=404
+        )
+    return templates.TemplateResponse(request, "session.html", ctx)
+
+
+@app.post("/ingest")
+def do_ingest():
+    conn = connect()
+    try:
+        cmd_ingest(conn)
+    except Exception:
+        return RedirectResponse("/?notice=ingest-failed", status_code=303)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/settings")
+def settings_get(request: Request):
+    config = load_config()
+    budget = budget_from_config(config)
+    return templates.TemplateResponse(
+        request, "settings.html",
+        {"claude": budget.claude, "codex": budget.codex},
+    )
+
+
+def _to_float(value: str | None) -> float:
+    try:
+        return float(value) if value not in (None, "") else 0.0
+    except ValueError:
+        return 0.0
+
+
+@app.post("/settings")
+def settings_post(claude: str = Form(""), codex: str = Form("")):
+    config = load_config()
+    config["budget"]["claude"] = _to_float(claude)
+    config["budget"]["codex"] = _to_float(codex)
+    save_config(config)
+    return RedirectResponse("/", status_code=303)

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block body %}
+<p><a href="/">← 대시보드</a></p>
+{% if not detail %}
+<section class="card"><h1>세션을 찾을 수 없음</h1></section>
+{% else %}
+{% set d = detail %}
+<header class="topbar"><div>세션 상세 · {{ d.project or '(unknown)' }} · {{ d.provider }}</div></header>
+<section class="card">
+  <p>{{ d.first_ts|kstfmt }} ~ {{ d.last_ts|kstfmt }} · ${{ '%.2f'|format(d.cost) }} · {{ d.msgs }} msg
+     {% if d.label %}· {{ d.label }}{% endif %}</p>
+  <h2>모델별</h2>
+  <table class="grid">
+    <thead><tr><th>모델</th><th>비용</th><th>input</th><th>output</th><th>cache_cr</th><th>cache_rd</th></tr></thead>
+    <tbody>
+      {% for m in d.models %}
+      <tr><td>{{ m.model or '(unknown)' }}</td><td>${{ '%.2f'|format(m.cost) }}</td>
+          <td>{{ '{:,}'.format(m.input_tokens) }}</td><td>{{ '{:,}'.format(m.output_tokens) }}</td>
+          <td>{{ '{:,}'.format(m.cache_creation) }}</td><td>{{ '{:,}'.format(m.cache_read) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">web_search {{ d.web_search }} · web_fetch {{ d.web_fetch }}</p>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,62 @@
+import json
+
+from tokenomy.codex_parser import parse_rollout
+from tokenomy.pricing import compute_cost
+
+
+def _write_rollout(tmp_path, name="rollout-x.jsonl"):
+    f = tmp_path / name
+    lines = [
+        {"type": "session_meta", "payload": {"id": "sess-x", "cwd": "/proj", "timestamp": "2026-06-11T12:50:14Z"}},
+        {"type": "turn_context", "payload": {"model": "gpt-5.5", "cwd": "/proj"}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10, "total_tokens": 110}}}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 200, "cached_input_tokens": 80, "output_tokens": 20, "total_tokens": 220}}}},
+    ]
+    f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    return f
+
+
+def test_parse_rollout_uses_last_cumulative(tmp_path):
+    rec = parse_rollout(str(_write_rollout(tmp_path)))
+    assert rec is not None
+    assert rec.provider == "codex"
+    assert rec.session_id == "sess-x"
+    assert rec.model == "gpt-5.5"
+    assert rec.cwd == "/proj"
+    assert rec.input_tokens == 120   # last cumulative: 200 input - 80 cached
+    assert rec.cache_read == 80
+    assert rec.output_tokens == 20
+    assert rec.cache_creation == 0
+    assert rec.message_id == "sess-x"
+
+
+def test_codex_record_is_priced_by_gpt5_rule(tmp_path):
+    rec = parse_rollout(str(_write_rollout(tmp_path)))
+    pricing = {"match": [{"contains": "gpt-5", "provider": "codex",
+                          "input": 1.25, "output": 10.0, "cache_write": 0.0, "cache_read": 0.125}]}
+    cost = compute_cost(rec, pricing)
+    assert cost.priced is True
+    assert cost.provider == "codex"
+    # 120*1.25 + 20*10 + 80*0.125 = 150 + 200 + 10 = 360 (per million)
+    assert cost.cost_usd == round(360 / 1_000_000, 6)
+
+
+def test_no_token_count_returns_none(tmp_path):
+    f = tmp_path / "rollout-empty.jsonl"
+    f.write_text(json.dumps({"type": "session_meta", "payload": {"id": "s"}}), encoding="utf-8")
+    assert parse_rollout(str(f)) is None
+
+
+def test_malformed_lines_skipped(tmp_path):
+    f = tmp_path / "rollout-bad.jsonl"
+    f.write_text(
+        "{garbage\n"
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 50, "cached_input_tokens": 0, "output_tokens": 5}}}}) + "\n",
+        encoding="utf-8",
+    )
+    rec = parse_rollout(str(f))
+    assert rec is not None
+    assert rec.input_tokens == 50

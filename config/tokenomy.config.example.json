@@ -1,0 +1,8 @@
+{
+  "user_label": "me",
+  "budget": {
+    "claude": 100,
+    "codex": 50
+  },
+  "pricing_overrides": {}
+}

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# venv
+.venv/
+venv/
+
+# data (local DB, never commit transcripts/usage)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite*
+# L0 raw archive 원문 — 로컬 고정·반출 금지(설계 D3). 인라인 주석은 gitignore에서 패턴의 일부로 해석되므로 반드시 별도 줄로 둘 것.
+data/archive/
+
+# env / secrets
+.env
+*.local.json
+
+# personal config (budget) — never commit
+config/tokenomy.config.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# tool-local (Claude Code / gstack — worktrees·settings 로컬 전용)
+.gstack/
+.claude/
+
+# 내부 설계 문서 — 조직 맥락 포함. public 제외(정리 후 선별 공개).
+docs/
