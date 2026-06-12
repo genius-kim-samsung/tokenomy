@@ -36,7 +36,7 @@ jobs:
       - name: Smoke test exe
         shell: bash
         run: |
-          OUT=$(./dist/Tokenomy.exe --version)
+          OUT=$(dist/Tokenomy.exe --version)
           echo "exe --version: $OUT"
           test "$OUT" = "$(python -c "import tokenomy; print(tokenomy.__version__)")"
 
