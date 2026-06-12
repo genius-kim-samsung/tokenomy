@@ -70,11 +70,14 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
          "has_data": _provider_has_data(conn, p)}
         for p in PROVIDERS
     ]
+    # 통합 바(combined)는 한도 있는 provider만 합산(분자/분모 일치)하지만, 아래
+    # 프로젝트·세션·추세는 전 AI 합산이다(의도된 설계 — 통합 바엔 "(한도 설정한 AI 합산)"
+    # 라벨을 단다). 둘 다 한도 거는 일반 케이스에선 일치한다.
     combined = combined_burndown([c["bd"] for c in cards], now)
 
     projects = by_project(conn, None, now)
     projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
-    projects = projects[:10]
+    projects = projects[:10]   # Top 10 롤업 (전체 목록은 각 provider 상세 탭)
     sessions = by_session(conn, None, now, limit_n=10)
     coach = insights(conn, combined, now, None)
     daily = daily_series(conn, None, now)
