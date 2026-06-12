@@ -126,6 +126,25 @@ def burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude") 
     return _compute_burndown(provider, spent, limit, unpriced, now_kst)
 
 
+def combined_burndown(cards: list[Burndown], now_kst: datetime) -> Burndown:
+    """provider별 Burndown 리스트 → 통합 Burndown.
+
+    한도(limit>0)가 있는 provider만 spent·limit·unpriced를 합산해 분자/분모 범위를
+    일치시킨다(예: claude 한도만 있으면 codex 지출은 통합 바에서 제외). 한도 있는
+    provider가 하나도 없으면 limit=0(사용량만, spent=전체 합산)으로 둔다.
+    """
+    capped = [c for c in cards if c.limit > 0]
+    if capped:
+        spent = sum(c.spent for c in capped)
+        limit = sum(c.limit for c in capped)
+        unpriced = sum(c.unpriced_count for c in capped)
+    else:
+        spent = sum(c.spent for c in cards)
+        limit = 0.0
+        unpriced = sum(c.unpriced_count for c in cards)
+    return _compute_burndown("전체", spent, limit, unpriced, now_kst)
+
+
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None) -> list[ProjectRow]:
     rows = _month_rows(conn, provider, now_kst)
     agg: dict = {}

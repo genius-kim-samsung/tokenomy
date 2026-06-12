@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from tokenomy.aggregate import (
-    KST, burndown, by_project, by_session, daily_series, insights,
+    KST, burndown, by_project, by_session, combined_burndown, daily_series, insights,
     month_bounds, parse_ts, session_detail,
 )
 from tokenomy.db import connect
@@ -354,3 +354,37 @@ def test_by_project_combines_providers_when_none():
     assert rows[0].project == "/p"
     assert rows[0].cost == 12.0      # claude 5 + codex 7 합산
     assert rows[0].sessions == 2
+
+
+def test_combined_burndown_sums_capped():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 30.0, provider="claude", session="c")
+    _insert(conn, "2026-06-05T00:00:00Z", 10.0, provider="codex", session="x")
+    cards = [burndown(conn, Budget(claude=100, codex=50), NOW, p) for p in ("claude", "codex")]
+    cb = combined_burndown(cards, NOW)
+    assert cb.spent == 40.0          # 30 + 10
+    assert cb.limit == 150.0         # 100 + 50
+    assert cb.pct == round(40 / 150, 4)
+    assert cb.status == "ok"         # projected 120 < 150
+
+
+def test_combined_burndown_usage_only_when_no_caps():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 30.0, provider="claude", session="c")
+    _insert(conn, "2026-06-05T00:00:00Z", 10.0, provider="codex", session="x")
+    cards = [burndown(conn, Budget(claude=0, codex=0), NOW, p) for p in ("claude", "codex")]
+    cb = combined_burndown(cards, NOW)
+    assert cb.limit == 0.0
+    assert cb.spent == 40.0          # 사용량만: 전체 합산
+    assert cb.pct == 0.0
+    assert cb.status == "ok"
+
+
+def test_combined_burndown_mixed_caps_only_capped():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 30.0, provider="claude", session="c")
+    _insert(conn, "2026-06-05T00:00:00Z", 10.0, provider="codex", session="x")
+    cards = [burndown(conn, Budget(claude=100, codex=0), NOW, p) for p in ("claude", "codex")]
+    cb = combined_burndown(cards, NOW)
+    assert cb.limit == 100.0         # claude만
+    assert cb.spent == 30.0          # codex(미설정) 지출 제외 → 분자/분모 범위 일치
