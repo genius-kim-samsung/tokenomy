@@ -1,6 +1,8 @@
 # PyInstaller onefile spec — Tokenomy.exe
 # 선행: pip install pyinstaller   (런타임 아님 — requirements.txt 미포함, CI는 별도 설치)
-# 빌드: pyinstaller tokenomy.spec   →   dist/Tokenomy.exe
+# 빌드 환경 주의: pywebview가 설치된 환경(.venv)에서 빌드할 것. pywebview 없는 Python으로
+#   빌드하면 webview가 번들에서 빠져, exe가 네이티브 창 대신 브라우저로 fallback한다.
+# 빌드: .venv\Scripts\python -m PyInstaller tokenomy.spec   →   dist/Tokenomy.exe
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 a = Analysis(
