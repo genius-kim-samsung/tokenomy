@@ -13,6 +13,18 @@ import webbrowser
 
 from tokenomy import __version__
 
+WINDOW_TITLE = "Tokenomy"
+WINDOW_WIDTH = 1200
+WINDOW_HEIGHT = 800
+
+
+class Api:
+    """pywebview JS 브리지 — 외부 링크를 기본 브라우저로 연다."""
+
+    def open_external(self, url: str) -> None:
+        if isinstance(url, str) and url.startswith(("http://", "https://")):
+            webbrowser.open(url)
+
 
 def find_free_port(start: int = 8765, tries: int = 20) -> int:
     for port in range(start, start + tries):

@@ -30,3 +30,19 @@ def test_find_free_port_raises_when_exhausted():
         s.bind(("127.0.0.1", 8765))
         with pytest.raises(RuntimeError, match="빈 포트"):
             launcher.find_free_port(8765, tries=1)
+
+
+def test_api_open_external_opens_http(monkeypatch):
+    opened = []
+    monkeypatch.setattr(launcher.webbrowser, "open", lambda u: opened.append(u))
+    launcher.Api().open_external("https://example.com/x")
+    assert opened == ["https://example.com/x"]
+
+
+def test_api_open_external_ignores_non_http(monkeypatch):
+    opened = []
+    monkeypatch.setattr(launcher.webbrowser, "open", lambda u: opened.append(u))
+    launcher.Api().open_external("javascript:alert(1)")
+    launcher.Api().open_external("/settings")
+    launcher.Api().open_external(None)
+    assert opened == []
