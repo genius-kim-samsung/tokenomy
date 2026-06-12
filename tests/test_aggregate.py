@@ -478,3 +478,11 @@ def test_period_bounds_week_crosses_month():
     assert start == datetime(2026, 6, 29, 0, 0, tzinfo=KST)
     assert nxt == datetime(2026, 7, 6, 0, 0, tzinfo=KST)
     assert label == "2026-06-29 ~ 07-05"
+
+
+def test_period_bounds_week_year_rollover():
+    # 2026-12-31(목)이 속한 주 → 월요일 2026-12-28, end 2027-01-03(다른 연도)
+    start, nxt, label = period_bounds("week", datetime(2026, 12, 31, tzinfo=KST))
+    assert start == datetime(2026, 12, 28, 0, 0, tzinfo=KST)
+    assert nxt == datetime(2027, 1, 4, 0, 0, tzinfo=KST)
+    assert label == "2026-12-28 ~ 2027-01-03"

@@ -55,7 +55,8 @@ def period_bounds(period: str, anchor_kst: datetime) -> tuple[datetime, datetime
         start = a - timedelta(days=a.weekday())   # 월요일(weekday: 월=0)
         nxt = start + timedelta(days=7)
         end = nxt - timedelta(days=1)
-        return start, nxt, f"{start.strftime('%Y-%m-%d')} ~ {end.strftime('%m-%d')}"
+        end_fmt = "%Y-%m-%d" if end.year != start.year else "%m-%d"
+        return start, nxt, f"{start.strftime('%Y-%m-%d')} ~ {end.strftime(end_fmt)}"
     start, nxt = month_bounds(a)                   # month (기본/폴백)
     return start, nxt, start.strftime("%Y-%m")
 
