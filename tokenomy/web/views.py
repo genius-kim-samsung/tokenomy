@@ -1,11 +1,11 @@
 """DB → 화면용 dict 조립. 라우트(app.py)와 집계(aggregate.py)를 분리한다."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from tokenomy.aggregate import (
     KST, PROVIDERS, burndown, by_project, by_session, combined_burndown,
-    daily_series, insights, session_detail,
+    daily_series, insights, period_bounds, session_detail,
 )
 from tokenomy.budget import budget_from_config, load_config, user_label
 
@@ -109,3 +109,49 @@ def session_context(conn, session_id: str) -> dict | None:
     if detail is None:
         return None
     return {"detail": detail}
+
+
+def projects_context(conn, period: str, anchor_kst: datetime, provider: str,
+                     sort: str, now_kst: datetime | None = None) -> dict:
+    """전체 프로젝트 목록(/projects). 기간 [start,nxt)로 집계 후 sort 키로 재정렬."""
+    now = now_kst or datetime.now(KST)
+    config = load_config()
+    start, nxt, label = period_bounds(period, anchor_kst)
+    rows = by_project(conn, provider or None, now, start=start, nxt=nxt)
+    rows.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
+    return {
+        "active_tab": provider or "overview",
+        "user_label": user_label(config),
+        "period": period, "period_label": label,
+        "anchor": anchor_kst.strftime("%Y-%m-%d"),
+        "provider": provider, "sort": sort,
+        "rows": rows, "count": len(rows),
+        "total": round(sum(r.cost for r in rows), 4),
+        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "next_anchor": nxt.strftime("%Y-%m-%d"),
+        "has_next": nxt <= now,                 # 현재/미래 기간이면 다음 숨김
+        "month": now.strftime("%Y-%m"),         # _tabs.html 헤더용
+    }
+
+
+def sessions_context(conn, period: str, anchor_kst: datetime, provider: str,
+                     order: str, project: str, now_kst: datetime | None = None) -> dict:
+    """전체 세션 목록(/sessions). order=cost|recent, project 드릴다운 필터."""
+    now = now_kst or datetime.now(KST)
+    config = load_config()
+    start, nxt, label = period_bounds(period, anchor_kst)
+    rows = by_session(conn, provider or None, now, start=start, nxt=nxt,
+                      order=order, project=project or None)
+    return {
+        "active_tab": provider or "overview",
+        "user_label": user_label(config),
+        "period": period, "period_label": label,
+        "anchor": anchor_kst.strftime("%Y-%m-%d"),
+        "provider": provider, "order": order, "project": project,
+        "rows": rows, "count": len(rows),
+        "total": round(sum(r.cost for r in rows), 4),
+        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "next_anchor": nxt.strftime("%Y-%m-%d"),
+        "has_next": nxt <= now,
+        "month": now.strftime("%Y-%m"),
+    }

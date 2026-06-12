@@ -8,7 +8,9 @@ from tokenomy.aggregate import (
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
-from tokenomy.web.views import dashboard_context, overview_context, session_context
+from tokenomy.web.views import (
+    dashboard_context, overview_context, projects_context, sessions_context, session_context,
+)
 
 # June 2026 has 30 days
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
@@ -516,3 +518,47 @@ def test_by_project_partial_range_args_raise():
     start, nxt, _ = period_bounds("day", datetime(2026, 6, 13, tzinfo=KST))
     with pytest.raises(AssertionError):
         by_project(conn, "claude", NOW, start=start)   # nxt 누락 → 가드 발동
+
+
+# ─── projects_context / sessions_context ─────────────────────────────────────
+
+_NOW_613 = datetime(2026, 6, 13, 12, 0, tzinfo=KST)
+_ANCHOR_613 = datetime(2026, 6, 13, tzinfo=KST)
+
+
+def test_projects_context_current_day(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", ts="2026-06-13T01:00:00Z", cost_usd=10.0, project="/p")
+    ctx = projects_context(conn, "day", _ANCHOR_613, "", "cost", now_kst=_NOW_613)
+    assert ctx["period"] == "day"
+    assert ctx["period_label"] == "2026-06-13 (토)"
+    assert ctx["anchor"] == "2026-06-13"
+    assert ctx["count"] == 1
+    assert ctx["total"] == 10.0
+    assert ctx["rows"][0].project == "/p"
+    assert ctx["active_tab"] == "overview"
+    assert ctx["has_next"] is False          # 오늘이 속한 기간 → 다음 없음
+
+
+def test_projects_context_past_day_has_next(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    ctx = projects_context(conn, "day", _ANCHOR_613, "", "cost",
+                           now_kst=datetime(2026, 6, 20, tzinfo=KST))
+    assert ctx["has_next"] is True
+    assert ctx["prev_anchor"] == "2026-06-12"
+    assert ctx["next_anchor"] == "2026-06-14"
+
+
+def test_sessions_context_order_and_filter(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-13T01:00:00Z", cost_usd=2.0, project="/a")
+    _msg(conn, dedup_key="b", session_id="s2", ts="2026-06-13T02:00:00Z", cost_usd=9.0, project="/b")
+    ctx = sessions_context(conn, "day", _ANCHOR_613, "", "cost", "", now_kst=_NOW_613)
+    assert [r.session_id for r in ctx["rows"]] == ["s2", "s1"]   # 비용순
+    assert ctx["total"] == 11.0
+    ctx2 = sessions_context(conn, "day", _ANCHOR_613, "", "cost", "/a", now_kst=_NOW_613)
+    assert [r.session_id for r in ctx2["rows"]] == ["s1"]        # 프로젝트 필터
+    assert ctx2["project"] == "/a"
