@@ -11,9 +11,6 @@ from pathlib import Path
 
 from tokenomy.parser import discover_session_files
 
-ARCHIVE_ROOT = Path("data/archive")
-
-
 def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS archive_offsets "
@@ -40,9 +37,12 @@ def set_archive_offset(conn: sqlite3.Connection, path: str, offset: int) -> None
 
 def archive_tree(
     root, conn: sqlite3.Connection, provider: str = "claude",
-    archive_root=ARCHIVE_ROOT,
+    archive_root=None,
 ) -> int:
     """root 아래 모든 *.jsonl을 증분 아카이브. 새 바이트가 복사된 파일 수 반환."""
+    if archive_root is None:
+        from tokenomy.paths import archive_root as _default_archive_root
+        archive_root = _default_archive_root()
     root = Path(root).expanduser()
     archive_root = Path(archive_root)
     copied = 0

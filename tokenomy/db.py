@@ -113,9 +113,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def connect(db_path: str | Path = "data/tokenomy.db") -> sqlite3.Connection:
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
+    if db_path is None:
+        from tokenomy.paths import db_path as _default_db_path
+        p = _default_db_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        target = str(p)
+    else:
+        target = str(db_path)
+        if target != ":memory:":
+            Path(target).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(target)
     conn.row_factory = sqlite3.Row
     _migrate(conn)
     conn.executescript(SCHEMA)

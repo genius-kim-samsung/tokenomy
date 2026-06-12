@@ -12,9 +12,10 @@ from tokenomy.aggregate import parse_ts
 from tokenomy.budget import budget_from_config, load_config, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
+from tokenomy.paths import resource_path
 from tokenomy.web.views import dashboard_context, session_context
 
-_BASE = Path(__file__).resolve().parent
+_BASE = resource_path("tokenomy/web")
 templates = Jinja2Templates(directory=str(_BASE / "templates"))
 
 

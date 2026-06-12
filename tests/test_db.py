@@ -222,3 +222,11 @@ def test_migration_adds_columns_to_legacy_db(tmp_path):
     # 기존 행은 보존
     row = conn.execute("SELECT provider FROM messages WHERE dedup_key='k'").fetchone()
     assert row["provider"] == "claude"
+
+
+def test_connect_default_uses_paths_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
+    conn = connect()  # 인자 없음 → paths.db_path()
+    conn.execute("INSERT INTO meta (key, value) VALUES ('x', '1')")
+    conn.commit()
+    assert (tmp_path / "data" / "tokenomy.db").exists()

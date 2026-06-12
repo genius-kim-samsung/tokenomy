@@ -13,9 +13,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-_DEFAULT_CONFIG = Path("config/tokenomy.config.json")
-
-
 @dataclass
 class Budget:
     claude: float
@@ -37,7 +34,10 @@ def _config_path(path: str | Path | None = None) -> Path:
     if path is not None:
         return Path(path)
     env = os.environ.get("TOKENOMY_CONFIG")
-    return Path(env) if env else _DEFAULT_CONFIG
+    if env:
+        return Path(env)
+    from tokenomy.paths import config_path
+    return config_path()
 
 
 def load_config(path: str | Path | None = None) -> dict:

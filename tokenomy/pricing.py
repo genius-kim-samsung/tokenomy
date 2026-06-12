@@ -22,7 +22,10 @@ class CostResult:
     provider: str | None
 
 
-def load_pricing(path: str | Path = "config/pricing.json") -> dict:
+def load_pricing(path: str | Path | None = None) -> dict:
+    if path is None:
+        from tokenomy.paths import resource_path
+        path = resource_path("config/pricing.json")
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 

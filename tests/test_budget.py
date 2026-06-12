@@ -61,3 +61,10 @@ def test_example_config_is_valid():
     cfg = json.loads(open("config/tokenomy.config.example.json", encoding="utf-8").read())
     assert "budget" in cfg
     assert "claude" in cfg["budget"] and "codex" in cfg["budget"]
+
+
+def test_config_path_default_uses_paths(tmp_path, monkeypatch):
+    from tokenomy.budget import _config_path
+    monkeypatch.delenv("TOKENOMY_CONFIG", raising=False)
+    monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
+    assert _config_path() == tmp_path / "config" / "tokenomy.config.json"
