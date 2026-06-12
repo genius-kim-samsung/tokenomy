@@ -1,8 +1,6 @@
 """FastAPI 라우트 (얇게 — 라우팅+입력검증만). 데이터 조립은 views.py."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles

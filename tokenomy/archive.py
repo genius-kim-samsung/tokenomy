@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tokenomy.parser import discover_session_files
 
+
 def _ensure_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE TABLE IF NOT EXISTS archive_offsets "
