@@ -120,7 +120,7 @@ def burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude") 
     )
 
 
-def by_project(conn, provider: str, now_kst: datetime, limit_n: int | None = None) -> list[ProjectRow]:
+def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None) -> list[ProjectRow]:
     rows = _month_rows(conn, provider, now_kst)
     agg: dict = {}
     for r in rows:
@@ -157,7 +157,7 @@ class SessionRow:
 
 def by_session(
     conn,
-    provider: str,
+    provider: str | None,
     now_kst: datetime,
     limit_n: int | None = None,
     project: str | None = None,
@@ -240,7 +240,7 @@ class Insight:
     text: str
 
 
-def insights(conn, bd: "Burndown", now_kst: datetime, provider: str) -> list[Insight]:
+def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None) -> list[Insight]:
     rows = _month_rows(conn, provider, now_kst)
     cr = sum(r["cache_read"] or 0 for r in rows)
     den = sum((r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0) for r in rows)
@@ -268,7 +268,7 @@ class DayPoint:
     cumulative_cost: float
 
 
-def daily_series(conn, provider: str, now_kst: datetime) -> list[DayPoint]:
+def daily_series(conn, provider: str | None, now_kst: datetime) -> list[DayPoint]:
     rows = _month_rows(conn, provider, now_kst)
     per_day: dict = {}
     for r in rows:
