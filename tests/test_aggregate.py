@@ -486,3 +486,24 @@ def test_period_bounds_week_year_rollover():
     assert start == datetime(2026, 12, 28, 0, 0, tzinfo=KST)
     assert nxt == datetime(2027, 1, 4, 0, 0, tzinfo=KST)
     assert label == "2026-12-28 ~ 2027-01-03"
+
+
+# ─── _range_rows: 임의 기간 집계 ──────────────────────────────────────────────
+
+def test_by_project_range_restricts_to_week():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-08T00:00:00Z", 5.0, project="/p", session="a")   # KST 6/8 09:00 (주 안)
+    _insert(conn, "2026-06-20T00:00:00Z", 9.0, project="/p", session="b")   # KST 6/20 (주 밖)
+    start, nxt, _ = period_bounds("week", datetime(2026, 6, 13, tzinfo=KST))
+    rows = by_project(conn, "claude", NOW, start=start, nxt=nxt)
+    assert len(rows) == 1
+    assert rows[0].cost == 5.0
+
+
+def test_by_session_range_restricts_to_day():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-13T01:00:00Z", 3.0, session="d13")   # KST 6/13 10:00
+    _insert(conn, "2026-06-14T01:00:00Z", 7.0, session="d14")   # KST 6/14 10:00
+    start, nxt, _ = period_bounds("day", datetime(2026, 6, 13, tzinfo=KST))
+    rows = by_session(conn, "claude", NOW, start=start, nxt=nxt)
+    assert [r.session_id for r in rows] == ["d13"]

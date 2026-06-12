@@ -86,8 +86,7 @@ class ProjectRow:
     cache_ratio: float
 
 
-def _month_rows(conn, provider: str | None, now_kst: datetime) -> list:
-    start, nxt = month_bounds(now_kst)
+def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime) -> list:
     cols = ("SELECT ts, cost_usd, priced, session_id, project, "
             "input_tokens, cache_creation, cache_read, web_search FROM messages")
     if provider is None:
@@ -100,6 +99,11 @@ def _month_rows(conn, provider: str | None, now_kst: datetime) -> list:
         if dt and start <= dt < nxt:
             out.append(r)
     return out
+
+
+def _month_rows(conn, provider: str | None, now_kst: datetime) -> list:
+    start, nxt = month_bounds(now_kst)
+    return _range_rows(conn, provider, start, nxt)
 
 
 def _compute_burndown(provider: str, spent: float, limit: float,
@@ -166,8 +170,9 @@ def combined_burndown(cards: list[Burndown], now_kst: datetime) -> Burndown:
     return _compute_burndown("전체", spent, limit, unpriced, now_kst)
 
 
-def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None) -> list[ProjectRow]:
-    rows = _month_rows(conn, provider, now_kst)
+def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None,
+               *, start: datetime | None = None, nxt: datetime | None = None) -> list[ProjectRow]:
+    rows = _range_rows(conn, provider, start, nxt) if (start and nxt) else _month_rows(conn, provider, now_kst)
     agg: dict = {}
     for r in rows:
         key = r["project"] or "(unknown)"
@@ -208,13 +213,16 @@ def by_session(
     limit_n: int | None = None,
     project: str | None = None,
     order: str = "cost",
+    *,
+    start: datetime | None = None,
+    nxt: datetime | None = None,
 ) -> list[SessionRow]:
     """이번 달 세션별 비용·효율 + 라벨/작업요약.
 
     label = 수동 귀속 라벨, summary = Claude Code aiTitle 캐시(sessions.summary).
     order="cost"(비용순) | "recent"(last_ts 최신순). project가 주어지면 그 프로젝트만.
     """
-    rows = _month_rows(conn, provider, now_kst)
+    rows = _range_rows(conn, provider, start, nxt) if (start and nxt) else _month_rows(conn, provider, now_kst)
     meta = {
         r["session_id"]: (r["label"], r["summary"])
         for r in conn.execute("SELECT session_id, label, summary FROM sessions").fetchall()
