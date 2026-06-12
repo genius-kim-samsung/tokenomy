@@ -1,6 +1,6 @@
 # PyInstaller onefile spec — Tokenomy.exe
 # 빌드: pyinstaller tokenomy.spec   →   dist/Tokenomy.exe
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 a = Analysis(
     ['tokenomy/launcher.py'],
@@ -10,13 +10,15 @@ a = Analysis(
         ('config/pricing.json', 'config'),
         ('tokenomy/web/templates', 'tokenomy/web/templates'),
         ('tokenomy/web/static', 'tokenomy/web/static'),
-    ],
-    hiddenimports=collect_submodules('uvicorn'),
+    ] + collect_data_files('webview'),
+    hiddenimports=(
+        collect_submodules('uvicorn')
+        + collect_submodules('webview')
+        + ['clr']  # pythonnet(.NET interop) — Windows EdgeChromium 백엔드
+    ),
     hookspath=[],
     runtime_hooks=[],
-    # 런타임 미사용 의존성 제외 — 빌드 그래프로만 새어 들어오는 군더더기 차단.
-    # 'pytest'만으론 형제 패키지 '_pytest'(→numpy 동봉)를 못 막는다.
-    # numpy/PIL은 Tokenomy 코드가 전혀 import하지 않음(각각 _pytest, pygments 경유 누수).
+    # 런타임 미사용 의존성 제외. PIL/numpy는 Tokenomy/pywebview 런타임이 import하지 않음.
     excludes=['pytest', '_pytest', 'httpx', 'numpy', 'PIL', 'setuptools'],
 )
 pyz = PYZ(a.pure)
@@ -32,6 +34,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,           # 콘솔: 종료법 안내 + --version 스모크
+    console=False,                 # 콘솔 제거 — 네이티브 창
+    icon='assets/tokenomy.ico',
     disable_windowed_traceback=False,
 )
