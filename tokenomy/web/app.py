@@ -42,7 +42,7 @@ def dashboard(request: Request, provider: str = "claude", sort: str = "cost",
     update_tag = check_update(conn)
     return templates.TemplateResponse(
         request, "dashboard.html",
-        {"notice": notice, "update_tag": update_tag, **ctx},
+        {**ctx, "notice": notice, "update_tag": update_tag},
     )
 
 

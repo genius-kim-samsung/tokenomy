@@ -151,6 +151,7 @@ def test_dashboard_has_settings_link_even_with_budget(tmp_path, monkeypatch):
 
 def test_dashboard_shows_update_banner(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
+    # setattr으로 check_update 자체를 교체하므로 _client의 SKIP env는 우회됨
     monkeypatch.setattr(app_module, "check_update", lambda conn: "v9.9.9")
     r = client.get("/")
     assert r.status_code == 200
