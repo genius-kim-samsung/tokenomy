@@ -26,9 +26,9 @@ still track usage — costs show as *public-list-price estimates*.
    [Releases](https://github.com/genius-kim-samsung/tokenomy/releases/latest).
 2. Double-click it. (If Windows SmartScreen warns, click **More info → Run
    anyway** — it's the normal warning for an unsigned personal tool.)
-3. A console window opens and the dashboard opens in your browser. Data is
-   stored under `C:\Users\<you>\.tokenomy\` (in the `data\` and `config\`
-   subfolders). **Close the window to quit.**
+3. The Tokenomy app window opens with the dashboard. Data is stored under
+   `C:\Users\<you>\.tokenomy\` (in the `data\` and `config\` subfolders).
+   **Close the window to quit.**
 4. When a new version ships, the dashboard shows an update banner — click it,
    download the new `Tokenomy.exe`, and overwrite the old one.
 
