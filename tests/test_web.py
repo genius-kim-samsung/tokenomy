@@ -85,7 +85,7 @@ def test_trend_data_embedded(tmp_path, monkeypatch):
         "VALUES ('a','claude','s1','2026-06-10T10:00:00Z', 7.0, 1)"
     )
     conn.commit()
-    r = client.get("/")
+    r = client.get("/?provider=claude")
     assert "/static/vendor/chart.min.js" in r.text
     assert "trendActual" in r.text          # 임베드된 데이터 변수
 

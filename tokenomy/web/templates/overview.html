@@ -71,6 +71,7 @@
 <section class="card">
   <div class="card-head">
     <h2>통합 프로젝트별 비용 <span class="muted">(Top 10)</span></h2>
+    {# overview는 provider 없이 /?sort= — provider를 붙이면 detail로 라우팅됨 #}
     <nav class="toggle small">
       <a href="/?sort=cost" class="{{ 'on' if sort == 'cost' }}">비용</a>
       <a href="/?sort=sessions" class="{{ 'on' if sort == 'sessions' }}">세션</a>
@@ -102,22 +103,4 @@
   </table>
 </section>
 {% endblock %}
-{% block scripts %}
-{% if has_data %}
-<script src="/static/vendor/chart.min.js"></script>
-<script>
-  const trendLabels = {{ daily_labels|tojson }};
-  const trendActual = {{ daily_actual|tojson }};
-  const trendPace   = {{ daily_pace|tojson }};
-  new Chart(document.getElementById('trend'), {
-    type: 'line',
-    data: { labels: trendLabels, datasets: [
-      { label: '누적 실제', data: trendActual, borderColor: '#58a6ff', tension: .2 },
-      { label: '예산 페이스', data: trendPace, borderColor: '#9aa0a6', borderDash: [5,4], pointRadius: 0 },
-    ]},
-    options: { plugins:{ legend:{ labels:{ color:'#e6e8eb' } } },
-      scales:{ x:{ ticks:{ color:'#9aa0a6' } }, y:{ ticks:{ color:'#9aa0a6' } } } }
-  });
-</script>
-{% endif %}
-{% endblock %}
+{% block scripts %}{% include "_trend_chart.html" %}{% endblock %}
