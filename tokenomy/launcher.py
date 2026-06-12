@@ -57,14 +57,36 @@ def _wait_until_ready(port: int, timeout: float = 10.0, interval: float = 0.25) 
     return False
 
 
+def _webview_available() -> bool:
+    try:
+        import webview  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _serve(port: int) -> None:
+    """uvicorn 기동(블로킹). 데몬 스레드 또는 메인 스레드에서 호출."""
+    import uvicorn
+    from tokenomy.web.app import app
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+
+
+def _launch_window(port: int) -> None:
+    """pywebview 창을 띄운다(블로킹). 창을 닫으면 반환된다."""
+    import webview
+    webview.create_window(
+        WINDOW_TITLE, f"http://127.0.0.1:{port}/",
+        width=WINDOW_WIDTH, height=WINDOW_HEIGHT, js_api=Api(),
+    )
+    webview.start()
+
+
 def _open_browser_when_ready(port: int) -> None:
-    for _ in range(40):  # 최대 ~10초 대기
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", port)) == 0:
-                webbrowser.open(f"http://127.0.0.1:{port}/")
-                return
-        time.sleep(0.25)
-    print(f"[launcher] 서버가 {port}에서 응답하지 않아 브라우저를 열지 않습니다")
+    if _wait_until_ready(port):
+        webbrowser.open(f"http://127.0.0.1:{port}/")
+    else:
+        print(f"[launcher] 서버가 {port}에서 응답하지 않아 브라우저를 열지 않습니다")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -75,12 +97,21 @@ def main(argv: list[str] | None = None) -> None:
 
     _safe_ingest()
     port = find_free_port()
-    threading.Thread(target=_open_browser_when_ready, args=(port,), daemon=True).start()
 
-    import uvicorn
-    from tokenomy.web.app import app
-    print(f"[Tokenomy] http://127.0.0.1:{port}/  (이 창을 닫으면 종료됩니다)")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    if _webview_available():
+        # 서버는 데몬 스레드, 창이 메인 스레드를 점유 → 창 닫으면 프로세스 종료(단발 앱)
+        threading.Thread(target=_serve, args=(port,), daemon=True).start()
+        if not _wait_until_ready(port):
+            print(f"[Tokenomy] 서버가 {port}에서 응답하지 않습니다")
+            return
+        _launch_window(port)
+    else:
+        # WebView 미가용(구형 환경) — 기존 방식: 브라우저 + uvicorn 메인 블로킹
+        threading.Thread(
+            target=_open_browser_when_ready, args=(port,), daemon=True
+        ).start()
+        print(f"[Tokenomy] http://127.0.0.1:{port}/  (이 창을 닫으면 종료됩니다)")
+        _serve(port)
 
 
 if __name__ == "__main__":

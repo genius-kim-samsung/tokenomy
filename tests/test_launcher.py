@@ -62,3 +62,35 @@ def test_wait_until_ready_false_when_closed():
         port = s.getsockname()[1]
     # 위 with 블록 종료로 포트는 닫힘 — listen하는 곳이 없음
     assert launcher._wait_until_ready(port, timeout=0.5) is False
+
+
+def test_main_uses_window_when_webview_available(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(launcher, "_safe_ingest", lambda: None)
+    monkeypatch.setattr(launcher, "find_free_port", lambda: 9999)
+    monkeypatch.setattr(launcher, "_webview_available", lambda: True)
+    monkeypatch.setattr(launcher, "_wait_until_ready", lambda port, **k: True)
+    monkeypatch.setattr(launcher, "_serve", lambda port: None)
+    monkeypatch.setattr(launcher, "_launch_window",
+                        lambda port: calls.__setitem__("window", port))
+    monkeypatch.setattr(launcher, "_open_browser_when_ready",
+                        lambda port: calls.__setitem__("browser", port))
+    launcher.main([])
+    assert calls.get("window") == 9999
+    assert "browser" not in calls
+
+
+def test_main_falls_back_to_browser_when_no_webview(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(launcher, "_safe_ingest", lambda: None)
+    monkeypatch.setattr(launcher, "find_free_port", lambda: 9999)
+    monkeypatch.setattr(launcher, "_webview_available", lambda: False)
+    monkeypatch.setattr(launcher, "_serve", lambda port: calls.__setitem__("serve", port))
+    monkeypatch.setattr(launcher, "_launch_window",
+                        lambda port: calls.__setitem__("window", port))
+    monkeypatch.setattr(launcher, "_open_browser_when_ready",
+                        lambda port: calls.__setitem__("browser", port))
+    launcher.main([])
+    assert calls.get("serve") == 9999
+    assert calls.get("browser") == 9999
+    assert "window" not in calls
