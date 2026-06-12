@@ -6,13 +6,13 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from tokenomy.aggregate import parse_ts
+from tokenomy.aggregate import PROVIDERS, parse_ts
 from tokenomy.budget import budget_from_config, load_config, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
 from tokenomy.paths import resource_path
 from tokenomy.update import check_update
-from tokenomy.web.views import dashboard_context, session_context
+from tokenomy.web.views import dashboard_context, overview_context, session_context
 
 _BASE = resource_path("tokenomy/web")
 templates = Jinja2Templates(directory=str(_BASE / "templates"))
@@ -28,20 +28,23 @@ templates.env.filters["kstfmt"] = _kstfmt
 app = FastAPI(title="Tokenomy")
 app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static")
 
-_PROVIDERS = ("claude", "codex")
 _SORTS = ("cost", "sessions", "cache")
 
 
 @app.get("/")
-def dashboard(request: Request, provider: str = "claude", sort: str = "cost",
+def dashboard(request: Request, provider: str | None = None, sort: str = "cost",
               notice: str | None = None):
-    provider = provider if provider in _PROVIDERS else "claude"
     sort = sort if sort in _SORTS else "cost"
     conn = connect()
-    ctx = dashboard_context(conn, provider, sort)
     update_tag = check_update(conn)
+    if provider in PROVIDERS:
+        ctx = dashboard_context(conn, provider, sort)
+        template = "dashboard.html"
+    else:
+        ctx = overview_context(conn, sort)
+        template = "overview.html"
     return templates.TemplateResponse(
-        request, "dashboard.html",
+        request, template,
         {**ctx, "notice": notice, "update_tag": update_tag},
     )
 

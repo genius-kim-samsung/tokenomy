@@ -31,3 +31,13 @@ table.grid { width:100%; border-collapse:collapse; }
 .grid th, .grid td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
 .grid th { color:var(--muted); font-weight:600; font-size:12px; }
 a { color:#58a6ff; }
+.tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:4px 0 14px; }
+.tabs a { color:var(--muted); text-decoration:none; padding:8px 16px; border-radius:8px 8px 0 0; }
+.tabs a.on { color:#fff; background:var(--card); border:1px solid var(--line); border-bottom-color:var(--card); margin-bottom:-1px; }
+.ai-cards { display:flex; gap:12px; flex-wrap:wrap; }
+.ai-card { flex:1; min-width:200px; display:block; background:#0d1117; border:1px solid var(--line);
+           border-radius:8px; padding:12px; text-decoration:none; color:var(--fg); }
+.ai-card:hover { border-color:#3d444d; }
+.ai-name { font-weight:600; margin-bottom:6px; }
+.ai-num { font-size:16px; margin:4px 0; }
+.ai-card .bar { margin:6px 0; }

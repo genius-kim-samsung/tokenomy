@@ -1,0 +1,24 @@
+<header class="topbar">
+  <div>🪙 Tokenomy · {{ month }} (KST){% if user_label %} · {{ user_label }}{% endif %}</div>
+  <div class="topbar-right">
+    {% if last_ts %}<span class="muted">데이터 최신: {{ last_ts|kstfmt }}</span>{% endif %}
+    <a class="btn" href="/settings">⚙ 설정</a>
+    <form method="post" action="/ingest" class="inline"><button class="btn">↻ 새로고침</button></form>
+  </div>
+</header>
+
+<nav class="tabs">
+  <a href="/" class="{{ 'on' if active_tab == 'overview' }}">전체</a>
+  <a href="/?provider=claude" class="{{ 'on' if active_tab == 'claude' }}">Claude</a>
+  <a href="/?provider=codex" class="{{ 'on' if active_tab == 'codex' }}">Codex</a>
+</nav>
+
+{% if notice == "ingest-failed" %}
+<div class="banner error">새로고침(ingest) 중 오류 — 기존 데이터를 표시합니다.</div>
+{% endif %}
+
+{% if update_tag %}
+<div class="banner update">새 버전 {{ update_tag }} 사용 가능 —
+  <a href="https://github.com/genius-kim-samsung/tokenomy/releases/latest" target="_blank" rel="noopener">다운로드</a>
+</div>
+{% endif %}

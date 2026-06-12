@@ -6,19 +6,17 @@
 <div class="banner">예산을 설정하세요 → <a href="/settings">설정</a> (지금은 사용량 추적만)</div>
 {% endif %}
 
+{% set bd = combined %}
 <section class="card">
-  <h2>번다운</h2>
-  {% set bd = burndown %}
-  {% if not has_data and provider == "codex" %}
-    <p class="muted">(이 머신에 Codex 로그 없음)</p>
-  {% elif not has_data %}
+  <h2>통합 번다운 <span class="muted">(한도 설정한 AI 합산)</span></h2>
+  {% if not has_data %}
     <p class="muted">데이터 없음 · [↻ 새로고침]을 누르세요</p>
   {% elif bd.limit == 0 %}
     <p class="muted">예산 미설정 · 지출 ${{ '%.2f'|format(bd.spent) }} · <a href="/settings">예산 설정</a></p>
     <p class="disclaimer">ⓘ 공개 API 단가 기준 추정 · 이 머신 데이터만</p>
   {% else %}
     <div class="bd-row">
-      <span class="bd-label">{{ provider|capitalize }}</span>
+      <span class="bd-label">전체</span>
       <span class="bd-num">${{ '%.2f'|format(bd.spent) }} / ${{ '%.0f'|format(bd.limit) }}</span>
       <span class="bar"><span class="fill s-{{ bd.status }}" style="width: {{ [bd.pct * 100, 100]|min }}%"></span></span>
       <span class="bd-pct">{{ '%.1f'|format(bd.pct * 100) }}%</span>
@@ -33,15 +31,38 @@
   {% endif %}
 </section>
 
+<section class="card">
+  <h2>AI별 현황</h2>
+  <div class="ai-cards">
+    {% for c in cards %}
+    {% set b = c.bd %}
+    <a class="ai-card" href="/?provider={{ c.provider }}">
+      <div class="ai-name">{{ c.name }}</div>
+      {% if not c.has_data %}
+        <div class="muted">(이 머신에 {{ c.name }} 로그 없음)</div>
+      {% elif b.limit == 0 %}
+        <div class="ai-num">${{ '%.2f'|format(b.spent) }} <span class="muted">사용량만</span></div>
+      {% else %}
+        <div class="ai-num">${{ '%.2f'|format(b.spent) }} / ${{ '%.0f'|format(b.limit) }}</div>
+        <span class="bar"><span class="fill s-{{ b.status }}" style="width: {{ [b.pct * 100, 100]|min }}%"></span></span>
+        <div class="muted">{{ '%.1f'|format(b.pct * 100) }}% · 예상월말 ${{ '%.0f'|format(b.projected_month) }}
+          <span class="status s-{{ b.status }}">{{ {'ok':'✅','warn':'⚠','exceeds':'⛔'}[b.status] }}</span>
+        </div>
+      {% endif %}
+    </a>
+    {% endfor %}
+  </div>
+</section>
+
 {% if has_data %}
 <section class="card">
-  <h2>일별 추세</h2>
+  <h2>통합 추세 <span class="muted">(전 AI 합산)</span></h2>
   <canvas id="trend" height="120"></canvas>
 </section>
 {% endif %}
 
 <section class="card">
-  <h2>⚠ 효율 코치</h2>
+  <h2>통합 효율 코치</h2>
   <ul class="coach">
     {% for c in insights %}<li class="lvl-{{ c.level }}">{{ c.text }}</li>{% endfor %}
   </ul>
@@ -49,11 +70,11 @@
 
 <section class="card">
   <div class="card-head">
-    <h2>프로젝트별 비용</h2>
+    <h2>통합 프로젝트별 비용 <span class="muted">(Top 10)</span></h2>
     <nav class="toggle small">
-      <a href="/?provider={{ provider }}&sort=cost" class="{{ 'on' if sort == 'cost' }}">비용</a>
-      <a href="/?provider={{ provider }}&sort=sessions" class="{{ 'on' if sort == 'sessions' }}">세션</a>
-      <a href="/?provider={{ provider }}&sort=cache" class="{{ 'on' if sort == 'cache' }}">캐시</a>
+      <a href="/?sort=cost" class="{{ 'on' if sort == 'cost' }}">비용</a>
+      <a href="/?sort=sessions" class="{{ 'on' if sort == 'sessions' }}">세션</a>
+      <a href="/?sort=cache" class="{{ 'on' if sort == 'cache' }}">캐시</a>
     </nav>
   </div>
   <table class="grid">
@@ -68,7 +89,7 @@
 </section>
 
 <section class="card">
-  <h2>복기 — 최근 비싼 세션</h2>
+  <h2>복기 — 최근 비싼 세션 <span class="muted">(Top 10)</span></h2>
   <table class="grid">
     <thead><tr><th>기간</th><th>비용</th><th>프로젝트</th><th>라벨</th><th></th></tr></thead>
     <tbody>

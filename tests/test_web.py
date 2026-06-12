@@ -57,7 +57,7 @@ def test_dashboard_renders_sections_with_data(tmp_path, monkeypatch):
         "100, 10, 12.5, 1)"
     )
     conn.commit()
-    r = client.get("/")
+    r = client.get("/?provider=claude")
     assert r.status_code == 200
     for section in ("번다운", "일별 추세", "효율 코치", "프로젝트별", "복기"):
         assert section in r.text
@@ -164,3 +164,56 @@ def test_dashboard_no_update_banner_when_current(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "check_update", lambda conn: None)
     r = client.get("/")
     assert "새 버전" not in r.text
+
+
+def test_root_renders_overview(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "통합 번다운" in r.text
+    assert "AI별 현황" in r.text
+
+
+def test_provider_query_renders_detail(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/?provider=claude")
+    assert r.status_code == 200
+    assert "번다운" in r.text
+    assert "AI별 현황" not in r.text          # detail은 통합 화면 아님
+
+
+def test_bad_provider_falls_back_to_overview(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/?provider=evil")
+    assert r.status_code == 200
+    assert "통합 번다운" in r.text             # 화이트리스트 밖 → overview
+
+
+def test_overview_aggregates_providers(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+        "VALUES ('a','claude','s1','proj','2026-06-10T10:00:00Z','claude-opus-4-8',12.5,1)"
+    )
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+        "VALUES ('b','codex','s2','proj','2026-06-10T11:00:00Z','gpt-5',7.5,1)"
+    )
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    for section in ("통합 번다운", "AI별 현황", "통합 추세", "통합 효율 코치",
+                    "통합 프로젝트별", "복기"):
+        assert section in r.text
+    assert "proj" in r.text
+    assert 'class="tabs"' in r.text
+    assert 'class="ai-cards"' in r.text
+
+
+def test_overview_tabs_active_state(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/")
+    assert 'href="/"' in r.text
+    assert 'href="/?provider=claude"' in r.text
+    assert 'href="/?provider=codex"' in r.text
