@@ -1,11 +1,11 @@
 """DB → 화면용 dict 조립. 라우트(app.py)와 집계(aggregate.py)를 분리한다."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
-    KST, PROVIDERS, burndown, by_project, by_session, combined_burndown,
-    daily_series, insights, period_bounds, session_detail,
+    KST, PROVIDERS, DayGroup, burndown, by_day_session, by_project, by_session,
+    combined_burndown, daily_series, insights, month_bounds, period_bounds, session_detail,
 )
 from tokenomy.budget import budget_from_config, load_config, user_label
 
@@ -154,6 +154,68 @@ def sessions_context(conn, period: str, anchor_kst: datetime, provider: str,
         "provider": provider, "order": order, "project": project,
         "rows": rows, "count": len(rows),
         "total": round(sum(r.cost for r in rows), 4),
+        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "next_anchor": nxt.strftime("%Y-%m-%d"),
+        "has_next": nxt <= now,
+        "month": now.strftime("%Y-%m"),
+        "last_ts": last["t"] if last and last["t"] else None,
+    }
+
+
+_GROUPED_SORTS = ("date_desc", "date_asc", "day_cost")
+_WEEKDAY = "월화수목금토일"
+
+
+def _group_by_date(rows: list) -> list:
+    """DaySessionRow 리스트 → 날짜별 DayGroup. 그룹 내부 행은 비용 내림차순."""
+    by: dict = {}
+    for r in rows:
+        by.setdefault(r.date, []).append(r)
+    out = []
+    for d, rs in by.items():
+        rs.sort(key=lambda x: x.cost, reverse=True)
+        wd = _WEEKDAY[date.fromisoformat(d).weekday()]
+        out.append(DayGroup(date=d, weekday=wd,
+                            subtotal=round(sum(x.cost for x in rs), 4), rows=rs))
+    return out
+
+
+def history_context(conn, anchor_kst: datetime, provider: str,
+                    sort: str, now_kst: datetime | None = None) -> dict:
+    """내역(/history). 월 고정. sort에 따라 그룹(date_desc/date_asc/day_cost) 또는
+    평면(cost/cache)으로 조립한다. 평면은 날짜 그룹을 깨고 단일 정렬 리스트."""
+    now = now_kst or datetime.now(KST)
+    config = load_config()
+    start, nxt = month_bounds(anchor_kst)
+    rows = by_day_session(conn, provider or None, start=start, nxt=nxt)
+    total = round(sum(r.cost for r in rows), 4)
+    count = len(rows)
+
+    is_grouped = sort in _GROUPED_SORTS
+    groups: list = []
+    flat_rows: list = []
+    if is_grouped:
+        groups = _group_by_date(rows)
+        if sort == "date_asc":
+            groups.sort(key=lambda g: g.date)
+        elif sort == "day_cost":
+            groups.sort(key=lambda g: g.subtotal, reverse=True)
+        else:  # date_desc (기본)
+            groups.sort(key=lambda g: g.date, reverse=True)
+    elif sort == "cache":
+        flat_rows = sorted(rows, key=lambda r: r.cache_ratio)            # 낮은 순
+    else:  # cost
+        flat_rows = sorted(rows, key=lambda r: r.cost, reverse=True)
+
+    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    return {
+        "active_tab": provider or "overview",
+        "user_label": user_label(config),
+        "provider": provider, "sort": sort,
+        "is_grouped": is_grouped, "groups": groups, "flat_rows": flat_rows,
+        "count": count, "total": total,
+        "period_label": start.strftime("%Y-%m"),
+        "anchor": anchor_kst.strftime("%Y-%m-%d"),
         "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
         "next_anchor": nxt.strftime("%Y-%m-%d"),
         "has_next": nxt <= now,

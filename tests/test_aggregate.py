@@ -9,7 +9,8 @@ from tokenomy.aggregate import (
 from tokenomy.db import connect
 from tokenomy.budget import Budget
 from tokenomy.web.views import (
-    dashboard_context, overview_context, projects_context, sessions_context, session_context,
+    dashboard_context, history_context, overview_context, projects_context,
+    sessions_context, session_context,
 )
 
 # June 2026 has 30 days
@@ -675,3 +676,86 @@ def test_by_day_session_carries_summary_and_label():
     assert rows[0].summary == "내역 화면 작업"
     assert rows[0].label == "업무"
     assert rows[0].project == "/p"
+
+
+# ─── history_context: 그룹/평면 + 정렬 ────────────────────────────────────────
+
+def _seed_history(conn):
+    # 6/13: s1($2), s2($9)  /  6/12: s1 이어짐($1, 캐시율 낮음)
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-13T01:00:00Z",
+         cost_usd=2.0, input_tokens=10, cache_read=90)
+    _msg(conn, dedup_key="b", session_id="s2", ts="2026-06-13T02:00:00Z",
+         cost_usd=9.0, input_tokens=10, cache_read=90)
+    _msg(conn, dedup_key="c", session_id="s1", ts="2026-06-12T01:00:00Z",
+         cost_usd=1.0, input_tokens=90, cache_read=10)   # s1 첫 등장은 6/12
+
+
+def test_history_context_grouped_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _seed_history(conn)
+    ctx = history_context(conn, _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
+    assert ctx["is_grouped"] is True
+    assert ctx["count"] == 3                      # (6/13,s1),(6/13,s2),(6/12,s1)
+    assert ctx["total"] == 12.0
+    # 날짜 최신순: 6/13 그룹이 먼저
+    assert [g.date for g in ctx["groups"]] == ["2026-06-13", "2026-06-12"]
+    # 6/13 소계 = 2 + 9 = 11
+    assert ctx["groups"][0].subtotal == 11.0
+    # 그룹 내부는 비용 내림차순: s2($9) 먼저
+    assert [r.session_id for r in ctx["groups"][0].rows] == ["s2", "s1"]
+    assert ctx["groups"][0].weekday == "토"        # 2026-06-13 = 토
+
+
+def test_history_context_date_asc(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _seed_history(conn)
+    ctx = history_context(conn, _ANCHOR_613, "", "date_asc", now_kst=_NOW_613)
+    assert [g.date for g in ctx["groups"]] == ["2026-06-12", "2026-06-13"]
+
+
+def test_history_context_day_cost_sorts_groups_by_subtotal(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _seed_history(conn)
+    ctx = history_context(conn, _ANCHOR_613, "", "day_cost", now_kst=_NOW_613)
+    # 6/13 소계 11 > 6/12 소계 1
+    assert [g.date for g in ctx["groups"]] == ["2026-06-13", "2026-06-12"]
+
+
+def test_history_context_flat_cost(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _seed_history(conn)
+    ctx = history_context(conn, _ANCHOR_613, "", "cost", now_kst=_NOW_613)
+    assert ctx["is_grouped"] is False
+    assert ctx["groups"] == []
+    # 평면 비용 내림차순: s2($9, 6/13), s1($2, 6/13), s1($1, 6/12)
+    assert [(r.date, r.cost) for r in ctx["flat_rows"]] == [
+        ("2026-06-13", 9.0), ("2026-06-13", 2.0), ("2026-06-12", 1.0),
+    ]
+
+
+def test_history_context_flat_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _seed_history(conn)
+    ctx = history_context(conn, _ANCHOR_613, "", "cache", now_kst=_NOW_613)
+    assert ctx["is_grouped"] is False
+    # 캐시율 오름차순(낮은 것 먼저): 6/12 s1(0.1)이 맨 위
+    assert ctx["flat_rows"][0].cache_ratio == 0.1
+
+
+def test_history_context_nav_and_provider(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _seed_history(conn)
+    ctx = history_context(conn, _ANCHOR_613, "claude", "date_desc", now_kst=_NOW_613)
+    assert ctx["provider"] == "claude"
+    assert ctx["active_tab"] == "claude"
+    assert ctx["period_label"] == "2026-06"
+    assert ctx["anchor"] == "2026-06-13"
+    assert ctx["prev_anchor"] == "2026-05-31"     # 6/1 - 1일
+    assert ctx["next_anchor"] == "2026-07-01"
+    assert ctx["has_next"] is False               # _NOW_613이 6월 → 다음 없음
