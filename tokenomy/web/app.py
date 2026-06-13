@@ -15,7 +15,8 @@ from tokenomy.db import connect
 from tokenomy.paths import resource_path
 from tokenomy.update import check_update
 from tokenomy.web.views import (
-    dashboard_context, overview_context, projects_context, sessions_context, session_context,
+    dashboard_context, history_context, overview_context, projects_context, sessions_context,
+    session_context,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -35,6 +36,7 @@ app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static"
 _SORTS = ("cost", "sessions", "cache")
 _PERIODS = ("day", "week", "month")
 _ORDERS = ("cost", "recent")
+_HISTORY_SORTS = ("date_desc", "date_asc", "day_cost", "cost", "cache")
 
 
 def _parse_anchor(value: str | None) -> datetime:
@@ -103,6 +105,22 @@ def sessions_view(request: Request, period: str = "month", anchor: str | None = 
     ctx = sessions_context(conn, period, _parse_anchor(anchor), provider, order, project or "")
     return templates.TemplateResponse(
         request, "sessions.html",
+        {**ctx, "notice": notice, "update_tag": update_tag},
+    )
+
+
+@app.get("/history")
+def history_view(request: Request, anchor: str | None = None, provider: str = "",
+                 sort: str = "date_desc", partial: str | None = None,
+                 notice: str | None = None):
+    provider = provider if provider in PROVIDERS else ""
+    sort = sort if sort in _HISTORY_SORTS else "date_desc"
+    conn = connect()
+    update_tag = check_update(conn)
+    ctx = history_context(conn, _parse_anchor(anchor), provider, sort)
+    template = "_history_rows.html" if partial == "1" else "history.html"
+    return templates.TemplateResponse(
+        request, template,
         {**ctx, "notice": notice, "update_tag": update_tag},
     )
 

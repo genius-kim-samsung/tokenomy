@@ -1,0 +1,37 @@
+<p class="muted">{{ period_label }} · {{ count }}건 · 합계 ${{ '%.2f'|format(total) }}</p>
+
+{% macro row_cells(r, show_date) %}
+  {% if show_date %}<td class="col-time">{{ r.date[5:] }}</td>{% endif %}
+  <td>{{ r.provider or '—' }}</td>
+  <td class="col-sum" title="{{ r.summary or '' }}">{{ r.summary or '—' }}{% if r.is_continued %} <span class="cont" title="이전 날짜에서 이어진 세션">↩</span>{% endif %}</td>
+  <td class="col-proj" title="{{ r.project or '' }}">{{ (r.project or '(unknown)').replace('\\', '/').split('/')[-1] or '(unknown)' }}</td>
+  <td>{{ r.label or '—' }}</td>
+  <td>${{ '%.2f'|format(r.cost) }}</td>
+  <td>{{ r.msgs }}</td>
+  <td class="{{ 'cache-miss' if r.cache_miss }}">{{ '%.0f'|format(r.cache_ratio * 100) }}%{% if r.cache_miss %} <span title="이어진 세션인데 캐시 재사용률 낮음 — 재개로 컨텍스트 재구축 가능성">⚠</span>{% endif %}</td>
+  <td><a href="/session/{{ r.session_id }}">▸</a></td>
+{% endmacro %}
+
+{% if count == 0 %}
+  <p class="muted">이 기간 데이터 없음</p>
+{% elif is_grouped %}
+  {% for g in groups %}
+  <div class="day-group">
+    <div class="day-head"><span class="day-label">━ {{ g.date[5:] }} ({{ g.weekday }})</span>
+      <span class="day-sub">합계 ${{ '%.2f'|format(g.subtotal) }}</span></div>
+    <table class="grid sess">
+      <thead><tr><th>AI</th><th>작업요약</th><th>프로젝트</th><th>라벨</th><th>비용</th><th>메시지</th><th>캐시%</th><th></th></tr></thead>
+      <tbody>
+        {% for r in g.rows %}<tr>{{ row_cells(r, false) }}</tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+{% else %}
+  <table class="grid sess">
+    <thead><tr><th>날짜</th><th>AI</th><th>작업요약</th><th>프로젝트</th><th>라벨</th><th>비용</th><th>메시지</th><th>캐시%</th><th></th></tr></thead>
+    <tbody>
+      {% for r in flat_rows %}<tr>{{ row_cells(r, true) }}</tr>{% endfor %}
+    </tbody>
+  </table>
+{% endif %}

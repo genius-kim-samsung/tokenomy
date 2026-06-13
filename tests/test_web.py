@@ -324,3 +324,59 @@ def test_full_pages_show_data_freshness(tmp_path, monkeypatch):
                  "/sessions?anchor=2026-06-10&period=month"):
         r = client.get(path)
         assert "데이터 최신" in r.text
+
+
+def test_history_page_ok(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/history")
+    assert r.status_code == 200
+    assert "내역" in r.text
+    assert 'id="provider-filter"' in r.text       # AI 드롭다운
+    assert 'id="sort-filter"' in r.text           # 정렬 드롭다운
+
+
+def test_history_bad_params_fall_back(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/history?provider=evil&sort=drop")
+    assert r.status_code == 200                    # 화이트리스트 폴백, 크래시 없음
+
+
+def test_history_renders_grouped_rows(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',3.0,1)"
+    )
+    conn.commit()
+    r = client.get("/history?anchor=2026-06-10&sort=date_desc")
+    assert r.status_code == 200
+    assert "myproj" in r.text
+    assert "합계 $3.00" in r.text                   # 일별 소계 또는 기간 합계
+
+
+def test_history_partial_returns_fragment_only(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',3.0,1)"
+    )
+    conn.commit()
+    r = client.get("/history?anchor=2026-06-10&sort=date_desc&partial=1")
+    assert r.status_code == 200
+    assert "myproj" in r.text
+    assert "<!doctype html>" not in r.text.lower()  # 전체 페이지 chrome 없음
+    assert 'id="provider-filter"' not in r.text     # 드롭다운(페이지 셸)도 없음
+
+
+def test_history_shows_data_freshness(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',1.0,1)"
+    )
+    conn.commit()
+    r = client.get("/history?anchor=2026-06-10")
+    assert "데이터 최신" in r.text
