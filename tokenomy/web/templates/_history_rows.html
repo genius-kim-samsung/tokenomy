@@ -1,4 +1,4 @@
-<p class="muted">{{ period_label }} · {{ count }}건 · 합계 ${{ '%.2f'|format(total) }}</p>
+{% if count > 0 %}<p class="muted">{{ period_label }} · {{ count }}건 · 합계 ${{ '%.2f'|format(total) }}</p>{% endif %}
 
 {% macro row_cells(r, show_date) %}
   {% if show_date %}<td class="col-time">{{ r.date[5:] }}</td>{% endif %}

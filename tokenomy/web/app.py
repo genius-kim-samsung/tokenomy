@@ -116,7 +116,7 @@ def history_view(request: Request, anchor: str | None = None, provider: str = ""
     provider = provider if provider in PROVIDERS else ""
     sort = sort if sort in _HISTORY_SORTS else "date_desc"
     conn = connect()
-    update_tag = check_update(conn)
+    update_tag = None if partial == "1" else check_update(conn)  # 부분갱신은 셸 미렌더 → 조회 불필요
     ctx = history_context(conn, _parse_anchor(anchor), provider, sort)
     template = "_history_rows.html" if partial == "1" else "history.html"
     return templates.TemplateResponse(

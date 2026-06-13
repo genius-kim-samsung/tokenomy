@@ -34,23 +34,37 @@
 {% block scripts %}
 <script>
   (function () {
-    var ANCHOR = "{{ anchor }}";
     var tbl = document.getElementById('history-table');
     var pf = document.getElementById('provider-filter');
     var sf = document.getElementById('sort-filter');
-    function refresh() {
-      var qs = 'provider=' + encodeURIComponent(pf.value) +
-               '&sort=' + encodeURIComponent(sf.value) +
-               '&anchor=' + encodeURIComponent(ANCHOR);
+    var ANCHOR = "{{ anchor }}";
+    function load(qs, push) {
       fetch('/history?' + qs + '&partial=1')
-        .then(function (r) { return r.text(); })
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
         .then(function (html) {
           tbl.innerHTML = html;
-          history.pushState(null, '', '/history?' + qs);
+          if (push) history.pushState(null, '', '/history?' + qs);
+        })
+        .catch(function () {
+          tbl.innerHTML = '<p class="muted">새로고침 실패 — 페이지를 다시 로드하세요.</p>';
         });
     }
-    pf.addEventListener('change', refresh);
-    sf.addEventListener('change', refresh);
+    function currentQs() {
+      return 'provider=' + encodeURIComponent(pf.value) +
+             '&sort=' + encodeURIComponent(sf.value) +
+             '&anchor=' + encodeURIComponent(ANCHOR);
+    }
+    pf.addEventListener('change', function () { load(currentQs(), true); });
+    sf.addEventListener('change', function () { load(currentQs(), true); });
+    window.addEventListener('popstate', function () {
+      var params = new URLSearchParams(location.search);
+      pf.value = params.get('provider') || '';
+      sf.value = params.get('sort') || 'date_desc';
+      var anchor = params.get('anchor') || ANCHOR;
+      load('provider=' + encodeURIComponent(pf.value) +
+           '&sort=' + encodeURIComponent(sf.value) +
+           '&anchor=' + encodeURIComponent(anchor), false);
+    });
   })();
 </script>
 {% endblock %}
