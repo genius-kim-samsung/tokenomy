@@ -72,7 +72,8 @@ a { color:#58a6ff; }
 .filters { display: flex; gap: 8px; }
 .filters select {
   padding: 4px 8px; border: 1px solid var(--line, #ddd);
-  border-radius: 6px; background: #fff; font-size: 13px;
+  border-radius: 6px; background: var(--card, #1a1d24);
+  color: var(--fg, #e6e6e6); font-size: 13px;
 }
 .day-group { margin-bottom: 14px; }
 .day-head {
@@ -82,5 +83,5 @@ a { color:#58a6ff; }
 .day-label { font-weight: 600; }
 .day-sub { color: var(--muted, #888); font-variant-numeric: tabular-nums; }
 .cont { color: var(--muted, #999); cursor: help; }
-td.cache-miss { color: #c0392b; font-weight: 600; }
+td.cache-miss { color: var(--exceeds, #f85149); font-weight: 600; }
 td.cache-miss span { cursor: help; }
