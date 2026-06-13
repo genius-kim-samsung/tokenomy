@@ -198,6 +198,7 @@ def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | Non
 class SessionRow:
     session_id: str
     project: str | None
+    provider: str | None   # 세션 provider(sessions.provider) — combined 탭에서 AI 구분
     label: str | None      # 수동 귀속 라벨(sessions.label)
     summary: str | None    # Claude Code aiTitle 캐시(sessions.summary)
     cost: float
@@ -226,8 +227,8 @@ def by_session(
     assert (start is None) == (nxt is None), "start/nxt는 함께 지정해야 한다"
     rows = _range_rows(conn, provider, start, nxt) if (start and nxt) else _month_rows(conn, provider, now_kst)
     meta = {
-        r["session_id"]: (r["label"], r["summary"])
-        for r in conn.execute("SELECT session_id, label, summary FROM sessions").fetchall()
+        r["session_id"]: (r["label"], r["summary"], r["provider"])
+        for r in conn.execute("SELECT session_id, label, summary, provider FROM sessions").fetchall()
     }
     agg: dict = {}
     for r in rows:
@@ -251,8 +252,9 @@ def by_session(
     out = [
         SessionRow(
             session_id=sid, project=a["project"],
-            label=meta.get(sid, (None, None))[0],
-            summary=meta.get(sid, (None, None))[1],
+            provider=meta.get(sid, (None, None, None))[2],
+            label=meta.get(sid, (None, None, None))[0],
+            summary=meta.get(sid, (None, None, None))[1],
             cost=round(a["cost"], 4), first_ts=a["first"], last_ts=a["last"],
             msgs=a["msgs"], cache_ratio=round(a["cr"] / a["den"], 4) if a["den"] else 0.0,
         )

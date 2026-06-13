@@ -30,6 +30,30 @@ h1 { font-size:18px; } h2 { font-size:15px; margin:0 0 8px; }
 table.grid { width:100%; border-collapse:collapse; }
 .grid th, .grid td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
 .grid th { color:var(--muted); font-weight:600; font-size:12px; }
+
+/* 세션 표(.sess): 작업요약 말줄임 + 좁은 화면에서 부가 칸부터 숨김.
+   항상 유지: 작업요약·프로젝트·비용·열기(▸). colspan 빈 행 셀은 숨김 예외. */
+.grid.sess th { white-space:nowrap; }                 /* 헤더 글자 세로 쪼개짐 방지 */
+.grid.sess td:nth-child(5) { white-space:nowrap; }    /* 라벨 칸 한 줄 유지 */
+.grid.sess td.col-time { white-space:nowrap; line-height:1.4; color:var(--muted); }
+.grid.sess td.col-sum  { max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.grid.sess td.col-proj { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@media (max-width:900px) {            /* 라벨(5)·메시지(7)·캐시%(8) 숨김 — 비용은 항상 유지 */
+  .grid.sess th:nth-child(5), .grid.sess td:nth-child(5):not([colspan]),
+  .grid.sess th:nth-child(7), .grid.sess td:nth-child(7):not([colspan]),
+  .grid.sess th:nth-child(8), .grid.sess td:nth-child(8):not([colspan]) { display:none; }
+  .grid.sess td.col-sum  { max-width:280px; }
+}
+@media (max-width:640px) {            /* + AI(2) 숨김 */
+  .grid.sess th:nth-child(2), .grid.sess td:nth-child(2):not([colspan]) { display:none; }
+  .grid.sess td.col-sum  { max-width:160px; }
+  .grid.sess td.col-proj { max-width:150px; }
+}
+@media (max-width:480px) {            /* + 기간(1) 숨김 → 작업요약·프로젝트·비용·열기만 */
+  .grid.sess th:nth-child(1), .grid.sess td:nth-child(1):not([colspan]) { display:none; }
+  .grid.sess td.col-sum  { max-width:130px; }
+  .grid.sess td.col-proj { max-width:130px; }
+}
 a { color:#58a6ff; }
 .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin:4px 0 14px; }
 .tabs a { color:var(--muted); text-decoration:none; padding:8px 16px; border-radius:8px 8px 0 0; }

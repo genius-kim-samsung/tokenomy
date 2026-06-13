@@ -92,14 +92,20 @@
 
 <section class="card">
   <h2>복기 — 최근 비싼 세션 <span class="muted">(Top 10)</span></h2>
-  <table class="grid">
-    <thead><tr><th>기간</th><th>비용</th><th>프로젝트</th><th>라벨</th><th></th></tr></thead>
+  <table class="grid sess">
+    <thead><tr><th>기간</th><th>AI</th><th>작업요약</th><th>프로젝트</th><th>라벨</th><th>비용</th><th>메시지</th><th>캐시%</th><th></th></tr></thead>
     <tbody>
       {% for s in sessions %}
-      <tr><td>{{ s.first_ts|kstfmt }}</td><td>${{ '%.2f'|format(s.cost) }}</td>
-          <td>{{ s.project or '(unknown)' }}</td><td>{{ s.label or '[라벨 없음]' }}</td>
+      <tr><td class="col-time">{{ s.first_ts|kstfmt }}<br>{{ s.last_ts|kstfmt }}</td>
+          <td>{{ s.provider or '—' }}</td>
+          <td class="col-sum" title="{{ s.summary or '' }}">{{ s.summary or '—' }}</td>
+          <td class="col-proj" title="{{ s.project or '' }}">{{ (s.project or '(unknown)').replace('\\', '/').split('/')[-1] or '(unknown)' }}</td>
+          <td>{{ s.label or '[라벨 없음]' }}</td>
+          <td>${{ '%.2f'|format(s.cost) }}</td>
+          <td>{{ s.msgs }}</td>
+          <td>{{ '%.0f'|format(s.cache_ratio * 100) }}%</td>
           <td><a href="/session/{{ s.session_id }}">▸</a></td></tr>
-      {% else %}<tr><td colspan="5" class="muted">데이터 없음</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="9" class="muted">데이터 없음</td></tr>{% endfor %}
     </tbody>
   </table>
   <p class="muted"><a href="/sessions">전체 보기 →</a></p>
