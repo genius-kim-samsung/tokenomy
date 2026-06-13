@@ -204,6 +204,7 @@ def history_context(conn, anchor_kst: datetime, provider: str,
             groups.sort(key=lambda g: g.subtotal, reverse=True)
         else:  # date_desc (기본)
             groups.sort(key=lambda g: g.date, reverse=True)
+    # 평면 정렬은 안정 정렬 — 동률은 by_day_session의 (date, session_id) 내림차순이 유지된다.
     elif sort == "cache":
         flat_rows = sorted(rows, key=lambda r: r.cache_ratio)            # 낮은 순
     else:  # cost

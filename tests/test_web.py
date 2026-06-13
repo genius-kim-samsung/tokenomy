@@ -382,6 +382,21 @@ def test_history_shows_data_freshness(tmp_path, monkeypatch):
     assert "데이터 최신" in r.text
 
 
+def test_history_flat_mode_has_date_column_grouped_does_not(tmp_path, monkeypatch):
+    # 평면 정렬(cost/cache)은 날짜 칸이 부활하고, 그룹 정렬은 날짜 그룹 헤더로 대체된다
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',3.0,1)"
+    )
+    conn.commit()
+    flat = client.get("/history?anchor=2026-06-10&sort=cost")
+    assert "<th>날짜</th>" in flat.text            # 평면 모드 → 날짜 칸 부활
+    grouped = client.get("/history?anchor=2026-06-10&sort=date_desc")
+    assert "<th>날짜</th>" not in grouped.text      # 그룹 모드 → 날짜 칸 없음(헤더로 대체)
+
+
 def test_overview_has_history_link(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/")
