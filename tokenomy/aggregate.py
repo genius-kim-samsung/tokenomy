@@ -216,7 +216,7 @@ class DayGroup:
     date: str
     weekday: str            # '금'
     subtotal: float
-    rows: list  # list[DaySessionRow]
+    rows: list[DaySessionRow]
 
 
 @dataclass
@@ -303,6 +303,7 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
 
     # 세션별 최초 등장일(전체 기준, KST 날짜 문자열)
     first_day: dict[str, str] = {}
+    # provider 필터 없음 — 세션 전체의 최초 등장일 기준이어야 월 경계 이어짐을 오판하지 않음
     for r in conn.execute("SELECT session_id, MIN(ts) m FROM messages GROUP BY session_id").fetchall():
         dt = parse_ts(r["m"])
         if dt:
@@ -342,6 +343,7 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
             cache_ratio=round(cache_ratio, 4),
             is_continued=is_continued, cache_miss=cache_miss,
         ))
+    out.sort(key=lambda x: (x.date, x.session_id), reverse=True)
     return out
 
 
