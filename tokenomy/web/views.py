@@ -4,8 +4,9 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
-    KST, PROVIDERS, DayGroup, burndown, by_day_session, by_project, by_session,
-    combined_burndown, daily_series, insights, month_bounds, period_bounds, session_detail,
+    KST, PROVIDERS, DayGroup, DaySessionRow, burndown, by_day_session, by_project,
+    by_session, combined_burndown, daily_series, insights, month_bounds, period_bounds,
+    session_detail,
 )
 from tokenomy.budget import budget_from_config, load_config, user_label
 
@@ -166,7 +167,7 @@ _GROUPED_SORTS = ("date_desc", "date_asc", "day_cost")
 _WEEKDAY = "월화수목금토일"
 
 
-def _group_by_date(rows: list) -> list:
+def _group_by_date(rows: list[DaySessionRow]) -> list[DayGroup]:
     """DaySessionRow 리스트 → 날짜별 DayGroup. 그룹 내부 행은 비용 내림차순."""
     by: dict = {}
     for r in rows:
@@ -183,7 +184,8 @@ def _group_by_date(rows: list) -> list:
 def history_context(conn, anchor_kst: datetime, provider: str,
                     sort: str, now_kst: datetime | None = None) -> dict:
     """내역(/history). 월 고정. sort에 따라 그룹(date_desc/date_asc/day_cost) 또는
-    평면(cost/cache)으로 조립한다. 평면은 날짜 그룹을 깨고 단일 정렬 리스트."""
+    평면(cost/cache)으로 조립한다. 평면은 날짜 그룹을 깨고 단일 정렬 리스트.
+    cache 정렬은 캐시 효율이 낮은(개선 여지 큰) 세션을 먼저 보이도록 오름차순이다."""
     now = now_kst or datetime.now(KST)
     config = load_config()
     start, nxt = month_bounds(anchor_kst)

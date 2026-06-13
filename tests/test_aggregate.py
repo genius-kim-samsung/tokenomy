@@ -759,3 +759,10 @@ def test_history_context_nav_and_provider(monkeypatch, tmp_path):
     assert ctx["prev_anchor"] == "2026-05-31"     # 6/1 - 1일
     assert ctx["next_anchor"] == "2026-07-01"
     assert ctx["has_next"] is False               # _NOW_613이 6월 → 다음 없음
+
+
+def test_history_context_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    ctx = history_context(connect(":memory:"), _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
+    assert ctx["count"] == 0 and ctx["total"] == 0.0 and ctx["groups"] == []
+    assert ctx["last_ts"] is None
