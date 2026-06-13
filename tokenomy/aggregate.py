@@ -195,6 +195,31 @@ def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | Non
 
 
 @dataclass
+class DaySessionRow:
+    """한 행 = (KST 날짜 × 세션). 같은 세션이 N일 걸치면 N행."""
+    date: str               # "2026-06-13" (KST)
+    session_id: str
+    provider: str | None
+    summary: str | None     # 작업요약(aiTitle 캐시)
+    project: str | None
+    label: str | None       # 수동 귀속 라벨
+    cost: float
+    msgs: int
+    cache_ratio: float
+    is_continued: bool      # 세션 최초등장일보다 이후 날짜인가 → ↩
+    cache_miss: bool        # is_continued AND cache_ratio < 임계 → ⚠
+
+
+@dataclass
+class DayGroup:
+    """날짜별 묶음(그룹 모드). views._group_by_date가 생성."""
+    date: str
+    weekday: str            # '금'
+    subtotal: float
+    rows: list  # list[DaySessionRow]
+
+
+@dataclass
 class SessionRow:
     session_id: str
     project: str | None
@@ -265,6 +290,59 @@ def by_session(
     else:
         out.sort(key=lambda x: x.cost, reverse=True)
     return out[:limit_n] if limit_n else out
+
+
+def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime) -> list[DaySessionRow]:
+    """(KST날짜 × 세션) 단위 행. 기간 [start, nxt) 내 메시지를 날짜+세션으로 버킷팅한다.
+
+    is_continued: 세션 최초 등장일(전체 messages의 MIN(ts))보다 이 행 날짜가 이후인가.
+                  조회 범위가 아닌 전체에서 구해야 지난달 시작→이번달 이어짐을 오판하지 않는다.
+    cache_miss:   is_continued AND cache_ratio < INSIGHT_CACHE_READ_MIN(첫 등장일은 절대 제외).
+    """
+    rows = _range_rows(conn, provider, start, nxt)
+
+    # 세션별 최초 등장일(전체 기준, KST 날짜 문자열)
+    first_day: dict[str, str] = {}
+    for r in conn.execute("SELECT session_id, MIN(ts) m FROM messages GROUP BY session_id").fetchall():
+        dt = parse_ts(r["m"])
+        if dt:
+            first_day[r["session_id"]] = dt.date().isoformat()
+
+    meta = {
+        r["session_id"]: (r["label"], r["summary"], r["provider"])
+        for r in conn.execute("SELECT session_id, label, summary, provider FROM sessions").fetchall()
+    }
+
+    agg: dict = {}
+    for r in rows:
+        dt = parse_ts(r["ts"])
+        if not dt:
+            continue
+        date = dt.date().isoformat()
+        key = (date, r["session_id"])
+        a = agg.setdefault(
+            key,
+            {"project": r["project"], "cost": 0.0, "msgs": 0, "cr": 0, "den": 0},
+        )
+        a["cost"] += r["cost_usd"] or 0
+        a["msgs"] += 1
+        a["cr"] += r["cache_read"] or 0
+        a["den"] += (r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0)
+
+    out: list[DaySessionRow] = []
+    for (date, sid), a in agg.items():
+        cache_ratio = (a["cr"] / a["den"]) if a["den"] else 0.0
+        is_continued = first_day.get(sid, date) < date
+        cache_miss = is_continued and cache_ratio < INSIGHT_CACHE_READ_MIN
+        label, summary, sprov = meta.get(sid, (None, None, None))
+        out.append(DaySessionRow(
+            date=date, session_id=sid, provider=sprov,
+            summary=summary, project=a["project"], label=label,
+            cost=round(a["cost"], 4), msgs=a["msgs"],
+            cache_ratio=round(cache_ratio, 4),
+            is_continued=is_continued, cache_miss=cache_miss,
+        ))
+    return out
 
 
 @dataclass

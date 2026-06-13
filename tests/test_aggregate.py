@@ -3,8 +3,8 @@ from datetime import datetime
 import pytest
 
 from tokenomy.aggregate import (
-    KST, burndown, by_project, by_session, combined_burndown, daily_series, insights,
-    month_bounds, parse_ts, period_bounds, session_detail,
+    KST, burndown, by_day_session, by_project, by_session, combined_burndown,
+    daily_series, insights, month_bounds, parse_ts, period_bounds, session_detail,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
@@ -572,3 +572,106 @@ def test_dashboard_context_limits_projects_to_10(monkeypatch, tmp_path):
              ts="2026-06-10T10:00:00Z", cost_usd=float(i + 1))
     ctx = dashboard_context(conn, provider="claude", sort="cost", now_kst=_NOW_STATUS)
     assert len(ctx["projects"]) == 10        # AI별 프로젝트 표도 Top 10 미리보기
+
+
+# ─── by_day_session: (날짜 × 세션) 행 + 이어짐/캐시미스 ────────────────────────
+
+_JUN = month_bounds(datetime(2026, 6, 15, tzinfo=KST))   # (6/1, 7/1) KST
+
+
+def test_by_day_session_splits_session_across_days():
+    conn = connect(":memory:")
+    # 한 세션 s1이 6/13, 6/14 이틀에 걸침 → 2행
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-13T01:00:00Z", cost_usd=2.0)  # KST 6/13
+    _msg(conn, dedup_key="b", session_id="s1", ts="2026-06-14T01:00:00Z", cost_usd=1.0)  # KST 6/14
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    by_date = {r.date: r for r in rows}
+    assert set(by_date) == {"2026-06-13", "2026-06-14"}
+    assert by_date["2026-06-13"].cost == 2.0
+    assert by_date["2026-06-14"].cost == 1.0
+    # 첫날은 이어짐 아님, 둘째날은 이어짐
+    assert by_date["2026-06-13"].is_continued is False
+    assert by_date["2026-06-14"].is_continued is True
+
+
+def test_by_day_session_first_day_never_cache_miss():
+    conn = connect(":memory:")
+    # 첫 등장일은 캐시율이 낮아도(cache_read 0) cache_miss=False (첫 캐시 쓰기는 정상)
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-13T01:00:00Z",
+         cost_usd=2.0, input_tokens=100, cache_read=0)
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    assert rows[0].is_continued is False
+    assert rows[0].cache_miss is False
+
+
+def test_by_day_session_continued_low_cache_is_miss():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-13T01:00:00Z",
+         cost_usd=2.0, input_tokens=10, cache_read=90)   # 첫날 캐시율 0.9
+    _msg(conn, dedup_key="b", session_id="s1", ts="2026-06-14T01:00:00Z",
+         cost_usd=2.0, input_tokens=90, cache_read=10)   # 둘째날 캐시율 0.1 < 0.30
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    by_date = {r.date: r for r in rows}
+    assert by_date["2026-06-14"].cache_miss is True      # 이어짐 + 캐시율 낮음
+    assert by_date["2026-06-13"].cache_miss is False
+
+
+def test_by_day_session_continued_high_cache_not_miss():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-13T01:00:00Z",
+         cost_usd=2.0, input_tokens=10, cache_read=90)
+    _msg(conn, dedup_key="b", session_id="s1", ts="2026-06-14T01:00:00Z",
+         cost_usd=2.0, input_tokens=10, cache_read=90)   # 둘째날도 캐시율 0.9
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    by_date = {r.date: r for r in rows}
+    assert by_date["2026-06-14"].is_continued is True
+    assert by_date["2026-06-14"].cache_miss is False     # 이어졌지만 캐시율 높음 → 정상
+
+
+def test_by_day_session_continued_across_month_boundary():
+    conn = connect(":memory:")
+    # 세션이 5월에 시작 → 6월 행은 is_continued=True (전체 MIN(ts) 기준)
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-05-20T01:00:00Z", cost_usd=5.0)
+    _msg(conn, dedup_key="b", session_id="s1", ts="2026-06-02T01:00:00Z",
+         cost_usd=2.0, input_tokens=90, cache_read=10)
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    assert len(rows) == 1                                # 6월 행만(5월은 범위 밖)
+    assert rows[0].date == "2026-06-02"
+    assert rows[0].is_continued is True                 # 5월 시작 → 이어짐
+    assert rows[0].cache_miss is True                   # 이어짐 + 캐시율 0.1
+
+
+def test_by_day_session_kst_bucketing_crosses_utc_midnight():
+    conn = connect(":memory:")
+    # UTC 6/13 16:00 = KST 6/14 01:00 → 6/14로 귀속
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-13T16:00:00Z", cost_usd=1.0)
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    assert rows[0].date == "2026-06-14"
+
+
+def test_by_day_session_provider_filter():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", provider="claude", session_id="s1",
+         ts="2026-06-13T01:00:00Z", cost_usd=1.0)
+    _msg(conn, dedup_key="b", provider="codex", session_id="s2",
+         ts="2026-06-13T01:00:00Z", cost_usd=9.0)
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    assert [r.session_id for r in rows] == ["s1"]
+
+
+def test_by_day_session_empty():
+    conn = connect(":memory:")
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    assert rows == []
+
+
+def test_by_day_session_carries_summary_and_label():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-13T01:00:00Z", cost_usd=1.0, project="/p")
+    conn.execute("INSERT INTO sessions (session_id, summary, label, provider) "
+                 "VALUES ('s1', '내역 화면 작업', '업무', 'claude')")
+    conn.commit()
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    assert rows[0].summary == "내역 화면 작업"
+    assert rows[0].label == "업무"
+    assert rows[0].project == "/p"
