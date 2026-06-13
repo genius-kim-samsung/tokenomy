@@ -1,18 +1,22 @@
 """FastAPI 라우트 (얇게 — 라우팅+입력검증만). 데이터 조립은 views.py."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from tokenomy.aggregate import PROVIDERS, parse_ts
+from tokenomy.aggregate import KST, PROVIDERS, parse_ts
 from tokenomy.budget import budget_from_config, load_config, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
 from tokenomy.paths import resource_path
 from tokenomy.update import check_update
-from tokenomy.web.views import dashboard_context, overview_context, session_context
+from tokenomy.web.views import (
+    dashboard_context, overview_context, projects_context, sessions_context, session_context,
+)
 
 _BASE = resource_path("tokenomy/web")
 templates = Jinja2Templates(directory=str(_BASE / "templates"))
@@ -29,6 +33,18 @@ app = FastAPI(title="Tokenomy")
 app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static")
 
 _SORTS = ("cost", "sessions", "cache")
+_PERIODS = ("day", "week", "month")
+_ORDERS = ("cost", "recent")
+
+
+def _parse_anchor(value: str | None) -> datetime:
+    """YYYY-MM-DD → KST datetime. 빈값/파싱실패 → 오늘(KST)."""
+    if value:
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=KST)
+        except ValueError:
+            pass
+    return datetime.now(KST)
 
 
 @app.get("/")
@@ -58,6 +74,21 @@ def session_view(request: Request, session_id: str):
             request, "session.html", {"detail": None}, status_code=404
         )
     return templates.TemplateResponse(request, "session.html", ctx)
+
+
+@app.get("/projects")
+def projects_view(request: Request, period: str = "month", anchor: str | None = None,
+                  provider: str = "", sort: str = "cost", notice: str | None = None):
+    period = period if period in _PERIODS else "month"
+    provider = provider if provider in PROVIDERS else ""
+    sort = sort if sort in _SORTS else "cost"
+    conn = connect()
+    update_tag = check_update(conn)
+    ctx = projects_context(conn, period, _parse_anchor(anchor), provider, sort)
+    return templates.TemplateResponse(
+        request, "projects.html",
+        {**ctx, "notice": notice, "update_tag": update_tag},
+    )
 
 
 @app.post("/ingest")

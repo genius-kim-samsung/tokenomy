@@ -217,3 +217,31 @@ def test_overview_tabs_active_state(tmp_path, monkeypatch):
     assert 'href="/"' in r.text
     assert 'href="/?provider=claude"' in r.text
     assert 'href="/?provider=codex"' in r.text
+
+
+def test_projects_page_ok(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/projects")
+    assert r.status_code == 200
+    assert "전체 프로젝트별 비용" in r.text
+
+
+def test_projects_bad_period_falls_back(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/projects?period=evil&provider=evil&sort=drop")
+    assert r.status_code == 200          # 화이트리스트 폴백, 크래시 없음
+
+
+def test_projects_page_renders_rows_and_drilldown(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('a','claude','s1','myproj','2026-06-10T10:00:00Z',12.5,1)"
+    )
+    conn.commit()
+    r = client.get("/projects?anchor=2026-06-10&period=month")
+    assert r.status_code == 200
+    assert "myproj" in r.text
+    assert "/sessions?project=" in r.text      # 드릴다운 링크
+    assert "합계 $12.50" in r.text             # 요약 헤더
