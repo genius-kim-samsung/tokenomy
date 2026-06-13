@@ -37,5 +37,11 @@ Thumbs.db
 .gstack/
 .claude/
 
-# 로컬 설계 메모 — 커밋하지 않음.
-docs/
+# 로컬 설계 메모 — 커밋하지 않음(개발 일지 성격, 조직·개인 맥락 포함).
+# 단 공유 가치가 있는 개별 설계 스펙만 예외로 추적한다(조직 내용 정리 후 추가).
+docs/*
+!docs/superpowers/
+docs/superpowers/*
+!docs/superpowers/specs/
+docs/superpowers/specs/*
+!docs/superpowers/specs/2026-06-13-history-view-design.md
