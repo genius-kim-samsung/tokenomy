@@ -67,3 +67,20 @@ a { color:#58a6ff; }
 .ai-card .bar { display:block; width:100%; height:12px; margin:6px 0; }
 .period-nav { display:flex; align-items:center; gap:12px; margin:10px 0; }
 .period-nav .label { font-weight:600; }
+
+/* ── 내역(/history) ── */
+.filters { display: flex; gap: 8px; }
+.filters select {
+  padding: 4px 8px; border: 1px solid var(--line, #ddd);
+  border-radius: 6px; background: #fff; font-size: 13px;
+}
+.day-group { margin-bottom: 14px; }
+.day-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 6px 2px; border-bottom: 2px solid var(--line, #e5e5e5); margin-bottom: 2px;
+}
+.day-label { font-weight: 600; }
+.day-sub { color: var(--muted, #888); font-variant-numeric: tabular-nums; }
+.cont { color: var(--muted, #999); cursor: help; }
+td.cache-miss { color: #c0392b; font-weight: 600; }
+td.cache-miss span { cursor: help; }

@@ -380,3 +380,33 @@ def test_history_shows_data_freshness(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/history?anchor=2026-06-10")
     assert "데이터 최신" in r.text
+
+
+def test_overview_has_history_link(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/")
+    assert 'href="/history' in r.text
+    assert "내역 보기" in r.text
+
+
+def test_dashboard_has_history_link(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/?provider=claude")
+    assert "/history?provider=claude" in r.text
+
+
+def test_history_renders_signal_classes(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    # s1: 6/9 첫 등장(캐시율 높음), 6/10 이어짐(캐시율 0.1 → cache_miss)
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,"
+                 "input_tokens,cache_read,cost_usd,priced) VALUES "
+                 "('a','claude','s1','myproj','2026-06-09T01:00:00Z',10,90,1.0,1)")
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,"
+                 "input_tokens,cache_read,cost_usd,priced) VALUES "
+                 "('b','claude','s1','myproj','2026-06-10T01:00:00Z',90,10,1.0,1)")
+    conn.commit()
+    r = client.get("/history?anchor=2026-06-10&sort=date_desc")
+    assert "day-head" in r.text          # 날짜 그룹 헤더
+    assert "cache-miss" in r.text        # 캐시미스 셀 클래스
+    assert "↩" in r.text                 # 이어짐 표시
