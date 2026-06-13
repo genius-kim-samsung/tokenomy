@@ -245,3 +245,52 @@ def test_projects_page_renders_rows_and_drilldown(tmp_path, monkeypatch):
     assert "myproj" in r.text
     assert "/sessions?project=" in r.text      # 드릴다운 링크
     assert "합계 $12.50" in r.text             # 요약 헤더
+
+
+def test_sessions_page_ok(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/sessions")
+    assert r.status_code == 200
+    assert "복기" in r.text
+    assert "최신순" in r.text                 # 정렬 토글
+
+
+def test_sessions_bad_params_fall_back(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/sessions?period=evil&provider=evil&order=drop")
+    assert r.status_code == 200
+
+
+def test_sessions_page_renders_rows_and_filter(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('a','claude','s1','myproj','2026-06-10T10:00:00Z',8.0,1)"
+    )
+    conn.commit()
+    r = client.get("/sessions?anchor=2026-06-10&period=month&project=myproj")
+    assert r.status_code == 200
+    assert "myproj" in r.text
+    assert "프로젝트 필터: myproj" in r.text   # 필터 표시 + 해제 링크
+    assert "합계 $8.00" in r.text
+
+
+def test_sessions_drilldown_slash_project_roundtrips(tmp_path, monkeypatch):
+    # 슬래시를 포함하는 프로젝트 경로가 쿼리로 왕복되어 그 프로젝트만 필터되는지 검증
+    # (드릴다운 링크는 /sessions?project=/proj/sub 형태 — 슬래시는 query에서 합법)
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('a','claude','s1','/proj/sub','2026-06-10T10:00:00Z',3.0,1)"
+    )
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('b','claude','s2','/other','2026-06-10T11:00:00Z',5.0,1)"
+    )
+    conn.commit()
+    r = client.get("/sessions?anchor=2026-06-10&period=month&project=/proj/sub")
+    assert r.status_code == 200
+    assert "합계 $3.00" in r.text          # /proj/sub 의 s1만 (5.0짜리 /other 제외)
+    assert "프로젝트 필터: /proj/sub" in r.text

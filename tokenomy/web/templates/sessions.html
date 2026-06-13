@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "_tabs.html" %}
+
+<section class="card">
+  <div class="card-head">
+    <h2>복기 — 전체 세션</h2>
+    <nav class="toggle small">
+      <a href="/sessions?period=day&anchor={{ anchor }}&provider={{ provider }}&order={{ order }}{% if project %}&project={{ project|urlencode }}{% endif %}" class="{{ 'on' if period == 'day' }}">일간</a>
+      <a href="/sessions?period=week&anchor={{ anchor }}&provider={{ provider }}&order={{ order }}{% if project %}&project={{ project|urlencode }}{% endif %}" class="{{ 'on' if period == 'week' }}">주간</a>
+      <a href="/sessions?period=month&anchor={{ anchor }}&provider={{ provider }}&order={{ order }}{% if project %}&project={{ project|urlencode }}{% endif %}" class="{{ 'on' if period == 'month' }}">월간</a>
+    </nav>
+  </div>
+
+  <div class="period-nav">
+    <a class="btn" href="/sessions?period={{ period }}&anchor={{ prev_anchor }}&provider={{ provider }}&order={{ order }}{% if project %}&project={{ project|urlencode }}{% endif %}">‹ 이전</a>
+    <span class="label">{{ period_label }}</span>
+    {% if has_next %}<a class="btn" href="/sessions?period={{ period }}&anchor={{ next_anchor }}&provider={{ provider }}&order={{ order }}{% if project %}&project={{ project|urlencode }}{% endif %}">다음 ›</a>{% endif %}
+  </div>
+
+  {% if project %}
+  <p class="muted">프로젝트 필터: {{ project }} ·
+    <a href="/sessions?period={{ period }}&anchor={{ anchor }}&provider={{ provider }}&order={{ order }}">해제</a></p>
+  {% endif %}
+
+  <div class="card-head">
+    <p class="muted">{{ period_label }} · 전체 {{ count }}개 · 합계 ${{ '%.2f'|format(total) }}</p>
+    <nav class="toggle small">
+      <a href="/sessions?period={{ period }}&anchor={{ anchor }}&provider={{ provider }}&order=cost{% if project %}&project={{ project|urlencode }}{% endif %}" class="{{ 'on' if order == 'cost' }}">비용순</a>
+      <a href="/sessions?period={{ period }}&anchor={{ anchor }}&provider={{ provider }}&order=recent{% if project %}&project={{ project|urlencode }}{% endif %}" class="{{ 'on' if order == 'recent' }}">최신순</a>
+    </nav>
+  </div>
+
+  <table class="grid">
+    <thead><tr><th>기간</th><th>비용</th><th>프로젝트</th><th>라벨</th><th></th></tr></thead>
+    <tbody>
+      {% for s in rows %}
+      <tr><td>{{ s.first_ts|kstfmt }}</td><td>${{ '%.2f'|format(s.cost) }}</td>
+          <td>{{ s.project or '(unknown)' }}</td><td>{{ s.label or '[라벨 없음]' }}</td>
+          <td><a href="/session/{{ s.session_id }}">▸</a></td></tr>
+      {% else %}<tr><td colspan="5" class="muted">이 기간 데이터 없음</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

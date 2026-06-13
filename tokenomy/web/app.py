@@ -91,6 +91,22 @@ def projects_view(request: Request, period: str = "month", anchor: str | None = 
     )
 
 
+@app.get("/sessions")
+def sessions_view(request: Request, period: str = "month", anchor: str | None = None,
+                  provider: str = "", order: str = "cost",
+                  project: str | None = None, notice: str | None = None):
+    period = period if period in _PERIODS else "month"
+    provider = provider if provider in PROVIDERS else ""
+    order = order if order in _ORDERS else "cost"
+    conn = connect()
+    update_tag = check_update(conn)
+    ctx = sessions_context(conn, period, _parse_anchor(anchor), provider, order, project or "")
+    return templates.TemplateResponse(
+        request, "sessions.html",
+        {**ctx, "notice": notice, "update_tag": update_tag},
+    )
+
+
 @app.post("/ingest")
 def do_ingest():
     conn = connect()
