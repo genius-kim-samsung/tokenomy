@@ -309,3 +309,18 @@ def test_dashboard_has_full_view_links(tmp_path, monkeypatch):
     r = client.get("/?provider=claude")
     assert "/projects?provider=claude" in r.text
     assert "/sessions?provider=claude" in r.text
+
+
+def test_full_pages_show_data_freshness(tmp_path, monkeypatch):
+    # 전체 페이지 상단바도 overview/대시보드처럼 "데이터 최신" 표기(last_ts 공급)
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('a','claude','s1','myproj','2026-06-10T10:00:00Z',1.0,1)"
+    )
+    conn.commit()
+    for path in ("/projects?anchor=2026-06-10&period=month",
+                 "/sessions?anchor=2026-06-10&period=month"):
+        r = client.get(path)
+        assert "데이터 최신" in r.text

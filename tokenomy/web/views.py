@@ -120,6 +120,7 @@ def projects_context(conn, period: str, anchor_kst: datetime, provider: str,
     start, nxt, label = period_bounds(period, anchor_kst)
     rows = by_project(conn, provider or None, now, start=start, nxt=nxt)
     rows.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
+    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     return {
         "active_tab": provider or "overview",
         "user_label": user_label(config),
@@ -132,6 +133,7 @@ def projects_context(conn, period: str, anchor_kst: datetime, provider: str,
         "next_anchor": nxt.strftime("%Y-%m-%d"),
         "has_next": nxt <= now,                 # 현재/미래 기간이면 다음 숨김
         "month": now.strftime("%Y-%m"),         # _tabs.html 헤더용
+        "last_ts": last["t"] if last and last["t"] else None,
     }
 
 
@@ -143,6 +145,7 @@ def sessions_context(conn, period: str, anchor_kst: datetime, provider: str,
     start, nxt, label = period_bounds(period, anchor_kst)
     rows = by_session(conn, provider or None, now, start=start, nxt=nxt,
                       order=order, project=project or None)
+    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     return {
         "active_tab": provider or "overview",
         "user_label": user_label(config),
@@ -155,4 +158,5 @@ def sessions_context(conn, period: str, anchor_kst: datetime, provider: str,
         "next_anchor": nxt.strftime("%Y-%m-%d"),
         "has_next": nxt <= now,
         "month": now.strftime("%Y-%m"),
+        "last_ts": last["t"] if last and last["t"] else None,
     }
