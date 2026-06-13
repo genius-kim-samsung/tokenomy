@@ -294,3 +294,18 @@ def test_sessions_drilldown_slash_project_roundtrips(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "합계 $3.00" in r.text          # /proj/sub 의 s1만 (5.0짜리 /other 제외)
     assert "프로젝트 필터: /proj/sub" in r.text
+
+
+def test_overview_has_full_view_links(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/")
+    assert 'href="/projects' in r.text
+    assert 'href="/sessions' in r.text
+    assert "전체 보기" in r.text
+
+
+def test_dashboard_has_full_view_links(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/?provider=claude")
+    assert "/projects?provider=claude" in r.text
+    assert "/sessions?provider=claude" in r.text

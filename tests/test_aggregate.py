@@ -562,3 +562,13 @@ def test_sessions_context_order_and_filter(monkeypatch, tmp_path):
     ctx2 = sessions_context(conn, "day", _ANCHOR_613, "", "cost", "/a", now_kst=_NOW_613)
     assert [r.session_id for r in ctx2["rows"]] == ["s1"]        # 프로젝트 필터
     assert ctx2["project"] == "/a"
+
+
+def test_dashboard_context_limits_projects_to_10(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    for i in range(11):
+        _msg(conn, dedup_key=f"k{i}", session_id=f"s{i}", project=f"/p{i}",
+             ts="2026-06-10T10:00:00Z", cost_usd=float(i + 1))
+    ctx = dashboard_context(conn, provider="claude", sort="cost", now_kst=_NOW_STATUS)
+    assert len(ctx["projects"]) == 10        # AI별 프로젝트 표도 Top 10 미리보기

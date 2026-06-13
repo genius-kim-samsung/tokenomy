@@ -24,6 +24,7 @@ def dashboard_context(conn, provider: str, sort: str, now_kst: datetime | None =
     bd = burndown(conn, budget, now, provider)
     projects = by_project(conn, provider, now)
     projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
+    projects = projects[:10]   # AI별 상세도 Top 10 미리보기, 전체는 /projects
     sessions = by_session(conn, provider, now, limit_n=10)
     cards = insights(conn, bd, now, provider)
     daily = daily_series(conn, provider, now)
