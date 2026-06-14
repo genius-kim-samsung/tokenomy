@@ -73,7 +73,7 @@ def session_context(conn, session_id: str) -> dict | None:
     detail = session_detail(conn, session_id)
     if detail is None:
         return None
-    return {"detail": detail}
+    return {"detail": detail, "active_nav": "history"}
 
 
 def models_context(conn, anchor_kst: datetime, provider: str,

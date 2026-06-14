@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block body %}
-<p><a href="/">← 대시보드</a></p>
+<p><a href="/history?view=session">← 내역</a></p>
 {% if not detail %}
 <section class="card"><h1>세션을 찾을 수 없음</h1></section>
 {% else %}
 {% set d = detail %}
-<header class="topbar"><div>세션 상세 · {{ d.project or '(unknown)' }} · {{ d.provider }}</div></header>
+<h1 class="page-title">세션 상세 <span class="muted">· {{ d.project or '(unknown)' }} · {{ d.provider }}</span></h1>
 <section class="card">
   <p>{{ d.first_ts|kstfmt }} ~ {{ d.last_ts|kstfmt }} · ${{ '%.2f'|format(d.cost) }} · {{ d.msgs }} msg
      {% if d.label %}· {{ d.label }}{% endif %}</p>
