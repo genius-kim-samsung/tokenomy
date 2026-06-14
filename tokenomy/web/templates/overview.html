@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-{% include "_tabs.html" %}
+<h1 class="page-title">대시보드 <span class="muted">· {{ month }} (KST){% if user_label %} · {{ user_label }}{% endif %}</span></h1>
 
 {% if not budget_configured %}
 <div class="banner">예산을 설정하세요 → <a href="/settings">설정</a> (지금은 사용량 추적만)</div>
@@ -10,14 +10,14 @@
 <section class="card">
   <h2>통합 번다운 <span class="muted">(한도 설정한 AI 합산)</span></h2>
   {% if not has_data %}
-    <p class="muted">데이터 없음 · [↻ 새로고침]을 누르세요</p>
+    <p class="muted">데이터 없음 · 사이드바 [↻ 새로고침]을 누르세요</p>
   {% elif bd.limit == 0 %}
     <p class="muted">예산 미설정 · 지출 ${{ '%.2f'|format(bd.spent) }} · <a href="/settings">예산 설정</a></p>
     <p class="disclaimer">ⓘ 공개 API 단가 기준 추정 · 이 머신 데이터만</p>
   {% else %}
     <div class="bd-row">
       <span class="bd-label">전체</span>
-      <span class="bd-num">${{ '%.2f'|format(bd.spent) }} / ${{ '%.0f'|format(bd.limit) }}</span>
+      <span class="bd-num serif">${{ '%.2f'|format(bd.spent) }} / ${{ '%.0f'|format(bd.limit) }}</span>
       <span class="bar"><span class="fill s-{{ bd.status }}" style="width: {{ [bd.pct * 100, 100]|min }}%"></span></span>
       <span class="bd-pct">{{ '%.1f'|format(bd.pct * 100) }}%</span>
       <span class="status s-{{ bd.status }}">{{ {'ok':'✅ OK','warn':'⚠ 초과예상','exceeds':'⛔ 초과'}[bd.status] }}</span>
@@ -36,7 +36,7 @@
   <div class="ai-cards">
     {% for c in cards %}
     {% set b = c.bd %}
-    <a class="ai-card" href="/?provider={{ c.provider }}">
+    <a class="ai-card" href="/history?view=session&provider={{ c.provider }}">
       <div class="ai-name">{{ c.name }}</div>
       {% if not c.has_data %}
         <div class="muted">(이 머신에 {{ c.name }} 로그 없음)</div>
@@ -55,7 +55,7 @@
 </section>
 
 {% if has_data %}
-<section class="card">
+<section class="card chart-card">
   <h2>통합 추세 <span class="muted">(전 AI 합산)</span></h2>
   <canvas id="trend" height="120"></canvas>
 </section>
@@ -71,7 +71,6 @@
 <section class="card">
   <div class="card-head">
     <h2>통합 프로젝트별 비용 <span class="muted">(Top 10)</span></h2>
-    {# overview는 provider 없이 /?sort= — provider를 붙이면 detail로 라우팅됨 #}
     <nav class="toggle small">
       <a href="/?sort=cost" class="{{ 'on' if sort == 'cost' }}">비용</a>
       <a href="/?sort=sessions" class="{{ 'on' if sort == 'sessions' }}">세션</a>
@@ -87,7 +86,7 @@
       {% else %}<tr><td colspan="4" class="muted">데이터 없음</td></tr>{% endfor %}
     </tbody>
   </table>
-  <p class="muted"><a href="/projects?sort={{ sort }}">전체 보기 →</a></p>
+  <p class="muted"><a href="/history?view=folder">전체 보기 →</a></p>
 </section>
 
 <section class="card">
@@ -108,7 +107,7 @@
       {% else %}<tr><td colspan="9" class="muted">데이터 없음</td></tr>{% endfor %}
     </tbody>
   </table>
-  <p class="muted"><a href="/sessions">전체 보기 →</a> · <a href="/history">전체 내역 보기 →</a></p>
+  <p class="muted"><a href="/history?view=session">전체 내역 보기 →</a></p>
 </section>
 {% endblock %}
 {% block scripts %}{% include "_trend_chart.html" %}{% endblock %}

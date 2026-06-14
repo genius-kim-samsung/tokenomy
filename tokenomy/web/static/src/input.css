@@ -96,6 +96,13 @@
   h1 { @apply text-[18px] font-semibold; }
   h2 { @apply text-[15px] m-0 mb-2 font-semibold; }
 
+  .page-title { @apply text-[22px] font-semibold tracking-tight mb-3; }
+  .serif { font-family: Cambria, "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif; letter-spacing: -0.5px; }
+  h1, h2, .page-title { font-family: Cambria, "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif; }
+  .chart-card { @apply bg-dark text-on-dark; }
+  .chart-card h2 { @apply text-on-dark; }
+  .chart-card .muted { color: #a09d96; }
+
   .toggle a { @apply text-muted no-underline px-2 py-0.5 rounded-md transition-colors; }
   .toggle a:hover { @apply text-fg; }
   .toggle a.on { @apply text-fg bg-elev; }

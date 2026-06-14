@@ -172,6 +172,9 @@ def test_root_renders_overview(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "통합 번다운" in r.text
     assert "AI별 현황" in r.text
+    assert 'class="sidebar"' in r.text
+    assert 'href="/history"' in r.text
+    assert 'href="/models"' in r.text
 
 
 def test_overview_aggregates_providers(tmp_path, monkeypatch):
@@ -272,12 +275,11 @@ def test_sessions_drilldown_slash_project_roundtrips(tmp_path, monkeypatch):
     assert "프로젝트 필터: /proj/sub" in r.text
 
 
-def test_overview_has_full_view_links(tmp_path, monkeypatch):
+def test_overview_links_into_history(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/")
-    assert 'href="/projects' in r.text
-    assert 'href="/sessions' in r.text
-    assert "전체 보기" in r.text
+    assert 'href="/history?view=folder"' in r.text
+    assert 'href="/history?view=session"' in r.text
 
 
 def test_full_pages_show_data_freshness(tmp_path, monkeypatch):
@@ -364,13 +366,6 @@ def test_history_flat_mode_has_date_column_grouped_does_not(tmp_path, monkeypatc
     assert "<th>날짜</th>" in flat.text            # 평면 모드 → 날짜 칸 부활
     grouped = client.get("/history?anchor=2026-06-10&sort=date_desc")
     assert "<th>날짜</th>" not in grouped.text      # 그룹 모드 → 날짜 칸 없음(헤더로 대체)
-
-
-def test_overview_has_history_link(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/")
-    assert 'href="/history' in r.text
-    assert "내역 보기" in r.text
 
 
 def test_history_renders_signal_classes(tmp_path, monkeypatch):
