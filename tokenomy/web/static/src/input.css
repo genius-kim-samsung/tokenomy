@@ -104,11 +104,6 @@
   .toggle a.on { @apply text-fg bg-elev; }
   .toggle.small a { @apply text-[13px]; }
 
-  .view-seg { @apply flex gap-1 flex-wrap mb-3 pb-2 border-b border-line; }
-  .view-seg a { @apply text-muted no-underline px-3 py-1.5 rounded-md transition-colors; }
-  .view-seg a:hover { @apply text-fg bg-elev; }
-  .view-seg a.on { @apply text-fg bg-elev font-semibold; }
-
   /* 번다운 바 */
   .bd-row { @apply flex items-center gap-2.5 my-1.5; }
   .bd-label { @apply w-16; }
