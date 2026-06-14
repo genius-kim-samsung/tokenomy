@@ -364,3 +364,23 @@ def test_history_week_and_month_views(tmp_path, monkeypatch):
     assert rm.status_code == 200
     assert "<th>월</th>" in rm.text
     assert "2026-06" in rm.text
+
+
+def test_models_page_ok(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/models")
+    assert r.status_code == 200
+    assert "모델별" in r.text
+    assert "비중" in r.text
+
+
+def test_models_page_renders_rows(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,model,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','2026-06-10T10:00:00Z','claude-opus-4-8',12.5,1)")
+    conn.commit()
+    r = client.get("/models?anchor=2026-06-10")
+    assert r.status_code == 200
+    assert "claude-opus-4-8" in r.text
+    assert "합계 $12.50" in r.text
