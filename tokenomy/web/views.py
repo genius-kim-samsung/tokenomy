@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
-    KST, PROVIDERS, DayGroup, DaySessionRow, burndown, by_day_session, by_model,
-    by_month, by_project, by_session, by_week, combined_burndown, daily_series,
+    KST, PROVIDERS, DayGroup, DateGroup, DaySessionRow, FolderGroup, burndown, by_day_session,
+    by_model, by_month, by_project, by_session, by_week, combined_burndown, daily_series,
     insights, month_bounds, session_detail,
 )
 from tokenomy.budget import budget_from_config, load_config, user_label
@@ -108,6 +108,70 @@ def models_context(conn, anchor_kst: datetime, provider: str,
 
 _GROUPED_SORTS = ("date_desc", "date_asc", "day_cost")
 _WEEKDAY = "월화수목금토일"
+
+
+_PREVIEW_N = 3   # 접힘 그룹 헤더에 보여줄 대표 작업요약 개수
+
+
+def _folder_name(project: str | None) -> str:
+    """폴더 그룹 키 — 프로젝트 경로 전체(없으면 (unknown))."""
+    return project or "(unknown)"
+
+
+def _preview(rows: list[DaySessionRow]) -> str:
+    """비용 상위 작업요약 최대 N개를 ', '로 연결. 요약 전무하면 '(요약 없음)'."""
+    tops = sorted(rows, key=lambda r: r.cost, reverse=True)
+    names = [r.summary for r in tops if r.summary][:_PREVIEW_N]
+    return ", ".join(names) if names else "(요약 없음)"
+
+
+def build_date_tree(rows: list[DaySessionRow], sort: str) -> list[DateGroup]:
+    """DaySessionRow 리스트 → 날짜→폴더→세션 2단 트리.
+
+    폴더·세션 내부는 항상 비용 내림차순. 날짜 그룹 순서만 sort에 반응
+    (date_desc 기본 / date_asc / day_cost=일 소계 큰 날 위로).
+    캐시%는 토큰량 가중평균(Σcache_read / Σcache_den).
+    """
+    by_date: dict[str, dict[str, list[DaySessionRow]]] = {}
+    for r in rows:
+        by_date.setdefault(r.date, {}).setdefault(_folder_name(r.project), []).append(r)
+
+    dgroups: list[DateGroup] = []
+    for d, folders in by_date.items():
+        fgroups: list[FolderGroup] = []
+        for proj, frows in folders.items():
+            frows.sort(key=lambda r: r.cost, reverse=True)
+            den = sum(r.cache_den for r in frows)
+            cr = sum(r.cache_read for r in frows)
+            fgroups.append(FolderGroup(
+                project=proj,
+                cost=round(sum(r.cost for r in frows), 4),
+                msgs=sum(r.msgs for r in frows),
+                cache_ratio=round(cr / den, 4) if den else 0.0,
+                preview=_preview(frows),
+                rows=frows,
+            ))
+        fgroups.sort(key=lambda f: f.cost, reverse=True)
+        all_rows = [r for f in fgroups for r in f.rows]
+        den = sum(r.cache_den for r in all_rows)
+        cr = sum(r.cache_read for r in all_rows)
+        wd = _WEEKDAY[date.fromisoformat(d).weekday()]
+        dgroups.append(DateGroup(
+            date=d, weekday=wd,
+            cost=round(sum(f.cost for f in fgroups), 4),
+            msgs=sum(f.msgs for f in fgroups),
+            cache_ratio=round(cr / den, 4) if den else 0.0,
+            preview=_preview(all_rows),
+            folders=fgroups,
+        ))
+
+    if sort == "date_asc":
+        dgroups.sort(key=lambda g: g.date)
+    elif sort == "day_cost":
+        dgroups.sort(key=lambda g: g.cost, reverse=True)
+    else:   # date_desc(기본)
+        dgroups.sort(key=lambda g: g.date, reverse=True)
+    return dgroups
 
 
 def _group_by_date(rows: list[DaySessionRow]) -> list[DayGroup]:

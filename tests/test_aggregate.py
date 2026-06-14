@@ -854,3 +854,79 @@ def test_models_context_shape(monkeypatch, tmp_path):
     top = ctx["rows"][0]
     assert top["model"] == "claude-opus-4-8"
     assert top["share"] == 80.0
+
+
+# ─── build_date_tree: 날짜→폴더→세션 2단 그룹핑 ───────────────────────────────
+from tokenomy.aggregate import DaySessionRow
+from tokenomy.web.views import build_date_tree
+
+
+def _dsr(date, sid, project, cost, msgs=1, cache_read=0, cache_den=0,
+         summary=None, provider="claude", is_continued=False, cache_miss=False, label=None):
+    return DaySessionRow(
+        date=date, session_id=sid, provider=provider, summary=summary,
+        project=project, label=label, cost=cost, msgs=msgs,
+        cache_ratio=round(cache_read / cache_den, 4) if cache_den else 0.0,
+        cache_read=cache_read, cache_den=cache_den,
+        is_continued=is_continued, cache_miss=cache_miss)
+
+
+def test_build_date_tree_groups_date_folder_session():
+    rows = [
+        _dsr("2026-06-13", "s1", "/a/tokenomy", 2.0, msgs=48, cache_read=78, cache_den=100, summary="세션표 칸 추가"),
+        _dsr("2026-06-13", "s2", "/a/tokenomy", 0.2, msgs=7, cache_read=65, cache_den=100, summary="캐시 분석"),
+        _dsr("2026-06-13", "s3", "/b/project-b", 0.2, msgs=5, cache_read=40, cache_den=100, summary="리팩터 검토"),
+        _dsr("2026-06-12", "s1", "/a/tokenomy", 1.3, msgs=9, cache_read=40, cache_den=100, summary="세션표 칸 추가"),
+    ]
+    tree = build_date_tree(rows, "date_desc")
+    assert [d.date for d in tree] == ["2026-06-13", "2026-06-12"]
+    d13 = tree[0]
+    assert d13.weekday == "토"                         # 2026-06-13 = 토
+    assert d13.cost == 2.4 and d13.msgs == 60
+    assert [f.project for f in d13.folders] == ["/a/tokenomy", "/b/project-b"]   # 폴더 비용 내림차순
+    tok = d13.folders[0]
+    assert tok.cost == 2.2 and tok.msgs == 55
+    assert [s.session_id for s in tok.rows] == ["s1", "s2"]                 # 세션 비용 내림차순
+
+
+def test_build_date_tree_weighted_not_simple_average():
+    rows = [
+        _dsr("2026-06-13", "s1", "/p", 1.0, cache_read=90, cache_den=100),    # 0.9
+        _dsr("2026-06-13", "s2", "/p", 1.0, cache_read=10, cache_den=1000),   # 0.01
+    ]
+    f = build_date_tree(rows, "date_desc")[0].folders[0]
+    assert f.cache_ratio == round(100 / 1100, 4)       # 가중 0.0909 (단순평균 0.455 아님)
+
+
+def test_build_date_tree_preview_top_summaries_by_cost():
+    rows = [
+        _dsr("2026-06-13", "s1", "/p", 3.0, summary="비싼 작업"),
+        _dsr("2026-06-13", "s2", "/p", 1.0, summary="싼 작업"),
+    ]
+    assert build_date_tree(rows, "date_desc")[0].preview.startswith("비싼 작업")
+
+
+def test_build_date_tree_preview_fallback_when_no_summary():
+    rows = [_dsr("2026-06-13", "s1", "/p", 1.0, summary=None)]
+    assert build_date_tree(rows, "date_desc")[0].preview == "(요약 없음)"
+
+
+def test_build_date_tree_sorts():
+    rows = [
+        _dsr("2026-06-11", "s1", "/p", 1.0),
+        _dsr("2026-06-13", "s2", "/p", 5.0),
+        _dsr("2026-06-12", "s3", "/p", 9.0),
+    ]
+    assert [d.date for d in build_date_tree(rows, "date_desc")] == ["2026-06-13", "2026-06-12", "2026-06-11"]
+    assert [d.date for d in build_date_tree(rows, "date_asc")] == ["2026-06-11", "2026-06-12", "2026-06-13"]
+    assert [d.date for d in build_date_tree(rows, "day_cost")] == ["2026-06-12", "2026-06-13", "2026-06-11"]  # 소계 9>5>1
+
+
+def test_build_date_tree_zero_den_cache_zero():
+    f = build_date_tree([_dsr("2026-06-13", "s1", "/p", 1.0, cache_read=0, cache_den=0)], "date_desc")[0].folders[0]
+    assert f.cache_ratio == 0.0
+
+
+def test_build_date_tree_unknown_project():
+    f = build_date_tree([_dsr("2026-06-13", "s1", None, 1.0)], "date_desc")[0].folders[0]
+    assert f.project == "(unknown)"

@@ -291,6 +291,29 @@ class DayGroup:
 
 
 @dataclass
+class FolderGroup:
+    """날짜 안의 폴더(프로젝트) 묶음. views.build_date_tree가 생성."""
+    project: str            # 표시용 폴더명((unknown) 포함)
+    cost: float
+    msgs: int
+    cache_ratio: float      # 가중평균 = Σcache_read / Σcache_den
+    preview: str            # 접힘 시 노출할 대표 작업요약 요약
+    rows: list[DaySessionRow]   # 세션 행(비용 내림차순)
+
+
+@dataclass
+class DateGroup:
+    """날짜 묶음(최상위). folders는 비용 내림차순."""
+    date: str               # "2026-06-13" (KST)
+    weekday: str            # '금'
+    cost: float
+    msgs: int
+    cache_ratio: float      # 가중평균
+    preview: str
+    folders: list[FolderGroup]
+
+
+@dataclass
 class SessionRow:
     session_id: str
     project: str | None
