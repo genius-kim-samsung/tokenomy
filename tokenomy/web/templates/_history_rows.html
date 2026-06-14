@@ -19,7 +19,8 @@
         <td class="num">{{ '%.0f'|format(d.cache_ratio * 100) }}%</td>
       </tr>
         {% for f in d.folders %}
-        <tr class="grp grp-folder" data-date="{{ d.date }}" data-folder="{{ d.date }}::{{ f.project }}">
+        {% set folder_key = d.date ~ '::' ~ loop.index %}
+        <tr class="grp grp-folder" data-date="{{ d.date }}" data-folder="{{ folder_key }}">
           <td></td>
           <td class="col-folder"><span class="caret">▾</span> {{ (f.project or '(unknown)').replace('\\', '/').split('/')[-1] or '(unknown)' }}</td>
           <td></td>
@@ -29,7 +30,7 @@
           <td class="num">{{ '%.0f'|format(f.cache_ratio * 100) }}%</td>
         </tr>
           {% for s in f.rows %}
-          <tr class="leaf" data-date="{{ d.date }}" data-folder="{{ d.date }}::{{ f.project }}">
+          <tr class="leaf" data-date="{{ d.date }}" data-folder="{{ folder_key }}">
             <td></td><td></td>
             <td class="col-sid"><a href="/session/{{ s.session_id }}">{{ s.session_id[:6] }}</a></td>
             <td class="col-sum" title="{{ s.summary or '' }}">

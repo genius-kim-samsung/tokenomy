@@ -369,6 +369,14 @@ def test_models_page_ok(tmp_path, monkeypatch):
     assert "비중" in r.text
 
 
+def test_history_has_collapse_ui(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/history")
+    assert r.status_code == 200
+    assert 'id="toggle-all"' in r.text          # 모두 접기/펼치기 버튼
+    assert "/static/tree.js" in r.text          # 접기 스크립트 로드
+
+
 def test_models_page_renders_rows(tmp_path, monkeypatch):
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()

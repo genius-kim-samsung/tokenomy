@@ -180,6 +180,23 @@
   .cont { @apply text-muted cursor-help; }
   td.cache-miss { @apply text-exceeds font-semibold; }
   td.cache-miss span { @apply cursor-help; }
+
+  /* ── 내역 트리(.grid.tree) ── */
+  .grid.tree th:nth-child(5), .grid.tree th:nth-child(6), .grid.tree th:nth-child(7) { @apply text-right; }
+  .grid.tree td.num { @apply text-right tabular-nums; }
+  .grid.tree tr.grp { @apply cursor-pointer select-none; }
+  .grid.tree tr.grp:hover { @apply bg-elev; }
+  .grid.tree tr.grp-date td.col-date { @apply font-semibold; }
+  .grid.tree tr.grp-folder td.col-folder { @apply pl-5; }
+  .grid.tree td.col-sid { @apply pl-9 font-mono text-[12px]; }
+  .grid.tree .caret { @apply inline-block w-3 text-muted transition-transform; }
+  .grid.tree tr.grp.collapsed .caret { @apply -rotate-90; }
+  .grid.tree tr.grp:not(.collapsed) td.col-preview { @apply hidden; }   /* 펼침이면 프리뷰 숨김 */
+  .grid.tree td.col-sum { @apply max-w-[420px] overflow-hidden text-ellipsis whitespace-nowrap; }
+  .ai-badge { @apply inline-block px-1.5 rounded text-[11px] font-semibold mr-1 align-middle; }
+  .ai-claude { @apply bg-elev text-accent; }
+  .ai-codex { @apply bg-elev text-body; }
+  .ai-none { @apply text-muted; }
 }
 
 /* ── 세션 표(.sess) 반응형: 기존 동작 그대로 이식(원시 CSS) ── */
