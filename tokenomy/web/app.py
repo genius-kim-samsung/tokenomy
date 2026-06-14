@@ -107,7 +107,9 @@ def history_view(request: Request, view: str = "session", anchor: str | None = N
     is_partial = partial == "1" or hx_partial
     update_tag = None if is_partial else check_update(conn)  # 부분갱신은 셸 미렌더 → 조회 불필요
     ctx = history_context(conn, view, _parse_anchor(anchor), provider, sort, project or "")
-    template = "_history_rows.html" if is_partial else "history.html"
+    # 부분갱신은 인터랙티브 영역 전체(_history_body: 보기 탭·기간 네비·필터·표)를 #history-body로
+    # swap한다 — 필터 변경 후에도 탭·기간 링크가 항상 최신 provider/sort를 반영하도록.
+    template = "_history_body.html" if is_partial else "history.html"
     return templates.TemplateResponse(
         request, template,
         {**ctx, "notice": notice, "update_tag": update_tag},

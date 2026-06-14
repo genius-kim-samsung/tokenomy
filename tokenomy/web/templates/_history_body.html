@@ -1,0 +1,50 @@
+<nav class="view-seg">
+  {% set views = [('session','세션별'),('folder','폴더별'),('day','일별'),('week','주별'),('month','월별')] %}
+  {% for v, lbl in views %}
+  <a href="/history?view={{ v }}&anchor={{ anchor }}&provider={{ provider }}"
+     class="{{ 'on' if view == v }}">{{ lbl }}</a>
+  {% endfor %}
+</nav>
+
+<div class="card-head">
+  <div class="period-nav">
+    <a class="btn" href="/history?view={{ view }}&anchor={{ prev_anchor }}&provider={{ provider }}&sort={{ sort }}">‹ 이전</a>
+    <span class="label">{{ period_label }}</span>
+    {% if has_next %}<a class="btn" href="/history?view={{ view }}&anchor={{ next_anchor }}&provider={{ provider }}&sort={{ sort }}">다음 ›</a>{% endif %}
+  </div>
+
+  {# 컨트롤 전체(보기 탭·기간 네비·필터)를 #history-body 한 조각으로 swap한다.
+     이렇게 해야 필터(provider/sort) 변경 후에도 위 링크들이 항상 현재 상태를 반영한다. #}
+  <form class="filters" hx-get="/history" hx-target="#history-body"
+        hx-swap="innerHTML" hx-trigger="change" hx-push-url="true"
+        hx-indicator="#history-loading">
+    <input type="hidden" name="view" value="{{ view }}">
+    <input type="hidden" name="anchor" value="{{ anchor }}">
+    {% if project %}<input type="hidden" name="project" value="{{ project }}">{% endif %}
+    <select id="provider-filter" name="provider" aria-label="AI 필터">
+      <option value="" {{ 'selected' if provider == '' }}>전체</option>
+      <option value="claude" {{ 'selected' if provider == 'claude' }}>Claude</option>
+      <option value="codex" {{ 'selected' if provider == 'codex' }}>Codex</option>
+    </select>
+    <select id="sort-filter" name="sort" aria-label="정렬">
+      {% set sort_opts = {
+        'session': [('cost','비용순'),('recent','최신순')],
+        'folder':  [('cost','비용순'),('sessions','세션순'),('cache','캐시순')],
+        'day':     [('date_desc','날짜 최신순'),('date_asc','날짜 오래된순'),('day_cost','일별 지출많은순'),('cost','세션 비용순'),('cache','캐시 낮은순')],
+        'week':    [('recent','기간 최신순'),('oldest','기간 오래된순'),('cost','지출 많은순')],
+        'month':   [('recent','기간 최신순'),('oldest','기간 오래된순'),('cost','지출 많은순')]
+      } %}
+      {% for val, lbl in sort_opts[view] %}
+      <option value="{{ val }}" {{ 'selected' if sort == val }}>{{ lbl }}</option>
+      {% endfor %}
+    </select>
+    <span id="history-loading" class="htmx-indicator muted">갱신 중…</span>
+  </form>
+</div>
+
+{% if view == 'session' and project %}
+<p class="muted">프로젝트 필터: {{ project }} ·
+  <a href="/history?view=session&anchor={{ anchor }}&provider={{ provider }}&sort={{ sort }}">해제</a></p>
+{% endif %}
+
+{% include "_history_rows.html" %}

@@ -274,7 +274,8 @@ def test_history_partial_returns_fragment_only(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "myproj" in r.text
     assert "<!doctype html>" not in r.text.lower()  # 전체 페이지 chrome 없음
-    assert 'id="provider-filter"' not in r.text     # 드롭다운(페이지 셸)도 없음
+    assert 'class="sidebar"' not in r.text          # 사이드바(셸) 없음 = 조각
+    assert 'id="provider-filter"' in r.text         # 조각에 컨트롤 포함(필터 변경 시 함께 갱신)
 
 
 def test_history_shows_data_freshness(tmp_path, monkeypatch):
@@ -342,7 +343,8 @@ def test_history_hx_request_header_returns_fragment(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "myproj" in r.text
     assert "<!doctype html>" not in r.text.lower()   # 셸 없음 — 조각만
-    assert 'id="provider-filter"' not in r.text       # 필터 셸도 없음
+    assert 'class="sidebar"' not in r.text            # 사이드바(셸) 없음 = 조각
+    assert 'id="provider-filter"' in r.text           # 조각이 컨트롤 포함(보기 탭·기간 네비 갱신)
 
 
 def test_history_restore_request_returns_full_page(tmp_path, monkeypatch):
@@ -352,7 +354,20 @@ def test_history_restore_request_returns_full_page(tmp_path, monkeypatch):
     r = client.get("/history?view=day", headers={"HX-Request": "true",
                                                  "HX-History-Restore-Request": "true"})
     assert r.status_code == 200
-    assert 'id="provider-filter"' in r.text   # 셸(필터) 포함 = 전체 페이지
+    assert 'class="sidebar"' in r.text   # 사이드바(셸) 포함 = 전체 페이지
+
+
+def test_history_partial_refreshes_nav_links_with_filter(tmp_path, monkeypatch):
+    # 필터(provider/sort) 변경 시 부분 조각이 보기 탭·기간 네비 링크까지 새 값으로 다시 렌더해야 한다.
+    # (예전엔 이 링크들이 swap 영역 밖이라 직전 필터를 잃어, 기간 이동/탭 전환 시 필터가 풀렸다.)
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/history?view=day&anchor=2026-06-10&provider=claude&sort=date_desc",
+                   headers={"HX-Request": "true"})
+    assert r.status_code == 200
+    # 보기 탭(세션별)이 새 provider를 반영
+    assert 'href="/history?view=session&anchor=2026-06-10&provider=claude"' in r.text
+    # 기간 네비(‹이전›)가 새 provider+sort를 반영(6월 → 이전 앵커 2026-05-31)
+    assert "anchor=2026-05-31&provider=claude&sort=date_desc" in r.text
 
 
 def test_history_session_view_renders(tmp_path, monkeypatch):
