@@ -425,3 +425,27 @@ def test_history_renders_signal_classes(tmp_path, monkeypatch):
     assert "day-head" in r.text          # 날짜 그룹 헤더
     assert "cache-miss" in r.text        # 캐시미스 셀 클래스
     assert "↩" in r.text                 # 이어짐 표시
+
+
+def test_history_filters_use_htmx_not_handrolled_js(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/history")
+    assert r.status_code == 200
+    assert 'hx-get="/history"' in r.text      # htmx 선언적 속성
+    assert "fetch('/history" not in r.text    # 손짜기 AJAX 제거됨
+    assert "popstate" not in r.text           # 손짜기 history 동기화 제거됨
+
+
+def test_history_hx_request_header_returns_fragment(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+        "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',3.0,1)"
+    )
+    conn.commit()
+    r = client.get("/history?anchor=2026-06-10", headers={"HX-Request": "true"})
+    assert r.status_code == 200
+    assert "myproj" in r.text
+    assert "<!doctype html>" not in r.text.lower()   # 셸 없음 — 조각만
+    assert 'id="provider-filter"' not in r.text       # 필터 셸도 없음

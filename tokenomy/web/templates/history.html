@@ -5,20 +5,24 @@
 <section class="card">
   <div class="card-head">
     <h2>내역 — 일별 토큰 지출</h2>
-    <div class="filters">
-      <select id="provider-filter" aria-label="AI 필터">
+    <form class="filters" hx-get="/history" hx-target="#history-table"
+          hx-swap="innerHTML" hx-trigger="change" hx-push-url="true"
+          hx-indicator="#history-loading">
+      <input type="hidden" name="anchor" value="{{ anchor }}">
+      <select id="provider-filter" name="provider" aria-label="AI 필터">
         <option value="" {{ 'selected' if provider == '' }}>전체</option>
         <option value="claude" {{ 'selected' if provider == 'claude' }}>Claude</option>
         <option value="codex" {{ 'selected' if provider == 'codex' }}>Codex</option>
       </select>
-      <select id="sort-filter" aria-label="정렬">
+      <select id="sort-filter" name="sort" aria-label="정렬">
         <option value="date_desc" {{ 'selected' if sort == 'date_desc' }}>날짜 최신순</option>
         <option value="date_asc" {{ 'selected' if sort == 'date_asc' }}>날짜 오래된순</option>
         <option value="day_cost" {{ 'selected' if sort == 'day_cost' }}>일별 지출 많은순</option>
         <option value="cost" {{ 'selected' if sort == 'cost' }}>세션 비용순</option>
         <option value="cache" {{ 'selected' if sort == 'cache' }}>캐시 낮은순</option>
       </select>
-    </div>
+      <span id="history-loading" class="htmx-indicator muted">갱신 중…</span>
+    </form>
   </div>
 
   <div class="period-nav">
@@ -29,42 +33,4 @@
 
   <div id="history-table">{% include "_history_rows.html" %}</div>
 </section>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  (function () {
-    var tbl = document.getElementById('history-table');
-    var pf = document.getElementById('provider-filter');
-    var sf = document.getElementById('sort-filter');
-    var ANCHOR = "{{ anchor }}";
-    function load(qs, push) {
-      fetch('/history?' + qs + '&partial=1')
-        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
-        .then(function (html) {
-          tbl.innerHTML = html;
-          if (push) history.pushState(null, '', '/history?' + qs);
-        })
-        .catch(function () {
-          tbl.innerHTML = '<p class="muted">새로고침 실패 — 페이지를 다시 로드하세요.</p>';
-        });
-    }
-    function currentQs() {
-      return 'provider=' + encodeURIComponent(pf.value) +
-             '&sort=' + encodeURIComponent(sf.value) +
-             '&anchor=' + encodeURIComponent(ANCHOR);
-    }
-    pf.addEventListener('change', function () { load(currentQs(), true); });
-    sf.addEventListener('change', function () { load(currentQs(), true); });
-    window.addEventListener('popstate', function () {
-      var params = new URLSearchParams(location.search);
-      pf.value = params.get('provider') || '';
-      sf.value = params.get('sort') || 'date_desc';
-      var anchor = params.get('anchor') || ANCHOR;
-      load('provider=' + encodeURIComponent(pf.value) +
-           '&sort=' + encodeURIComponent(sf.value) +
-           '&anchor=' + encodeURIComponent(anchor), false);
-    });
-  })();
-</script>
 {% endblock %}

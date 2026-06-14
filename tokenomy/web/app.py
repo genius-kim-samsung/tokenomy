@@ -116,9 +116,11 @@ def history_view(request: Request, anchor: str | None = None, provider: str = ""
     provider = provider if provider in PROVIDERS else ""
     sort = sort if sort in _HISTORY_SORTS else "date_desc"
     conn = connect()
-    update_tag = None if partial == "1" else check_update(conn)  # 부분갱신은 셸 미렌더 → 조회 불필요
+    # htmx 요청(HX-Request) 또는 명시적 partial=1 → 셸 없이 조각만 렌더
+    is_partial = partial == "1" or request.headers.get("HX-Request") == "true"
+    update_tag = None if is_partial else check_update(conn)  # 부분갱신은 셸 미렌더 → 조회 불필요
     ctx = history_context(conn, _parse_anchor(anchor), provider, sort)
-    template = "_history_rows.html" if partial == "1" else "history.html"
+    template = "_history_rows.html" if is_partial else "history.html"
     return templates.TemplateResponse(
         request, template,
         {**ctx, "notice": notice, "update_tag": update_tag},
