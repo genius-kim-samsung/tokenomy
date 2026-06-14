@@ -165,13 +165,6 @@
   .filters select {
     @apply px-2 py-1 border border-line rounded-md bg-card text-fg text-[13px];
   }
-  .day-group { @apply mb-3.5; }
-  .day-head {
-    @apply flex justify-between items-baseline py-1.5 px-0.5 mb-0.5
-           border-b-2 border-line;
-  }
-  .day-label { @apply font-semibold; }
-  .day-sub { @apply text-muted tabular-nums; }
   .cont { @apply text-muted cursor-help; }
   td.cache-miss { @apply text-exceeds font-semibold; }
   td.cache-miss span { @apply cursor-help; }

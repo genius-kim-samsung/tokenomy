@@ -22,7 +22,7 @@
         {% set folder_key = d.date ~ '::' ~ loop.index %}
         <tr class="grp grp-folder" data-date="{{ d.date }}" data-folder="{{ folder_key }}">
           <td></td>
-          <td class="col-folder"><span class="caret">▾</span> {{ (f.project or '(unknown)').replace('\\', '/').split('/')[-1] or '(unknown)' }}</td>
+          <td class="col-folder" title="{{ f.project }}"><span class="caret">▾</span> {{ (f.project or '(unknown)').replace('\\', '/').split('/')[-1] or '(unknown)' }}</td>
           <td></td>
           <td class="col-preview muted">{{ f.preview }}</td>
           <td class="num">{{ f.msgs }}</td>
