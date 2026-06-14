@@ -48,6 +48,7 @@ def test_session_detail_renders(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "세션 상세" in r.text
     assert 'class="sidebar"' in r.text
+    assert 'href="/history?view=session"' in r.text
 
 
 def test_ingest_redirects(tmp_path, monkeypatch):
