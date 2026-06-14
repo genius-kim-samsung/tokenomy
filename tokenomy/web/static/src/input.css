@@ -98,7 +98,7 @@
 
   .toggle a { @apply text-muted no-underline px-2 py-0.5 rounded-md transition-colors; }
   .toggle a:hover { @apply text-fg; }
-  .toggle a.on { @apply text-white bg-[#30363d]; }
+  .toggle a.on { @apply text-fg bg-elev; }
   .toggle.small a { @apply text-[13px]; }
 
   /* 번다운 바 */
@@ -115,12 +115,12 @@
   .status.s-warn { @apply text-warn; }
   .status.s-exceeds { @apply text-exceeds; }
 
-  .badge { @apply bg-[#3d2c00] text-warn px-1.5 py-px rounded; }
+  .badge { @apply bg-elev text-warn px-1.5 py-px rounded; }
 
   /* 배너 */
-  .banner { @apply px-3 py-2 rounded-lg mb-2.5 bg-[#13233b] text-fg; }
-  .banner.error { @apply bg-[#3d1418] text-exceeds; }
-  .banner.update { @apply bg-[#0f2e1a] text-ok; }
+  .banner { @apply px-3 py-2 rounded-lg mb-2.5 bg-elev text-fg border border-line; }
+  .banner.error { @apply bg-[#f7e3e3] text-exceeds; }
+  .banner.update { @apply bg-[#e4f1e7] text-ok; }
 
   /* 코치 */
   .coach { @apply list-none p-0 m-0; }
@@ -133,7 +133,7 @@
   .grid th, .grid td { @apply text-left px-2 py-1.5 border-b border-line; }
   .grid th { @apply text-muted font-semibold text-[12px]; }
   .grid tbody tr { @apply transition-colors; }
-  .grid tbody tr:hover { @apply bg-[#20242c]; }
+  .grid tbody tr:hover { @apply bg-elev; }
   .grid td:first-child { @apply tabular-nums; }
 
   /* 탭 */
@@ -148,7 +148,7 @@
     @apply flex-1 min-w-[200px] block bg-elev border border-line rounded-lg p-3
            no-underline text-fg transition-colors;
   }
-  .ai-card:hover { @apply border-[#3d444d]; }
+  .ai-card:hover { @apply border-primary; }
   .ai-name { @apply font-semibold mb-1.5; }
   .ai-num { @apply text-[16px] my-1 tabular-nums; }
   .ai-card .bar { @apply block w-full h-3 my-1.5; }
