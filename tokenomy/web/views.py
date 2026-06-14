@@ -4,9 +4,9 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
-    KST, PROVIDERS, DayGroup, DaySessionRow, burndown, by_day_session, by_project,
-    by_session, combined_burndown, daily_series, insights, month_bounds, period_bounds,
-    session_detail,
+    KST, PROVIDERS, DayGroup, DaySessionRow, burndown, by_day_session, by_month,
+    by_project, by_session, by_week, combined_burndown, daily_series, insights,
+    month_bounds, period_bounds, session_detail,
 )
 from tokenomy.budget import budget_from_config, load_config, user_label
 
@@ -76,56 +76,6 @@ def session_context(conn, session_id: str) -> dict | None:
     return {"detail": detail}
 
 
-def projects_context(conn, period: str, anchor_kst: datetime, provider: str,
-                     sort: str, now_kst: datetime | None = None) -> dict:
-    """전체 프로젝트 목록(/projects). 기간 [start,nxt)로 집계 후 sort 키로 재정렬."""
-    now = now_kst or datetime.now(KST)
-    config = load_config()
-    start, nxt, label = period_bounds(period, anchor_kst)
-    rows = by_project(conn, provider or None, now, start=start, nxt=nxt)
-    rows.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
-    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
-    return {
-        "active_tab": provider or "overview",
-        "user_label": user_label(config),
-        "period": period, "period_label": label,
-        "anchor": anchor_kst.strftime("%Y-%m-%d"),
-        "provider": provider, "sort": sort,
-        "rows": rows, "count": len(rows),
-        "total": round(sum(r.cost for r in rows), 4),
-        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
-        "next_anchor": nxt.strftime("%Y-%m-%d"),
-        "has_next": nxt <= now,                 # 현재/미래 기간이면 다음 숨김
-        "month": now.strftime("%Y-%m"),         # _tabs.html 헤더용
-        "last_ts": last["t"] if last and last["t"] else None,
-    }
-
-
-def sessions_context(conn, period: str, anchor_kst: datetime, provider: str,
-                     order: str, project: str, now_kst: datetime | None = None) -> dict:
-    """전체 세션 목록(/sessions). order=cost|recent, project 드릴다운 필터."""
-    now = now_kst or datetime.now(KST)
-    config = load_config()
-    start, nxt, label = period_bounds(period, anchor_kst)
-    rows = by_session(conn, provider or None, now, start=start, nxt=nxt,
-                      order=order, project=project or None)
-    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
-    return {
-        "active_tab": provider or "overview",
-        "user_label": user_label(config),
-        "period": period, "period_label": label,
-        "anchor": anchor_kst.strftime("%Y-%m-%d"),
-        "provider": provider, "order": order, "project": project,
-        "rows": rows, "count": len(rows),
-        "total": round(sum(r.cost for r in rows), 4),
-        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
-        "next_anchor": nxt.strftime("%Y-%m-%d"),
-        "has_next": nxt <= now,
-        "month": now.strftime("%Y-%m"),
-        "last_ts": last["t"] if last and last["t"] else None,
-    }
-
-
 _GROUPED_SORTS = ("date_desc", "date_asc", "day_cost")
 _WEEKDAY = "월화수목금토일"
 
@@ -144,18 +94,91 @@ def _group_by_date(rows: list[DaySessionRow]) -> list[DayGroup]:
     return out
 
 
-def history_context(conn, anchor_kst: datetime, provider: str,
-                    sort: str, now_kst: datetime | None = None) -> dict:
-    """내역(/history). 월 고정. sort에 따라 그룹(date_desc/date_asc/day_cost) 또는
-    평면(cost/cache)으로 조립한다. 평면은 날짜 그룹을 깨고 단일 정렬 리스트.
-    cache 정렬은 캐시 효율이 낮은(개선 여지 큰) 세션을 먼저 보이도록 오름차순이다."""
+def _history_nav_month(anchor_kst: datetime, now_kst: datetime) -> dict:
+    """세션/폴더/일/주 보기 공통 — 월 단위 기간 메타."""
+    start, nxt = month_bounds(anchor_kst)
+    return {
+        "period_label": start.strftime("%Y-%m"),
+        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "next_anchor": nxt.strftime("%Y-%m-%d"),
+        "has_next": nxt <= now_kst,
+        "_start": start, "_nxt": nxt,
+    }
+
+
+_HISTORY_DAY_SORTS = ("date_desc", "date_asc", "day_cost", "cost", "cache")
+
+
+def history_context(conn, view: str, anchor_kst: datetime, provider: str,
+                    sort: str, project: str = "", now_kst: datetime | None = None) -> dict:
+    """내역 — view ∈ {session, folder, day, week, month} 디스패치.
+
+    공통 메타(active_nav/provider/anchor/last_ts)에 view별 행 데이터를 합쳐 반환한다.
+    """
     now = now_kst or datetime.now(KST)
     config = load_config()
-    start, nxt = month_bounds(anchor_kst)
+    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    base = {
+        "active_nav": "history", "view": view,
+        "user_label": user_label(config),
+        "provider": provider, "sort": sort, "project": project,
+        "anchor": anchor_kst.strftime("%Y-%m-%d"),
+        "month": now.strftime("%Y-%m"),
+        "last_ts": last["t"] if last and last["t"] else None,
+        # view별로 아래에서 덮어쓰는 기본값
+        "is_grouped": False, "groups": [], "flat_rows": [], "rows": [],
+        "count": 0, "total": 0.0,
+    }
+
+    if view == "month":
+        rows = by_month(conn, provider or None, anchor_kst.year)
+        if sort == "oldest":
+            rows = sorted(rows, key=lambda m: m.month)
+        elif sort == "cost":
+            rows = sorted(rows, key=lambda m: m.cost, reverse=True)
+        # recent(기본)은 by_month가 이미 최신순
+        base.update({
+            "rows": rows, "count": len(rows),
+            "total": round(sum(m.cost for m in rows), 4),
+            "period_label": str(anchor_kst.year),
+            "prev_anchor": f"{anchor_kst.year - 1}-01-01",
+            "next_anchor": f"{anchor_kst.year + 1}-01-01",
+            "has_next": anchor_kst.year < now.year,
+        })
+        return base
+
+    nav = _history_nav_month(anchor_kst, now)
+    start, nxt = nav.pop("_start"), nav.pop("_nxt")
+    base.update(nav)
+
+    if view == "week":
+        rows = by_week(conn, provider or None, anchor_kst)
+        if sort == "oldest":
+            rows = sorted(rows, key=lambda w: w.week_start)
+        elif sort == "cost":
+            rows = sorted(rows, key=lambda w: w.cost, reverse=True)
+        base.update({"rows": rows, "count": len(rows),
+                     "total": round(sum(w.cost for w in rows), 4)})
+        return base
+
+    if view == "folder":
+        rows = by_project(conn, provider or None, now, start=start, nxt=nxt)
+        rows.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
+        base.update({"rows": rows, "count": len(rows),
+                     "total": round(sum(p.cost for p in rows), 4)})
+        return base
+
+    if view == "session":
+        order = sort if sort in ("cost", "recent") else "cost"
+        rows = by_session(conn, provider or None, now, start=start, nxt=nxt,
+                          order=order, project=project or None)
+        base.update({"rows": rows, "count": len(rows),
+                     "total": round(sum(s.cost for s in rows), 4)})
+        return base
+
+    # view == "day" (기존 동작 이식)
     rows = by_day_session(conn, provider or None, start=start, nxt=nxt)
     total = round(sum(r.cost for r in rows), 4)
-    count = len(rows)
-
     is_grouped = sort in _GROUPED_SORTS
     groups: list = []
     flat_rows: list = []
@@ -165,26 +188,12 @@ def history_context(conn, anchor_kst: datetime, provider: str,
             groups.sort(key=lambda g: g.date)
         elif sort == "day_cost":
             groups.sort(key=lambda g: g.subtotal, reverse=True)
-        else:  # date_desc (기본)
+        else:
             groups.sort(key=lambda g: g.date, reverse=True)
-    # 평면 정렬은 안정 정렬 — 동률은 by_day_session의 (date, session_id) 내림차순이 유지된다.
     elif sort == "cache":
-        flat_rows = sorted(rows, key=lambda r: r.cache_ratio)            # 낮은 순
-    else:  # cost
+        flat_rows = sorted(rows, key=lambda r: r.cache_ratio)
+    else:
         flat_rows = sorted(rows, key=lambda r: r.cost, reverse=True)
-
-    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
-    return {
-        "active_tab": provider or "overview",
-        "user_label": user_label(config),
-        "provider": provider, "sort": sort,
-        "is_grouped": is_grouped, "groups": groups, "flat_rows": flat_rows,
-        "count": count, "total": total,
-        "period_label": start.strftime("%Y-%m"),
-        "anchor": anchor_kst.strftime("%Y-%m-%d"),
-        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
-        "next_anchor": nxt.strftime("%Y-%m-%d"),
-        "has_next": nxt <= now,
-        "month": now.strftime("%Y-%m"),
-        "last_ts": last["t"] if last and last["t"] else None,
-    }
+    base.update({"is_grouped": is_grouped, "groups": groups, "flat_rows": flat_rows,
+                 "count": len(rows), "total": total})
+    return base
