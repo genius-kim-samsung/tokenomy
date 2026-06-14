@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 
 from tokenomy.aggregate import (
-    KST, burndown, by_day_session, by_model, by_month, by_project, by_session, by_week,
+    KST, burndown, by_day_session, by_model, by_project, by_session,
     combined_burndown, daily_series, insights, month_bounds, parse_ts, period_bounds,
     session_detail,
 )
@@ -665,71 +665,6 @@ def test_history_context_empty(monkeypatch, tmp_path):
     ctx = history_context(connect(":memory:"), _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
     assert ctx["count"] == 0 and ctx["total"] == 0.0 and ctx["tree"] == []
     assert ctx["last_ts"] is None
-
-
-# ─── by_week / by_month ───────────────────────────────────────────────────────
-
-
-def test_by_week_covers_weeks_overlapping_month():
-    conn = connect(":memory:")
-    # 6월(2026-06) 앵커. 6/1(월)~ 주들. 6/2 KST에 $5, 6/9 KST에 $3
-    _insert(conn, "2026-06-01T01:00:00Z", 5.0, session="a")  # KST 6/1 10:00 → 첫 주
-    _insert(conn, "2026-06-08T01:00:00Z", 3.0, session="b")  # KST 6/8 10:00 → 둘째 주
-    weeks = by_week(conn, "claude", datetime(2026, 6, 15, tzinfo=KST))
-    # 6월과 겹치는 주가 5개 이상, 각 주에 week_start(월요일) 라벨
-    starts = [w.week_start for w in weeks]
-    assert "2026-06-01" in starts            # 6/1은 월요일
-    assert "2026-06-08" in starts
-    wk = {w.week_start: w for w in weeks}
-    assert wk["2026-06-01"].cost == 5.0
-    assert wk["2026-06-08"].cost == 3.0
-    assert wk["2026-06-01"].sessions == 1
-
-
-def test_by_week_full_week_even_when_partial_in_month():
-    conn = connect(":memory:")
-    # 5/29(금) 지출은 6/1이 포함된 주(5/25~5/31)가 아니라, 6월 첫 주는 6/1(월)~6/7.
-    # 6월과 겹치는 주만 반환되는지 — 5월 단독 주는 제외
-    _insert(conn, "2026-05-20T01:00:00Z", 9.0, session="m")  # KST 5/20 → 5월 셋째 주(6월과 무관)
-    _insert(conn, "2026-06-03T01:00:00Z", 2.0, session="j")  # KST 6/3 → 6월 첫 주
-    weeks = by_week(conn, "claude", datetime(2026, 6, 15, tzinfo=KST))
-    starts = [w.week_start for w in weeks]
-    assert "2026-05-18" not in starts        # 6월과 안 겹치는 5월 주 제외
-    assert "2026-06-01" in starts
-
-
-def test_by_week_partial_leading_week_july_anchor():
-    conn = connect(":memory:")
-    # 2026-07 첫 주는 6/29(월)~7/5. 6/30 KST 지출이 그 주(week_start 2026-06-29)에 집계돼야 한다.
-    _insert(conn, "2026-06-30T01:00:00Z", 7.0, session="p")   # KST 6/30 10:00 → 6/29 주
-    _insert(conn, "2026-07-08T01:00:00Z", 2.0, session="q")   # KST 7/8 → 7/6 주
-    weeks = by_week(conn, "claude", datetime(2026, 7, 15, tzinfo=KST))
-    wk = {w.week_start: w for w in weeks}
-    assert "2026-06-29" in wk
-    assert wk["2026-06-29"].cost == 7.0
-
-
-def test_by_month_only_months_with_data():
-    conn = connect(":memory:")
-    _insert(conn, "2026-03-10T01:00:00Z", 4.0, session="a")  # KST 3월
-    _insert(conn, "2026-06-10T01:00:00Z", 6.0, session="b")  # KST 6월
-    months = by_month(conn, "claude", 2026)
-    labels = [m.label for m in months]
-    assert "2026-03" in labels and "2026-06" in labels
-    assert "2026-01" not in labels            # 데이터 없는 달 생략
-    by_l = {m.label: m for m in months}
-    assert by_l["2026-06"].cost == 6.0
-    assert by_l["2026-03"].month == 3
-    # 기본 정렬: 최신 달 먼저
-    assert labels.index("2026-06") < labels.index("2026-03")
-
-
-def test_by_month_filters_year():
-    conn = connect(":memory:")
-    _insert(conn, "2025-06-10T01:00:00Z", 9.0, session="y25")
-    _insert(conn, "2026-06-10T01:00:00Z", 6.0, session="y26")
-    months = by_month(conn, "claude", 2026)
-    assert [m.label for m in months] == ["2026-06"]
 
 
 # ─── by_model ────────────────────────────────────────────────────────────────
