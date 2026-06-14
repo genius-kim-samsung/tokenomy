@@ -1,0 +1,23 @@
+<aside class="sidebar">
+  <a class="brand" href="/">
+    <span class="brand-mark" aria-hidden="true">🪙</span>
+    <span class="brand-name">Tokenomy</span>
+  </a>
+  <nav class="nav">
+    <a href="/"         class="nav-item {{ 'on' if active_nav == 'dashboard' }}">대시보드</a>
+    <a href="/history"  class="nav-item {{ 'on' if active_nav == 'history' }}">내역</a>
+    <a href="/models"   class="nav-item {{ 'on' if active_nav == 'models' }}">모델별</a>
+    <a href="/settings" class="nav-item {{ 'on' if active_nav == 'settings' }}">설정</a>
+  </nav>
+  <div class="nav-foot">
+    {% if last_ts %}<div class="muted">데이터 최신: {{ last_ts|kstfmt }}</div>{% endif %}
+    <form method="post" action="/ingest" class="inline">
+      <button class="btn" type="submit">↻ 새로고침</button>
+    </form>
+    <div class="muted">v{{ app_version }}</div>
+    {% if update_tag %}
+    <a class="update-link" href="https://github.com/genius-kim-samsung/tokenomy/releases/latest"
+       target="_blank" rel="noopener">새 버전 {{ update_tag }}</a>
+    {% endif %}
+  </div>
+</aside>

@@ -7,12 +7,19 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <main class="wrap">{% block body %}{% endblock %}</main>
+  <div class="app">
+    {% include "_sidebar.html" %}
+    <main class="content">
+      {% if notice == "ingest-failed" %}
+      <div class="banner error">새로고침(ingest) 중 오류 — 기존 데이터를 표시합니다.</div>
+      {% endif %}
+      {% block body %}{% endblock %}
+    </main>
+  </div>
   <script src="/static/vendor/htmx.min.js"></script>
   {% block scripts %}{% endblock %}
   <script>
     // 외부 링크(비 localhost http/https)는 네이티브 창 대신 기본 브라우저로.
-    // pywebview 환경에서만 가로채고, 일반 브라우저에서는 가드로 no-op.
     document.addEventListener('click', function (e) {
       var a = e.target.closest && e.target.closest('a[href]');
       if (!a) return;
