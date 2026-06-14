@@ -6,17 +6,22 @@
 /* ── 디자인 토큰 (기존 시맨틱 팔레트 이식) ──
    @theme 변수는 Tailwind 유틸리티를 생성한다: --color-card → bg-card/text-card/border-card */
 @theme static {
-  --color-bg:      #0f1115;
-  --color-card:    #1a1d24;
-  --color-elev:    #0d1117;  /* 인셋 바·ai-card 배경 */
-  --color-fg:      #e6e8eb;
-  --color-muted:   #9aa0a6;
-  --color-line:    #2d333b;
-  --color-ok:      #3fb950;
-  --color-warn:    #d29922;
-  --color-exceeds: #f85149;
-  --color-accent:  #58a6ff;  /* 링크 */
-  --color-primary: #238636;  /* 버튼 */
+  /* DESIGN.md 크림+코랄 하이브리드 — 토큰 이름은 유지, 값만 리맵 */
+  --color-bg:            #faf9f5;  /* canvas */
+  --color-card:          #efe9de;  /* surface-card */
+  --color-elev:          #e8e0d2;  /* 인셋·ai-card·코드블록(cream-strong) */
+  --color-fg:            #141413;  /* ink — 헤드라인/주요 텍스트 */
+  --color-body:          #3d3d3a;  /* 본문 */
+  --color-muted:         #6c6a64;
+  --color-line:          #e6dfd8;  /* hairline */
+  --color-ok:            #5db872;  /* success */
+  --color-warn:          #d4a017;  /* warning */
+  --color-exceeds:       #c64545;  /* error */
+  --color-accent:        #cc785c;  /* 링크 = 코랄 text-link */
+  --color-primary:       #cc785c;  /* 버튼/강조 = 코랄 */
+  --color-primary-active: #a9583e; /* press */
+  --color-dark:          #181715;  /* 차트/코드성 다크 surface(절제) */
+  --color-on-dark:       #faf9f5;
 }
 
 /* ── 베이스 ── */
