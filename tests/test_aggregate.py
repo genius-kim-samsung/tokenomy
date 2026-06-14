@@ -595,6 +595,16 @@ def test_by_day_session_carries_summary_and_label():
     assert rows[0].project == "/p"
 
 
+def test_by_day_session_carries_raw_cache_for_weighting():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-13T01:00:00Z",
+         cost_usd=1.0, input_tokens=30, cache_creation=10, cache_read=60)
+    rows = by_day_session(conn, "claude", start=_JUN[0], nxt=_JUN[1])
+    assert rows[0].cache_read == 60
+    assert rows[0].cache_den == 100        # input 30 + cache_creation 10 + cache_read 60
+    assert rows[0].cache_ratio == 0.6
+
+
 # ─── history_context: 그룹/평면 + 정렬 ────────────────────────────────────────
 
 def _seed_history(conn):

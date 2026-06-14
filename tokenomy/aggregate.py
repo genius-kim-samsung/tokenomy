@@ -275,6 +275,8 @@ class DaySessionRow:
     cost: float
     msgs: int
     cache_ratio: float
+    cache_read: int         # 그룹 가중평균 분자(원시 cache_read 합)
+    cache_den: int          # 그룹 가중평균 분모(input + cache_creation + cache_read)
     is_continued: bool      # 세션 최초등장일보다 이후 날짜인가 → ↩
     cache_miss: bool        # is_continued AND cache_ratio < 임계 → ⚠
 
@@ -410,6 +412,7 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
             summary=summary, project=a["project"], label=label,
             cost=round(a["cost"], 4), msgs=a["msgs"],
             cache_ratio=round(cache_ratio, 4),
+            cache_read=a["cr"], cache_den=a["den"],
             is_continued=is_continued, cache_miss=cache_miss,
         ))
     out.sort(key=lambda x: (x.date, x.session_id), reverse=True)
