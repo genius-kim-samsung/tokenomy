@@ -5,7 +5,7 @@
 
 /* ── 디자인 토큰 (기존 시맨틱 팔레트 이식) ──
    @theme 변수는 Tailwind 유틸리티를 생성한다: --color-card → bg-card/text-card/border-card */
-@theme {
+@theme static {
   --color-bg:      #0f1115;
   --color-card:    #1a1d24;
   --color-elev:    #0d1117;  /* 인셋 바·ai-card 배경 */
