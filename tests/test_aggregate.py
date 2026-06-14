@@ -729,7 +729,7 @@ def test_history_context_empty(monkeypatch, tmp_path):
 
 # ─── by_week / by_month ───────────────────────────────────────────────────────
 
-from tokenomy.aggregate import by_week  # noqa: E402  (파일 상단 import에 합쳐도 됨)
+from tokenomy.aggregate import by_week, by_month  # noqa: E402  (파일 상단 import에 합쳐도 됨)
 
 
 def test_by_week_covers_weeks_overlapping_month():
@@ -758,3 +758,26 @@ def test_by_week_full_week_even_when_partial_in_month():
     starts = [w.week_start for w in weeks]
     assert "2026-05-18" not in starts        # 6월과 안 겹치는 5월 주 제외
     assert "2026-06-01" in starts
+
+
+def test_by_month_only_months_with_data():
+    conn = connect(":memory:")
+    _insert(conn, "2026-03-10T01:00:00Z", 4.0, session="a")  # KST 3월
+    _insert(conn, "2026-06-10T01:00:00Z", 6.0, session="b")  # KST 6월
+    months = by_month(conn, "claude", 2026)
+    labels = [m.label for m in months]
+    assert "2026-03" in labels and "2026-06" in labels
+    assert "2026-01" not in labels            # 데이터 없는 달 생략
+    by_l = {m.label: m for m in months}
+    assert by_l["2026-06"].cost == 6.0
+    assert by_l["2026-03"].month == 3
+    # 기본 정렬: 최신 달 먼저
+    assert labels.index("2026-06") < labels.index("2026-03")
+
+
+def test_by_month_filters_year():
+    conn = connect(":memory:")
+    _insert(conn, "2025-06-10T01:00:00Z", 9.0, session="y25")
+    _insert(conn, "2026-06-10T01:00:00Z", 6.0, session="y26")
+    months = by_month(conn, "claude", 2026)
+    assert [m.label for m in months] == ["2026-06"]

@@ -124,6 +124,37 @@ def by_week(conn, provider: str | None, anchor_kst: datetime) -> list[WeekRow]:
     return out
 
 
+@dataclass
+class MonthRow:
+    month: int        # 1..12
+    label: str        # "2026-06"
+    cost: float
+    sessions: int
+    cache_ratio: float
+
+
+def by_month(conn, provider: str | None, year: int) -> list[MonthRow]:
+    """해당 연도의 월별 합계. 데이터 있는 달만 반환(빈 달 생략). 최신 달 먼저."""
+    out: list[MonthRow] = []
+    for mo in range(1, 13):
+        start = datetime(year, mo, 1, tzinfo=KST)
+        nxt = datetime(year + 1, 1, 1, tzinfo=KST) if mo == 12 else datetime(year, mo + 1, 1, tzinfo=KST)
+        rows = _range_rows(conn, provider, start, nxt)
+        if not rows:
+            continue
+        cost = sum(r["cost_usd"] or 0 for r in rows)
+        sessions = {r["session_id"] for r in rows}
+        cr = sum(r["cache_read"] or 0 for r in rows)
+        den = sum((r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0) for r in rows)
+        out.append(MonthRow(
+            month=mo, label=f"{year}-{mo:02d}",
+            cost=round(cost, 4), sessions=len(sessions),
+            cache_ratio=round(cr / den, 4) if den else 0.0,
+        ))
+    out.sort(key=lambda m: m.month, reverse=True)
+    return out
+
+
 def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime) -> list:
     cols = ("SELECT ts, cost_usd, priced, session_id, project, "
             "input_tokens, cache_creation, cache_read, web_search FROM messages")
