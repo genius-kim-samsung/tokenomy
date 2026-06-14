@@ -56,7 +56,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "active_nav": "dashboard", "sort": sort,
         "user_label": user_label(config),
         # combined.limit>0 == budget.total>0 (Budget가 PROVIDERS와 동일) — 통합 바에
-        # 직결되도록 combined 기준 사용. dashboard_context는 budget.total>0로 동치.
+        # 직결되도록 combined 기준 사용.
         "budget_configured": combined.limit > 0,
         "month": now.strftime("%Y-%m"),
         "combined": combined, "cards": cards,
