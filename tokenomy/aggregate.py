@@ -86,6 +86,44 @@ class ProjectRow:
     cache_ratio: float
 
 
+@dataclass
+class WeekRow:
+    week_start: str   # "2026-06-08" (월요일, KST)
+    label: str        # "06-08 ~ 06-14"
+    cost: float
+    sessions: int
+    cache_ratio: float
+
+
+def by_week(conn, provider: str | None, anchor_kst: datetime) -> list[WeekRow]:
+    """앵커가 속한 달과 겹치는 ISO 주(월~일) 단위 합계. 부분 주도 주 전체를 집계한다.
+
+    주 시작은 월요일. 기본 정렬은 최신 주 먼저(week_start 내림차순).
+    """
+    m_start, m_nxt = month_bounds(anchor_kst)
+    first = m_start - timedelta(days=m_start.weekday())   # 달 첫날이 속한 주의 월요일
+    out: list[WeekRow] = []
+    wk = first
+    while wk < m_nxt:
+        nxt = wk + timedelta(days=7)
+        rows = _range_rows(conn, provider, wk, nxt)
+        cost = sum(r["cost_usd"] or 0 for r in rows)
+        sessions = {r["session_id"] for r in rows}
+        cr = sum(r["cache_read"] or 0 for r in rows)
+        den = sum((r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0) for r in rows)
+        end = nxt - timedelta(days=1)
+        end_fmt = "%Y-%m-%d" if end.year != wk.year else "%m-%d"
+        out.append(WeekRow(
+            week_start=wk.strftime("%Y-%m-%d"),
+            label=f"{wk.strftime('%m-%d')} ~ {end.strftime(end_fmt)}",
+            cost=round(cost, 4), sessions=len(sessions),
+            cache_ratio=round(cr / den, 4) if den else 0.0,
+        ))
+        wk = nxt
+    out.sort(key=lambda w: w.week_start, reverse=True)
+    return out
+
+
 def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime) -> list:
     cols = ("SELECT ts, cost_usd, priced, session_id, project, "
             "input_tokens, cache_creation, cache_read, web_search FROM messages")

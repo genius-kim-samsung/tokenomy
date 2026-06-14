@@ -725,3 +725,36 @@ def test_history_context_empty(monkeypatch, tmp_path):
     ctx = history_context(connect(":memory:"), _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
     assert ctx["count"] == 0 and ctx["total"] == 0.0 and ctx["groups"] == []
     assert ctx["last_ts"] is None
+
+
+# ─── by_week / by_month ───────────────────────────────────────────────────────
+
+from tokenomy.aggregate import by_week  # noqa: E402  (파일 상단 import에 합쳐도 됨)
+
+
+def test_by_week_covers_weeks_overlapping_month():
+    conn = connect(":memory:")
+    # 6월(2026-06) 앵커. 6/1(월)~ 주들. 6/2 KST에 $5, 6/9 KST에 $3
+    _insert(conn, "2026-06-01T01:00:00Z", 5.0, session="a")  # KST 6/1 10:00 → 첫 주
+    _insert(conn, "2026-06-08T01:00:00Z", 3.0, session="b")  # KST 6/8 10:00 → 둘째 주
+    weeks = by_week(conn, "claude", datetime(2026, 6, 15, tzinfo=KST))
+    # 6월과 겹치는 주가 5개 이상, 각 주에 week_start(월요일) 라벨
+    starts = [w.week_start for w in weeks]
+    assert "2026-06-01" in starts            # 6/1은 월요일
+    assert "2026-06-08" in starts
+    wk = {w.week_start: w for w in weeks}
+    assert wk["2026-06-01"].cost == 5.0
+    assert wk["2026-06-08"].cost == 3.0
+    assert wk["2026-06-01"].sessions == 1
+
+
+def test_by_week_full_week_even_when_partial_in_month():
+    conn = connect(":memory:")
+    # 5/29(금) 지출은 6/1이 포함된 주(5/25~5/31)가 아니라, 6월 첫 주는 6/1(월)~6/7.
+    # 6월과 겹치는 주만 반환되는지 — 5월 단독 주는 제외
+    _insert(conn, "2026-05-20T01:00:00Z", 9.0, session="m")  # KST 5/20 → 5월 셋째 주(6월과 무관)
+    _insert(conn, "2026-06-03T01:00:00Z", 2.0, session="j")  # KST 6/3 → 6월 첫 주
+    weeks = by_week(conn, "claude", datetime(2026, 6, 15, tzinfo=KST))
+    starts = [w.week_start for w in weeks]
+    assert "2026-05-18" not in starts        # 6월과 안 겹치는 5월 주 제외
+    assert "2026-06-01" in starts
