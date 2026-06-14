@@ -449,3 +449,13 @@ def test_history_hx_request_header_returns_fragment(tmp_path, monkeypatch):
     assert "myproj" in r.text
     assert "<!doctype html>" not in r.text.lower()   # 셸 없음 — 조각만
     assert 'id="provider-filter"' not in r.text       # 필터 셸도 없음
+
+
+def test_history_restore_request_returns_full_page(tmp_path, monkeypatch):
+    # htmx 히스토리 복원 요청은 HX-Request와 함께 HX-History-Restore-Request를 보낸다.
+    # 이때 조각만 주면 복원 시 body가 행 조각으로 덮여 셸이 깨지므로 전체 페이지여야 한다.
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/history", headers={"HX-Request": "true",
+                                        "HX-History-Restore-Request": "true"})
+    assert r.status_code == 200
+    assert 'id="provider-filter"' in r.text   # 셸(필터) 포함 = 전체 페이지
