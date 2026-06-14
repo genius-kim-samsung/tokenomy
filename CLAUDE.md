@@ -19,6 +19,8 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 
 # 테스트
 .venv\Scripts\python -m pytest
+# 프론트엔드 스타일 빌드 — CSS/템플릿 클래스 변경 시에만. 산출 app.css는 커밋(런타임 무빌드).
+.\build_css.ps1
 
 # exe 빌드 — 반드시 .venv로 (아래 게시 참고)
 .venv\Scripts\python -m PyInstaller tokenomy.spec   # → dist\Tokenomy.exe
@@ -60,6 +62,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **dedup은 ccusage와 동형.** `(provider, message_id, request_id)` 키 — 리트라이는 별개 과금으로 보존,
   비sidechain(부모)이 sidechain replay를 이긴다.
 - **웹은 `127.0.0.1`만 바인딩** — 네트워크 노출 금지. 쿼리 파라미터는 화이트리스트 fallback(`provider`/`sort` 등).
+- **CSS는 Tailwind(standalone CLI)로 빌드.** `static/src/input.css`(토큰+`@layer components`) → `static/app.css`(커밋). 런타임/exe는 무빌드 유지. htmx는 `static/vendor/`에 vendored(오프라인). Alpine은 실수요 시 추가(현재 미사용).
 
 ## 환경변수
 
