@@ -17,43 +17,6 @@ _SORT_KEYS = {
 }
 
 
-def dashboard_context(conn, provider: str, sort: str, now_kst: datetime | None = None) -> dict:
-    now = now_kst or datetime.now(KST)
-    config = load_config()
-    budget = budget_from_config(config)
-
-    bd = burndown(conn, budget, now, provider)
-    projects = by_project(conn, provider, now)
-    projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
-    projects = projects[:10]   # AI별 상세도 Top 10 미리보기, 전체는 /projects
-    sessions = by_session(conn, provider, now, limit_n=10)
-    cards = insights(conn, bd, now, provider)
-    daily = daily_series(conn, provider, now)
-
-    # 예산 페이스 라인(한도 ÷ 월일수 × day) — Chart.js 비교선
-    pace = [round(bd.limit / bd.days_in_month * p.day, 4) if bd.limit else 0.0 for p in daily]
-
-    last = conn.execute(
-        "SELECT MAX(ts) t FROM messages WHERE provider=?", (provider,)
-    ).fetchone()
-    has_data = last is not None and last["t"] is not None
-
-    return {
-        "provider": provider, "sort": sort,
-        "active_tab": provider,
-        "user_label": user_label(config),
-        "budget_configured": budget.total > 0,
-        "month": now.strftime("%Y-%m"),
-        "burndown": bd, "projects": projects, "sessions": sessions,
-        "insights": cards,
-        "daily_labels": [p.day for p in daily],
-        "daily_actual": [p.cumulative_cost for p in daily],
-        "daily_pace": pace,
-        "last_ts": last["t"] if has_data else None,
-        "has_data": has_data,
-    }
-
-
 def _provider_has_data(conn, provider: str) -> bool:
     row = conn.execute(
         "SELECT MAX(ts) t FROM messages WHERE provider=?", (provider,)
@@ -90,7 +53,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     has_data = last is not None and last["t"] is not None
 
     return {
-        "active_tab": "overview", "sort": sort,
+        "active_nav": "dashboard", "sort": sort,
         "user_label": user_label(config),
         # combined.limit>0 == budget.total>0 (Budget가 PROVIDERS와 동일) — 통합 바에
         # 직결되도록 combined 기준 사용. dashboard_context는 budget.total>0로 동치.

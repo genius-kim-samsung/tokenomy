@@ -9,7 +9,7 @@ from tokenomy.aggregate import (
 from tokenomy.db import connect
 from tokenomy.budget import Budget
 from tokenomy.web.views import (
-    dashboard_context, history_context, overview_context, projects_context,
+    history_context, overview_context, projects_context,
     sessions_context, session_context,
 )
 
@@ -316,30 +316,6 @@ def test_daily_series_cumulative():
     assert pts[14].cumulative_cost == 10.0     # 이후 변동 없음, 누적 유지
 
 
-def test_dashboard_context_shape(monkeypatch, tmp_path):
-    cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"user_label": "test-user", "budget": {"claude": 223, "codex": 0}}', encoding="utf-8")
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
-    conn = connect(":memory:")
-    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
-    ctx = dashboard_context(conn, provider="claude", sort="cost", now_kst=_NOW_STATUS)
-    assert ctx["provider"] == "claude"
-    assert ctx["user_label"] == "test-user"     # config의 user_label 반영
-    assert ctx["burndown"].limit == 223.0       # config 예산이 반영됨
-    assert ctx["budget_configured"] is True
-    assert ctx["projects"]
-    assert "sessions" in ctx and "insights" in ctx and "daily_labels" in ctx
-    assert ctx["has_data"] is True
-
-
-def test_dashboard_context_empty_db(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    conn = connect(":memory:")
-    ctx = dashboard_context(conn, provider="claude", sort="cost", now_kst=_NOW_STATUS)
-    assert ctx["has_data"] is False             # 빈 DB → 빈 상태 플래그
-    assert ctx["projects"] == []
-
-
 def test_session_context_missing():
     conn = connect(":memory:")
     assert session_context(conn, "nope") is None
@@ -412,7 +388,7 @@ def test_overview_context_shape(monkeypatch, tmp_path):
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0, project="/p")
     _msg(conn, dedup_key="b", provider="codex", ts="2026-06-11T10:00:00Z", cost_usd=4.0, project="/p")
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
-    assert ctx["active_tab"] == "overview"
+    assert ctx["active_nav"] == "dashboard"
     assert ctx["combined"].spent == 14.0           # 10 + 4
     assert ctx["combined"].limit == 150.0
     assert ctx["budget_configured"] is True
@@ -435,13 +411,6 @@ def test_overview_context_provider_without_data(monkeypatch, tmp_path):
     assert by_p["claude"]["has_data"] is True
     assert by_p["codex"]["has_data"] is False       # codex 로그 없음
     assert ctx["budget_configured"] is False         # 예산 미설정 → 사용량만
-
-
-def test_dashboard_context_has_active_tab(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    conn = connect(":memory:")
-    ctx = dashboard_context(conn, provider="codex", sort="cost", now_kst=_NOW_STATUS)
-    assert ctx["active_tab"] == "codex"
 
 
 # ─── period_bounds: 일/주/월 경계 + 라벨 ──────────────────────────────────────
@@ -563,16 +532,6 @@ def test_sessions_context_order_and_filter(monkeypatch, tmp_path):
     ctx2 = sessions_context(conn, "day", _ANCHOR_613, "", "cost", "/a", now_kst=_NOW_613)
     assert [r.session_id for r in ctx2["rows"]] == ["s1"]        # 프로젝트 필터
     assert ctx2["project"] == "/a"
-
-
-def test_dashboard_context_limits_projects_to_10(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    conn = connect(":memory:")
-    for i in range(11):
-        _msg(conn, dedup_key=f"k{i}", session_id=f"s{i}", project=f"/p{i}",
-             ts="2026-06-10T10:00:00Z", cost_usd=float(i + 1))
-    ctx = dashboard_context(conn, provider="claude", sort="cost", now_kst=_NOW_STATUS)
-    assert len(ctx["projects"]) == 10        # AI별 프로젝트 표도 Top 10 미리보기
 
 
 # ─── by_day_session: (날짜 × 세션) 행 + 이어짐/캐시미스 ────────────────────────
