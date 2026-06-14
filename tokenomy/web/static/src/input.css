@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 
 /* 템플릿에서 쓰는 컴포넌트 클래스가 트리셰이킹에 살아남도록 소스 명시 */
 @source "../../templates/**/*.html";
@@ -131,12 +131,12 @@
   .coach .lvl-info::before { content: "• "; color: var(--color-muted); }
 
   /* 테이블 */
-  table.grid { @apply w-full border-collapse; }
-  .grid th, .grid td { @apply text-left px-2 py-1.5 border-b border-line; }
-  .grid th { @apply text-muted font-semibold text-[12px]; }
-  .grid tbody tr { @apply transition-colors; }
-  .grid tbody tr:hover { @apply bg-elev; }
-  .grid td:first-child { @apply tabular-nums; }
+  table.gtable { @apply w-full border-collapse; }
+  .gtable th, .gtable td { @apply text-left px-2 py-1.5 border-b border-line; }
+  .gtable th { @apply text-muted font-semibold text-[12px]; }
+  .gtable tbody tr { @apply transition-colors; }
+  .gtable tbody tr:hover { @apply bg-elev; }
+  .gtable td:first-child { @apply tabular-nums; }
 
   /* AI 카드 */
   .ai-cards { @apply flex gap-3 flex-wrap; }
@@ -169,18 +169,19 @@
   td.cache-miss { @apply text-exceeds font-semibold; }
   td.cache-miss span { @apply cursor-help; }
 
-  /* ── 내역 트리(.grid.tree) ── */
-  .grid.tree th:nth-child(5), .grid.tree th:nth-child(6), .grid.tree th:nth-child(7) { @apply text-right; }
-  .grid.tree td.num { @apply text-right tabular-nums; }
-  .grid.tree tr.grp { @apply cursor-pointer select-none; }
-  .grid.tree tr.grp:hover { @apply bg-elev; }
-  .grid.tree tr.grp-date td.col-date { @apply font-semibold; }
-  .grid.tree tr.grp-folder td.col-folder { @apply pl-5; }
-  .grid.tree td.col-sid { @apply pl-9 font-mono text-[12px]; }
-  .grid.tree .caret { @apply inline-block w-3 text-muted transition-transform; }
-  .grid.tree tr.grp.collapsed .caret { @apply -rotate-90; }
-  .grid.tree tr.grp:not(.collapsed) td.col-preview { @apply hidden; }   /* 펼침이면 프리뷰 숨김 */
-  .grid.tree td.col-sum { @apply max-w-[420px] overflow-hidden text-ellipsis whitespace-nowrap; }
+  /* ── 내역 트리(.gtable.tree) ── */
+  .gtable.tree th:nth-child(5), .gtable.tree th:nth-child(6), .gtable.tree th:nth-child(7) { @apply text-right; }
+  .gtable.tree td.num { @apply text-right tabular-nums; }
+  .gtable.tree tr.grp { @apply cursor-pointer select-none; }
+  .gtable.tree tr.grp:hover { @apply bg-elev; }
+  .gtable.tree tr.grp-date td.col-date { @apply font-semibold; }
+  .gtable.tree tr.grp-folder td.col-folder { @apply pl-5; }
+  .gtable.tree td.col-sid { @apply pl-9 font-mono text-[12px]; }
+  .gtable.tree .caret { @apply inline-block w-3 text-muted transition-transform; }
+  .gtable.tree tr.grp.collapsed .caret { @apply -rotate-90; }
+  .gtable.tree tr.grp:not(.collapsed) td.col-preview { @apply invisible; }   /* 펼침이면 프리뷰 숨김(셀은 유지 → 헤더/숫자 컬럼 정렬 보존) */
+  .gtable.tree td.col-preview { @apply max-w-[420px] overflow-hidden text-ellipsis whitespace-nowrap; }   /* 접힘 프리뷰 폭을 col-sum과 동일 고정 */
+  .gtable.tree td.col-sum { @apply max-w-[420px] overflow-hidden text-ellipsis whitespace-nowrap; }
   .ai-badge { @apply inline-block px-1.5 rounded text-[11px] font-semibold mr-1 align-middle; }
   .ai-claude { @apply bg-elev text-accent; }
   .ai-codex { @apply bg-elev text-body; }
@@ -188,24 +189,24 @@
 }
 
 /* ── 세션 표(.sess) 반응형: 기존 동작 그대로 이식(원시 CSS) ── */
-.grid.sess th { white-space: nowrap; }
-.grid.sess td:nth-child(5) { white-space: nowrap; }
-.grid.sess td.col-time { white-space: nowrap; line-height: 1.4; color: var(--color-muted); }
-.grid.sess td.col-sum  { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.grid.sess td.col-proj { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gtable.sess th { white-space: nowrap; }
+.gtable.sess td:nth-child(5) { white-space: nowrap; }
+.gtable.sess td.col-time { white-space: nowrap; line-height: 1.4; color: var(--color-muted); }
+.gtable.sess td.col-sum  { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gtable.sess td.col-proj { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 900px) {
-  .grid.sess th:nth-child(5), .grid.sess td:nth-child(5):not([colspan]),
-  .grid.sess th:nth-child(7), .grid.sess td:nth-child(7):not([colspan]),
-  .grid.sess th:nth-child(8), .grid.sess td:nth-child(8):not([colspan]) { display: none; }
-  .grid.sess td.col-sum { max-width: 280px; }
+  .gtable.sess th:nth-child(5), .gtable.sess td:nth-child(5):not([colspan]),
+  .gtable.sess th:nth-child(7), .gtable.sess td:nth-child(7):not([colspan]),
+  .gtable.sess th:nth-child(8), .gtable.sess td:nth-child(8):not([colspan]) { display: none; }
+  .gtable.sess td.col-sum { max-width: 280px; }
 }
 @media (max-width: 640px) {
-  .grid.sess th:nth-child(2), .grid.sess td:nth-child(2):not([colspan]) { display: none; }
-  .grid.sess td.col-sum  { max-width: 160px; }
-  .grid.sess td.col-proj { max-width: 150px; }
+  .gtable.sess th:nth-child(2), .gtable.sess td:nth-child(2):not([colspan]) { display: none; }
+  .gtable.sess td.col-sum  { max-width: 160px; }
+  .gtable.sess td.col-proj { max-width: 150px; }
 }
 @media (max-width: 480px) {
-  .grid.sess th:nth-child(1), .grid.sess td:nth-child(1):not([colspan]) { display: none; }
-  .grid.sess td.col-sum  { max-width: 130px; }
-  .grid.sess td.col-proj { max-width: 130px; }
+  .gtable.sess th:nth-child(1), .gtable.sess td:nth-child(1):not([colspan]) { display: none; }
+  .gtable.sess td.col-sum  { max-width: 130px; }
+  .gtable.sess td.col-proj { max-width: 130px; }
 }

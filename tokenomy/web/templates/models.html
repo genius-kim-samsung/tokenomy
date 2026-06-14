@@ -18,7 +18,7 @@
 
   <p class="muted">{{ period_label }} · 모델 {{ count }}개 · 합계 ${{ '%.2f'|format(total) }}</p>
 
-  <table class="grid">
+  <table class="gtable">
     <thead><tr><th>비용</th><th>비중</th><th>세션</th><th>캐시%</th><th>input</th><th>output</th><th>cache_rd</th><th>모델</th></tr></thead>
     <tbody>
       {% for m in rows %}

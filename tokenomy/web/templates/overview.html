@@ -77,7 +77,7 @@
       <a href="/?sort=cache" class="{{ 'on' if sort == 'cache' }}">캐시</a>
     </nav>
   </div>
-  <table class="grid">
+  <table class="gtable">
     <thead><tr><th>비용</th><th>캐시</th><th>세션</th><th>프로젝트</th></tr></thead>
     <tbody>
       {% for p in projects %}
@@ -91,7 +91,7 @@
 
 <section class="card">
   <h2>복기 — 최근 비싼 세션 <span class="muted">(Top 10)</span></h2>
-  <table class="grid sess">
+  <table class="gtable sess">
     <thead><tr><th>기간</th><th>AI</th><th>작업요약</th><th>프로젝트</th><th>라벨</th><th>비용</th><th>메시지</th><th>캐시%</th><th></th></tr></thead>
     <tbody>
       {% for s in sessions %}

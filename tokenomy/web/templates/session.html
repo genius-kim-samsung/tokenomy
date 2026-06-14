@@ -10,7 +10,7 @@
   <p>{{ d.first_ts|kstfmt }} ~ {{ d.last_ts|kstfmt }} · ${{ '%.2f'|format(d.cost) }} · {{ d.msgs }} msg
      {% if d.label %}· {{ d.label }}{% endif %}</p>
   <h2>모델별</h2>
-  <table class="grid">
+  <table class="gtable">
     <thead><tr><th>모델</th><th>비용</th><th>input</th><th>output</th><th>cache_cr</th><th>cache_rd</th></tr></thead>
     <tbody>
       {% for m in d.models %}
