@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, PROVIDERS, DayGroup, DaySessionRow, burndown, by_day_session, by_model,
     by_month, by_project, by_session, by_week, combined_burndown, daily_series,
-    insights, month_bounds, period_bounds, session_detail,
+    insights, month_bounds, session_detail,
 )
 from tokenomy.budget import budget_from_config, load_config, user_label
 

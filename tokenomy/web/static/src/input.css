@@ -40,8 +40,6 @@
 
 /* ── 컴포넌트 (기존 클래스명 보존) ── */
 @layer components {
-  .wrap { @apply max-w-[1100px] mx-auto; }
-
   /* ── 앱 셸: 사이드바 + 콘텐츠 ── */
   .app { @apply flex min-h-screen; }
   .sidebar {
@@ -75,8 +73,6 @@
     .nav-foot { @apply mt-0 ml-auto flex-row items-center gap-3 pt-0; }
   }
 
-  .topbar { @apply flex justify-between items-center gap-3 py-2; }
-  .topbar-right { @apply flex gap-3 items-center; }
   .inline { @apply inline; }
   .muted { @apply text-muted text-[13px]; }
   .disclaimer { @apply text-[12px] text-muted mt-2; }
@@ -132,7 +128,6 @@
   /* 배너 */
   .banner { @apply px-3 py-2 rounded-lg mb-2.5 bg-elev text-fg border border-line; }
   .banner.error { @apply bg-[#f7e3e3] text-exceeds; }
-  .banner.update { @apply bg-[#e4f1e7] text-ok; }
 
   /* 코치 */
   .coach { @apply list-none p-0 m-0; }
@@ -147,12 +142,6 @@
   .grid tbody tr { @apply transition-colors; }
   .grid tbody tr:hover { @apply bg-elev; }
   .grid td:first-child { @apply tabular-nums; }
-
-  /* 탭 */
-  .tabs { @apply flex gap-1 border-b border-line my-1 mb-3.5; }
-  .tabs a { @apply text-muted no-underline px-4 py-2 rounded-t-lg transition-colors; }
-  .tabs a:hover { @apply text-fg; }
-  .tabs a.on { @apply text-white bg-card border border-line -mb-px; border-bottom-color: var(--color-card); }
 
   /* AI 카드 */
   .ai-cards { @apply flex gap-3 flex-wrap; }
