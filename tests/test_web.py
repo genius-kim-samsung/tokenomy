@@ -28,7 +28,7 @@ def test_dashboard_empty_db_ok(tmp_path, monkeypatch):
 
 def test_dashboard_bad_query_falls_back(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/?provider=evil&sort=drop")
+    r = client.get("/?sort=drop")
     assert r.status_code == 200          # 화이트리스트 fallback, 크래시 없음
 
 
@@ -57,9 +57,9 @@ def test_dashboard_renders_sections_with_data(tmp_path, monkeypatch):
         "100, 10, 12.5, 1)"
     )
     conn.commit()
-    r = client.get("/?provider=claude")
+    r = client.get("/")
     assert r.status_code == 200
-    for section in ("번다운", "일별 추세", "효율 코치", "프로젝트별", "복기"):
+    for section in ("통합 번다운", "통합 추세", "통합 효율 코치", "통합 프로젝트별", "복기"):
         assert section in r.text
     assert "공개 API 단가 기준 추정" in r.text   # §5.2 비용 신뢰도 표기
     assert "proj" in r.text                       # 프로젝트별 행
@@ -85,7 +85,7 @@ def test_trend_data_embedded(tmp_path, monkeypatch):
         "VALUES ('a','claude','s1','2026-06-10T10:00:00Z', 7.0, 1)"
     )
     conn.commit()
-    r = client.get("/?provider=claude")
+    r = client.get("/")
     assert "/static/vendor/chart.min.js" in r.text
     assert "trendActual" in r.text          # 임베드된 데이터 변수
 
@@ -174,21 +174,6 @@ def test_root_renders_overview(tmp_path, monkeypatch):
     assert "AI별 현황" in r.text
 
 
-def test_provider_query_renders_detail(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/?provider=claude")
-    assert r.status_code == 200
-    assert "번다운" in r.text
-    assert "AI별 현황" not in r.text          # detail은 통합 화면 아님
-
-
-def test_bad_provider_falls_back_to_overview(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/?provider=evil")
-    assert r.status_code == 200
-    assert "통합 번다운" in r.text             # 화이트리스트 밖 → overview
-
-
 def test_overview_aggregates_providers(tmp_path, monkeypatch):
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
@@ -207,16 +192,7 @@ def test_overview_aggregates_providers(tmp_path, monkeypatch):
                     "통합 프로젝트별", "복기"):
         assert section in r.text
     assert "proj" in r.text
-    assert 'class="tabs"' in r.text
     assert 'class="ai-cards"' in r.text
-
-
-def test_overview_tabs_active_state(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/")
-    assert 'href="/"' in r.text
-    assert 'href="/?provider=claude"' in r.text
-    assert 'href="/?provider=codex"' in r.text
 
 
 def test_projects_page_ok(tmp_path, monkeypatch):
@@ -302,13 +278,6 @@ def test_overview_has_full_view_links(tmp_path, monkeypatch):
     assert 'href="/projects' in r.text
     assert 'href="/sessions' in r.text
     assert "전체 보기" in r.text
-
-
-def test_dashboard_has_full_view_links(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/?provider=claude")
-    assert "/projects?provider=claude" in r.text
-    assert "/sessions?provider=claude" in r.text
 
 
 def test_full_pages_show_data_freshness(tmp_path, monkeypatch):
@@ -402,12 +371,6 @@ def test_overview_has_history_link(tmp_path, monkeypatch):
     r = client.get("/")
     assert 'href="/history' in r.text
     assert "내역 보기" in r.text
-
-
-def test_dashboard_has_history_link(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/?provider=claude")
-    assert "/history?provider=claude" in r.text
 
 
 def test_history_renders_signal_classes(tmp_path, monkeypatch):

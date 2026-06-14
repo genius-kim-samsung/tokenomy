@@ -16,7 +16,7 @@ from tokenomy.db import connect
 from tokenomy.paths import resource_path
 from tokenomy.update import check_update
 from tokenomy.web.views import (
-    dashboard_context, history_context, overview_context, projects_context, sessions_context,
+    history_context, overview_context, projects_context, sessions_context,
     session_context,
 )
 
@@ -52,19 +52,13 @@ def _parse_anchor(value: str | None) -> datetime:
 
 
 @app.get("/")
-def dashboard(request: Request, provider: str | None = None, sort: str = "cost",
-              notice: str | None = None):
+def dashboard(request: Request, sort: str = "cost", notice: str | None = None):
     sort = sort if sort in _SORTS else "cost"
     conn = connect()
     update_tag = check_update(conn)
-    if provider in PROVIDERS:
-        ctx = dashboard_context(conn, provider, sort)
-        template = "dashboard.html"
-    else:
-        ctx = overview_context(conn, sort)
-        template = "overview.html"
+    ctx = overview_context(conn, sort)
     return templates.TemplateResponse(
-        request, template,
+        request, "overview.html",
         {**ctx, "notice": notice, "update_tag": update_tag},
     )
 
