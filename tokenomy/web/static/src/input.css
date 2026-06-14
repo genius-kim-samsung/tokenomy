@@ -45,7 +45,7 @@
 
   .btn {
     @apply inline-flex items-center gap-1 bg-primary text-white border-0 rounded-md
-           px-3 py-1.5 cursor-pointer transition-colors;
+           px-3 py-1.5 cursor-pointer transition;
   }
   .btn:hover { @apply brightness-110; }
 
@@ -110,7 +110,7 @@
     @apply flex-1 min-w-[200px] block bg-elev border border-line rounded-lg p-3
            no-underline text-fg transition-colors;
   }
-  .ai-card:hover { @apply border-[#3d444d]; text-decoration: none; }
+  .ai-card:hover { @apply border-[#3d444d]; }
   .ai-name { @apply font-semibold mb-1.5; }
   .ai-num { @apply text-[16px] my-1 tabular-nums; }
   .ai-card .bar { @apply block w-full h-3 my-1.5; }
