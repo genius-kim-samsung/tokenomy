@@ -417,6 +417,52 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
 
 
 @dataclass
+class ModelUsageRow:
+    model: str | None
+    cost: float
+    sessions: int
+    input_tokens: int
+    output_tokens: int
+    cache_creation: int
+    cache_read: int
+    cache_ratio: float
+
+
+def by_model(conn, provider: str | None, start: datetime, nxt: datetime) -> list[ModelUsageRow]:
+    """기간 [start, nxt) 내 모델 단위 합계. 비용 내림차순."""
+    sql = ("SELECT ts, model, cost_usd, session_id, input_tokens, output_tokens, "
+           "cache_creation, cache_read FROM messages")
+    if provider is None:
+        rows = conn.execute(sql).fetchall()
+    else:
+        rows = conn.execute(sql + " WHERE provider=?", (provider,)).fetchall()
+    agg: dict = {}
+    for r in rows:
+        dt = parse_ts(r["ts"])
+        if not (dt and start <= dt < nxt):
+            continue
+        key = r["model"]
+        a = agg.setdefault(key, {"cost": 0.0, "sessions": set(), "it": 0, "ot": 0, "cc": 0, "cr": 0})
+        a["cost"] += r["cost_usd"] or 0
+        a["sessions"].add(r["session_id"])
+        a["it"] += r["input_tokens"] or 0
+        a["ot"] += r["output_tokens"] or 0
+        a["cc"] += r["cache_creation"] or 0
+        a["cr"] += r["cache_read"] or 0
+    out = [
+        ModelUsageRow(
+            model=k, cost=round(a["cost"], 4), sessions=len(a["sessions"]),
+            input_tokens=a["it"], output_tokens=a["ot"],
+            cache_creation=a["cc"], cache_read=a["cr"],
+            cache_ratio=round(a["cr"] / (a["it"] + a["cc"] + a["cr"]), 4) if (a["it"] + a["cc"] + a["cr"]) else 0.0,
+        )
+        for k, a in agg.items()
+    ]
+    out.sort(key=lambda x: x.cost, reverse=True)
+    return out
+
+
+@dataclass
 class ModelRow:
     model: str | None
     cost: float

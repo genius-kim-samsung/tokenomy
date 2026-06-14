@@ -3,13 +3,13 @@ from datetime import datetime
 import pytest
 
 from tokenomy.aggregate import (
-    KST, burndown, by_day_session, by_month, by_project, by_session, by_week,
+    KST, burndown, by_day_session, by_model, by_month, by_project, by_session, by_week,
     combined_burndown, daily_series, insights, month_bounds, parse_ts, period_bounds,
     session_detail,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
-from tokenomy.web.views import history_context, overview_context, session_context
+from tokenomy.web.views import history_context, models_context, overview_context, session_context
 
 # June 2026 has 30 days
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
@@ -791,3 +791,56 @@ def test_by_month_filters_year():
     _insert(conn, "2026-06-10T01:00:00Z", 6.0, session="y26")
     months = by_month(conn, "claude", 2026)
     assert [m.label for m in months] == ["2026-06"]
+
+
+# ─── by_model ────────────────────────────────────────────────────────────────
+
+
+def test_by_model_aggregates_and_sorts():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", model="claude-opus-4-8",
+         ts="2026-06-10T10:00:00Z", cost_usd=20.0, input_tokens=100, output_tokens=30,
+         cache_creation=5, cache_read=40)
+    _msg(conn, dedup_key="b", session_id="s2", model="claude-haiku-4-5",
+         ts="2026-06-11T10:00:00Z", cost_usd=4.0, input_tokens=10, output_tokens=2)
+    _msg(conn, dedup_key="c", session_id="s1", model="claude-opus-4-8",
+         ts="2026-06-12T10:00:00Z", cost_usd=10.0, input_tokens=50, cache_read=10)
+    start, nxt = month_bounds(datetime(2026, 6, 15, tzinfo=KST))
+    rows = by_model(conn, "claude", start, nxt)
+    # 비용순: opus(30) 먼저, haiku(4)
+    assert rows[0].model == "claude-opus-4-8"
+    assert rows[0].cost == 30.0
+    assert rows[0].sessions == 1          # s1 한 세션
+    assert rows[0].cache_read == 50       # 40 + 10
+    assert rows[1].model == "claude-haiku-4-5"
+
+
+def test_by_model_excludes_other_months_and_providers():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", model="m1", provider="claude", ts="2026-05-30T10:00:00Z", cost_usd=9.0)
+    _msg(conn, dedup_key="b", model="m1", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=3.0)
+    _msg(conn, dedup_key="c", model="g", provider="codex", ts="2026-06-10T10:00:00Z", cost_usd=5.0)
+    start, nxt = month_bounds(datetime(2026, 6, 15, tzinfo=KST))
+    rows = by_model(conn, "claude", start, nxt)
+    assert len(rows) == 1
+    assert rows[0].cost == 3.0            # 5월·codex 제외
+
+
+# ─── models_context ──────────────────────────────────────────────────────────
+
+
+def test_models_context_shape(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", model="claude-opus-4-8",
+         ts="2026-06-10T10:00:00Z", cost_usd=8.0)
+    _msg(conn, dedup_key="b", session_id="s2", model="claude-haiku-4-5",
+         ts="2026-06-10T10:00:00Z", cost_usd=2.0)
+    ctx = models_context(conn, _ANCHOR_613, "", now_kst=_NOW_613)
+    assert ctx["active_nav"] == "models"
+    assert ctx["total"] == 10.0
+    assert ctx["period_label"] == "2026-06"
+    # 비중%: opus 80%, 행에 share 포함
+    top = ctx["rows"][0]
+    assert top["model"] == "claude-opus-4-8"
+    assert top["share"] == 80.0
