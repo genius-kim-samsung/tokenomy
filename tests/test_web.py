@@ -377,6 +377,18 @@ def test_history_has_collapse_ui(tmp_path, monkeypatch):
     assert "/static/tree.js" in r.text          # 접기 스크립트 로드
 
 
+def test_history_folder_key_is_index_not_path(tmp_path, monkeypatch):
+    # data-folder 키는 폴더 경로(역슬래시/콜론 위험)가 아니라 'YYYY-MM-DD::<정수>' 형식이어야 한다.
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',3.0,1)")
+    conn.commit()
+    r = client.get("/history?anchor=2026-06-10")
+    assert 'data-folder="2026-06-10::1"' in r.text          # 폴더 키 = 'YYYY-MM-DD::<정수>'
+    assert 'data-folder="2026-06-10::myproj"' not in r.text  # 폴더명/경로가 키에 들어가지 않음
+
+
 def test_models_page_renders_rows(tmp_path, monkeypatch):
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
