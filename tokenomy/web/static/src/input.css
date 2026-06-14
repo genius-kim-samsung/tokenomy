@@ -40,7 +40,40 @@
 
 /* ── 컴포넌트 (기존 클래스명 보존) ── */
 @layer components {
-  .wrap { @apply max-w-[920px] mx-auto px-4 py-5; }
+  .wrap { @apply max-w-[1100px] mx-auto; }
+
+  /* ── 앱 셸: 사이드바 + 콘텐츠 ── */
+  .app { @apply flex min-h-screen; }
+  .sidebar {
+    @apply w-[220px] shrink-0 flex flex-col gap-1 px-4 py-5
+           bg-card border-r border-line;
+  }
+  .content { @apply flex-1 min-w-0 px-6 py-5 max-w-[1100px]; }
+
+  .brand { @apply flex items-center gap-2 no-underline text-fg mb-4; }
+  .brand-mark { @apply text-[20px]; }
+  .brand-name { @apply text-[18px] font-semibold tracking-tight; }
+
+  .nav { @apply flex flex-col gap-0.5; }
+  .nav-item {
+    @apply block no-underline text-body rounded-md px-3 py-2 transition-colors
+           border-l-2 border-transparent;
+  }
+  .nav-item:hover { @apply text-fg bg-elev; }
+  .nav-item.on { @apply text-fg font-semibold bg-elev; border-left-color: var(--color-primary); }
+
+  .nav-foot { @apply mt-auto flex flex-col gap-2 pt-4 text-[13px]; }
+  .update-link { @apply text-ok no-underline; }
+
+  /* 모바일: 사이드바를 상단 가로 바로 */
+  @media (max-width: 720px) {
+    .app { @apply flex-col; }
+    .sidebar { @apply w-full flex-row flex-wrap items-center border-r-0 border-b border-line py-3; }
+    .brand { @apply mb-0 mr-2; }
+    .nav { @apply flex-row gap-1; }
+    .nav-item { @apply border-l-0 border-b-2 py-1; }
+    .nav-foot { @apply mt-0 ml-auto flex-row items-center gap-3 pt-0; }
+  }
 
   .topbar { @apply flex justify-between items-center gap-3 py-2; }
   .topbar-right { @apply flex gap-3 items-center; }

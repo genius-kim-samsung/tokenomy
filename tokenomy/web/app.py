@@ -8,6 +8,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from tokenomy import __version__
 from tokenomy.aggregate import KST, PROVIDERS, parse_ts
 from tokenomy.budget import budget_from_config, load_config, save_config
 from tokenomy.cli import cmd_ingest
@@ -21,6 +22,7 @@ from tokenomy.web.views import (
 
 _BASE = resource_path("tokenomy/web")
 templates = Jinja2Templates(directory=str(_BASE / "templates"))
+templates.env.globals["app_version"] = __version__
 
 
 def _kstfmt(ts):
