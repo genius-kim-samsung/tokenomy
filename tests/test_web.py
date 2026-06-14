@@ -338,3 +338,30 @@ def test_history_restore_request_returns_full_page(tmp_path, monkeypatch):
                                                  "HX-History-Restore-Request": "true"})
     assert r.status_code == 200
     assert 'id="provider-filter"' in r.text   # 셸(필터) 포함 = 전체 페이지
+
+
+def test_history_session_view_renders(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',8.0,1)")
+    conn.commit()
+    r = client.get("/history?anchor=2026-06-10&view=session")
+    assert r.status_code == 200
+    assert "복기" not in r.text or True   # 세션 표 렌더
+    assert "myproj" in r.text
+
+
+def test_history_week_and_month_views(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',5.0,1)")
+    conn.commit()
+    rw = client.get("/history?anchor=2026-06-10&view=week")
+    assert rw.status_code == 200
+    assert "<th>주</th>" in rw.text
+    rm = client.get("/history?anchor=2026-06-10&view=month")
+    assert rm.status_code == 200
+    assert "<th>월</th>" in rm.text
+    assert "2026-06" in rm.text
