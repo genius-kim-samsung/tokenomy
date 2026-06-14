@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+/* 템플릿에서 쓰는 컴포넌트 클래스가 트리셰이킹에 살아남도록 소스 명시 */
+@source "../../templates/**/*.html";
+
+/* ── 디자인 토큰 (기존 시맨틱 팔레트 이식) ──
+   @theme 변수는 Tailwind 유틸리티를 생성한다: --color-card → bg-card/text-card/border-card */
+@theme {
+  --color-bg:      #0f1115;
+  --color-card:    #1a1d24;
+  --color-elev:    #0d1117;  /* 인셋 바·ai-card 배경 */
+  --color-fg:      #e6e8eb;
+  --color-muted:   #9aa0a6;
+  --color-line:    #2d333b;
+  --color-ok:      #3fb950;
+  --color-warn:    #d29922;
+  --color-exceeds: #f85149;
+  --color-accent:  #58a6ff;  /* 링크 */
+  --color-primary: #238636;  /* 버튼 */
+}
