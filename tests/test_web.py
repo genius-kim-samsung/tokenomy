@@ -198,81 +198,18 @@ def test_overview_aggregates_providers(tmp_path, monkeypatch):
     assert 'class="ai-cards"' in r.text
 
 
-def test_projects_page_ok(tmp_path, monkeypatch):
+def test_projects_redirects_to_history_folder(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/projects")
-    assert r.status_code == 200
-    assert "전체 프로젝트별 비용" in r.text
+    r = client.get("/projects", follow_redirects=False)
+    assert r.status_code == 301
+    assert r.headers["location"] == "/history?view=folder"
 
 
-def test_projects_bad_period_falls_back(tmp_path, monkeypatch):
+def test_sessions_redirects_to_history_session(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/projects?period=evil&provider=evil&sort=drop")
-    assert r.status_code == 200          # 화이트리스트 폴백, 크래시 없음
-
-
-def test_projects_page_renders_rows_and_drilldown(tmp_path, monkeypatch):
-    client, conn_factory = _client(tmp_path, monkeypatch)
-    conn = conn_factory()
-    conn.execute(
-        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
-        "VALUES ('a','claude','s1','myproj','2026-06-10T10:00:00Z',12.5,1)"
-    )
-    conn.commit()
-    r = client.get("/projects?anchor=2026-06-10&period=month")
-    assert r.status_code == 200
-    assert "myproj" in r.text
-    assert "/sessions?project=" in r.text      # 드릴다운 링크
-    assert "합계 $12.50" in r.text             # 요약 헤더
-
-
-def test_sessions_page_ok(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/sessions")
-    assert r.status_code == 200
-    assert "복기" in r.text
-    assert "최신순" in r.text                 # 정렬 토글
-
-
-def test_sessions_bad_params_fall_back(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/sessions?period=evil&provider=evil&order=drop")
-    assert r.status_code == 200
-
-
-def test_sessions_page_renders_rows_and_filter(tmp_path, monkeypatch):
-    client, conn_factory = _client(tmp_path, monkeypatch)
-    conn = conn_factory()
-    conn.execute(
-        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
-        "VALUES ('a','claude','s1','myproj','2026-06-10T10:00:00Z',8.0,1)"
-    )
-    conn.commit()
-    r = client.get("/sessions?anchor=2026-06-10&period=month&project=myproj")
-    assert r.status_code == 200
-    assert "myproj" in r.text
-    assert "프로젝트 필터: myproj" in r.text   # 필터 표시 + 해제 링크
-    assert "합계 $8.00" in r.text
-
-
-def test_sessions_drilldown_slash_project_roundtrips(tmp_path, monkeypatch):
-    # 슬래시를 포함하는 프로젝트 경로가 쿼리로 왕복되어 그 프로젝트만 필터되는지 검증
-    # (드릴다운 링크는 /sessions?project=/proj/sub 형태 — 슬래시는 query에서 합법)
-    client, conn_factory = _client(tmp_path, monkeypatch)
-    conn = conn_factory()
-    conn.execute(
-        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
-        "VALUES ('a','claude','s1','/proj/sub','2026-06-10T10:00:00Z',3.0,1)"
-    )
-    conn.execute(
-        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
-        "VALUES ('b','claude','s2','/other','2026-06-10T11:00:00Z',5.0,1)"
-    )
-    conn.commit()
-    r = client.get("/sessions?anchor=2026-06-10&period=month&project=/proj/sub")
-    assert r.status_code == 200
-    assert "합계 $3.00" in r.text          # /proj/sub 의 s1만 (5.0짜리 /other 제외)
-    assert "프로젝트 필터: /proj/sub" in r.text
+    r = client.get("/sessions", follow_redirects=False)
+    assert r.status_code == 301
+    assert r.headers["location"] == "/history?view=session"
 
 
 def test_overview_links_into_history(tmp_path, monkeypatch):
@@ -282,28 +219,12 @@ def test_overview_links_into_history(tmp_path, monkeypatch):
     assert 'href="/history?view=session"' in r.text
 
 
-def test_full_pages_show_data_freshness(tmp_path, monkeypatch):
-    # 전체 페이지 상단바도 overview/대시보드처럼 "데이터 최신" 표기(last_ts 공급)
-    client, conn_factory = _client(tmp_path, monkeypatch)
-    conn = conn_factory()
-    conn.execute(
-        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
-        "VALUES ('a','claude','s1','myproj','2026-06-10T10:00:00Z',1.0,1)"
-    )
-    conn.commit()
-    for path in ("/projects?anchor=2026-06-10&period=month",
-                 "/sessions?anchor=2026-06-10&period=month"):
-        r = client.get(path)
-        assert "데이터 최신" in r.text
-
-
 def test_history_page_ok(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/history")
     assert r.status_code == 200
     assert "내역" in r.text
-    assert 'id="provider-filter"' in r.text       # AI 드롭다운
-    assert 'id="sort-filter"' in r.text           # 정렬 드롭다운
+    assert "세션별" in r.text and "폴더별" in r.text and "월별" in r.text
 
 
 def test_history_bad_params_fall_back(tmp_path, monkeypatch):
@@ -320,7 +241,7 @@ def test_history_renders_grouped_rows(tmp_path, monkeypatch):
         "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',3.0,1)"
     )
     conn.commit()
-    r = client.get("/history?anchor=2026-06-10&sort=date_desc")
+    r = client.get("/history?anchor=2026-06-10&sort=date_desc&view=day")
     assert r.status_code == 200
     assert "myproj" in r.text
     assert "합계 $3.00" in r.text                   # 일별 소계 또는 기간 합계
@@ -334,7 +255,7 @@ def test_history_partial_returns_fragment_only(tmp_path, monkeypatch):
         "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',3.0,1)"
     )
     conn.commit()
-    r = client.get("/history?anchor=2026-06-10&sort=date_desc&partial=1")
+    r = client.get("/history?anchor=2026-06-10&sort=date_desc&view=day&partial=1")
     assert r.status_code == 200
     assert "myproj" in r.text
     assert "<!doctype html>" not in r.text.lower()  # 전체 페이지 chrome 없음
@@ -349,7 +270,7 @@ def test_history_shows_data_freshness(tmp_path, monkeypatch):
         "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',1.0,1)"
     )
     conn.commit()
-    r = client.get("/history?anchor=2026-06-10")
+    r = client.get("/history?anchor=2026-06-10&view=day")
     assert "데이터 최신" in r.text
 
 
@@ -362,9 +283,9 @@ def test_history_flat_mode_has_date_column_grouped_does_not(tmp_path, monkeypatc
         "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',3.0,1)"
     )
     conn.commit()
-    flat = client.get("/history?anchor=2026-06-10&sort=cost")
+    flat = client.get("/history?anchor=2026-06-10&sort=cost&view=day")
     assert "<th>날짜</th>" in flat.text            # 평면 모드 → 날짜 칸 부활
-    grouped = client.get("/history?anchor=2026-06-10&sort=date_desc")
+    grouped = client.get("/history?anchor=2026-06-10&sort=date_desc&view=day")
     assert "<th>날짜</th>" not in grouped.text      # 그룹 모드 → 날짜 칸 없음(헤더로 대체)
 
 
@@ -379,7 +300,7 @@ def test_history_renders_signal_classes(tmp_path, monkeypatch):
                  "input_tokens,cache_read,cost_usd,priced) VALUES "
                  "('b','claude','s1','myproj','2026-06-10T01:00:00Z',90,10,1.0,1)")
     conn.commit()
-    r = client.get("/history?anchor=2026-06-10&sort=date_desc")
+    r = client.get("/history?anchor=2026-06-10&sort=date_desc&view=day")
     assert "day-head" in r.text          # 날짜 그룹 헤더
     assert "cache-miss" in r.text        # 캐시미스 셀 클래스
     assert "↩" in r.text                 # 이어짐 표시
@@ -387,7 +308,7 @@ def test_history_renders_signal_classes(tmp_path, monkeypatch):
 
 def test_history_filters_use_htmx_not_handrolled_js(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/history")
+    r = client.get("/history?view=day")
     assert r.status_code == 200
     assert 'hx-get="/history"' in r.text      # htmx 선언적 속성
     assert "fetch('/history" not in r.text    # 손짜기 AJAX 제거됨
@@ -402,7 +323,7 @@ def test_history_hx_request_header_returns_fragment(tmp_path, monkeypatch):
         "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',3.0,1)"
     )
     conn.commit()
-    r = client.get("/history?anchor=2026-06-10", headers={"HX-Request": "true"})
+    r = client.get("/history?anchor=2026-06-10&view=day", headers={"HX-Request": "true"})
     assert r.status_code == 200
     assert "myproj" in r.text
     assert "<!doctype html>" not in r.text.lower()   # 셸 없음 — 조각만
@@ -413,7 +334,7 @@ def test_history_restore_request_returns_full_page(tmp_path, monkeypatch):
     # htmx 히스토리 복원 요청은 HX-Request와 함께 HX-History-Restore-Request를 보낸다.
     # 이때 조각만 주면 복원 시 body가 행 조각으로 덮여 셸이 깨지므로 전체 페이지여야 한다.
     client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/history", headers={"HX-Request": "true",
-                                        "HX-History-Restore-Request": "true"})
+    r = client.get("/history?view=day", headers={"HX-Request": "true",
+                                                 "HX-History-Restore-Request": "true"})
     assert r.status_code == 200
     assert 'id="provider-filter"' in r.text   # 셸(필터) 포함 = 전체 페이지

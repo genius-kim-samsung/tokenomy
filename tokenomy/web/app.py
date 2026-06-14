@@ -16,8 +16,7 @@ from tokenomy.db import connect
 from tokenomy.paths import resource_path
 from tokenomy.update import check_update
 from tokenomy.web.views import (
-    history_context, overview_context, projects_context, sessions_context,
-    session_context,
+    history_context, overview_context, session_context,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -36,9 +35,16 @@ app = FastAPI(title="Tokenomy")
 app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static")
 
 _SORTS = ("cost", "sessions", "cache")
-_PERIODS = ("day", "week", "month")
-_ORDERS = ("cost", "recent")
-_HISTORY_SORTS = ("date_desc", "date_asc", "day_cost", "cost", "cache")
+_HISTORY_VIEWS = ("session", "folder", "day", "week", "month")
+_VIEW_SORTS = {
+    "session": ("cost", "recent"),
+    "folder": ("cost", "sessions", "cache"),
+    "day": ("date_desc", "date_asc", "day_cost", "cost", "cache"),
+    "week": ("recent", "oldest", "cost"),
+    "month": ("recent", "oldest", "cost"),
+}
+_VIEW_DEFAULT_SORT = {"session": "cost", "folder": "cost", "day": "date_desc",
+                      "week": "recent", "month": "recent"}
 
 
 def _parse_anchor(value: str | None) -> datetime:
@@ -75,42 +81,23 @@ def session_view(request: Request, session_id: str):
 
 
 @app.get("/projects")
-def projects_view(request: Request, period: str = "month", anchor: str | None = None,
-                  provider: str = "", sort: str = "cost", notice: str | None = None):
-    period = period if period in _PERIODS else "month"
-    provider = provider if provider in PROVIDERS else ""
-    sort = sort if sort in _SORTS else "cost"
-    conn = connect()
-    update_tag = check_update(conn)
-    ctx = projects_context(conn, period, _parse_anchor(anchor), provider, sort)
-    return templates.TemplateResponse(
-        request, "projects.html",
-        {**ctx, "notice": notice, "update_tag": update_tag},
-    )
+def projects_redirect():
+    return RedirectResponse("/history?view=folder", status_code=301)
 
 
 @app.get("/sessions")
-def sessions_view(request: Request, period: str = "month", anchor: str | None = None,
-                  provider: str = "", order: str = "cost",
-                  project: str | None = None, notice: str | None = None):
-    period = period if period in _PERIODS else "month"
-    provider = provider if provider in PROVIDERS else ""
-    order = order if order in _ORDERS else "cost"
-    conn = connect()
-    update_tag = check_update(conn)
-    ctx = sessions_context(conn, period, _parse_anchor(anchor), provider, order, project or "")
-    return templates.TemplateResponse(
-        request, "sessions.html",
-        {**ctx, "notice": notice, "update_tag": update_tag},
-    )
+def sessions_redirect():
+    return RedirectResponse("/history?view=session", status_code=301)
 
 
 @app.get("/history")
-def history_view(request: Request, anchor: str | None = None, provider: str = "",
-                 sort: str = "date_desc", partial: str | None = None,
-                 notice: str | None = None):
+def history_view(request: Request, view: str = "session", anchor: str | None = None,
+                 provider: str = "", sort: str | None = None, project: str | None = None,
+                 partial: str | None = None, notice: str | None = None):
+    view = view if view in _HISTORY_VIEWS else "session"
     provider = provider if provider in PROVIDERS else ""
-    sort = sort if sort in _HISTORY_SORTS else "date_desc"
+    allowed = _VIEW_SORTS[view]
+    sort = sort if sort in allowed else _VIEW_DEFAULT_SORT[view]
     conn = connect()
     # htmx 요청(HX-Request) 또는 명시적 partial=1 → 셸 없이 조각만 렌더.
     # 단 htmx 히스토리 복원 요청(HX-History-Restore-Request)은 페이지 셸 전체가 필요 →
@@ -119,7 +106,7 @@ def history_view(request: Request, anchor: str | None = None, provider: str = ""
                   and request.headers.get("HX-History-Restore-Request") != "true")
     is_partial = partial == "1" or hx_partial
     update_tag = None if is_partial else check_update(conn)  # 부분갱신은 셸 미렌더 → 조회 불필요
-    ctx = history_context(conn, _parse_anchor(anchor), provider, sort)
+    ctx = history_context(conn, view, _parse_anchor(anchor), provider, sort, project or "")
     template = "_history_rows.html" if is_partial else "history.html"
     return templates.TemplateResponse(
         request, template,
