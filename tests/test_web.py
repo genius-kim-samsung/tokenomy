@@ -38,6 +38,18 @@ def test_session_404(tmp_path, monkeypatch):
     assert r.status_code == 404
 
 
+def test_session_detail_renders(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','myproj','2026-06-10T10:00:00Z','claude-opus-4-8',5.0,1)")
+    conn.commit()
+    r = client.get("/session/s1")
+    assert r.status_code == 200
+    assert "세션 상세" in r.text
+    assert 'class="sidebar"' in r.text
+
+
 def test_ingest_redirects(tmp_path, monkeypatch):
     client, conn_factory = _client(tmp_path, monkeypatch)
     # cmd_ingest가 실제 홈 디렉터리를 안 긁도록 no-op로 교체
@@ -103,6 +115,8 @@ def test_settings_get_renders_form(tmp_path, monkeypatch):
     assert "예산" in r.text
     assert 'name="claude"' in r.text
     assert 'name="codex"' in r.text
+    assert 'class="sidebar"' in r.text
+    assert "대화 원문은 저장하지 않습니다" in r.text
 
 
 def test_settings_post_writes_config(tmp_path, monkeypatch):

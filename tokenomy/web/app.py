@@ -75,7 +75,7 @@ def session_view(request: Request, session_id: str):
     ctx = session_context(conn, session_id)
     if ctx is None:
         return templates.TemplateResponse(
-            request, "session.html", {"detail": None}, status_code=404
+            request, "session.html", {"detail": None, "active_nav": "history"}, status_code=404
         )
     return templates.TemplateResponse(request, "session.html", ctx)
 
@@ -141,9 +141,13 @@ def do_ingest():
 def settings_get(request: Request):
     config = load_config()
     budget = budget_from_config(config)
+    conn = connect()
+    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     return templates.TemplateResponse(
         request, "settings.html",
-        {"claude": budget.claude, "codex": budget.codex},
+        {"claude": budget.claude, "codex": budget.codex,
+         "active_nav": "settings", "update_tag": check_update(conn),
+         "last_ts": last["t"] if last and last["t"] else None},
     )
 
 

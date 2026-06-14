@@ -1,9 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-<header class="topbar">
-  <div>🪙 Tokenomy · 설정</div>
-  <div class="topbar-right"><a class="btn" href="/">← 대시보드</a></div>
-</header>
+<h1 class="page-title">설정</h1>
 
 <section class="card">
   <h2>월 예산</h2>
@@ -14,5 +11,11 @@
     <button class="btn" type="submit">저장</button>
   </form>
   <p class="disclaimer">ⓘ 값은 로컬 config(tokenomy.config.json)에만 저장됩니다.</p>
+</section>
+
+<section class="card">
+  <h2>데이터 · 프라이버시</h2>
+  <p class="muted">모든 처리는 로컬에서 이뤄지며 <strong>대화 원문은 저장하지 않습니다</strong>(토큰 사용 메타만).
+    데이터는 소스 실행 시 repo의 <code>data/</code>, exe 실행 시 <code>~/.tokenomy/</code>에 쌓입니다.</p>
 </section>
 {% endblock %}
