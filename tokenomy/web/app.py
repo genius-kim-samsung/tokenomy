@@ -35,16 +35,7 @@ app = FastAPI(title="Tokenomy")
 app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static")
 
 _SORTS = ("cost", "sessions", "cache")
-_HISTORY_VIEWS = ("session", "folder", "day", "week", "month")
-_VIEW_SORTS = {
-    "session": ("cost", "recent"),
-    "folder": ("cost", "sessions", "cache"),
-    "day": ("date_desc", "date_asc", "day_cost", "cost", "cache"),
-    "week": ("recent", "oldest", "cost"),
-    "month": ("recent", "oldest", "cost"),
-}
-_VIEW_DEFAULT_SORT = {"session": "cost", "folder": "cost", "day": "date_desc",
-                      "week": "recent", "month": "recent"}
+_HISTORY_SORTS = ("date_desc", "date_asc", "day_cost")
 
 
 def _parse_anchor(value: str | None) -> datetime:
@@ -82,37 +73,29 @@ def session_view(request: Request, session_id: str):
 
 @app.get("/projects")
 def projects_redirect():
-    return RedirectResponse("/history?view=folder", status_code=301)
+    return RedirectResponse("/history", status_code=301)
 
 
 @app.get("/sessions")
 def sessions_redirect():
-    return RedirectResponse("/history?view=session", status_code=301)
+    return RedirectResponse("/history", status_code=301)
 
 
 @app.get("/history")
-def history_view(request: Request, view: str = "session", anchor: str | None = None,
-                 provider: str = "", sort: str | None = None, project: str | None = None,
-                 partial: str | None = None, notice: str | None = None):
-    view = view if view in _HISTORY_VIEWS else "session"
+def history_view(request: Request, anchor: str | None = None, provider: str = "",
+                 sort: str | None = None, partial: str | None = None, notice: str | None = None):
     provider = provider if provider in PROVIDERS else ""
-    allowed = _VIEW_SORTS[view]
-    sort = sort if sort in allowed else _VIEW_DEFAULT_SORT[view]
+    sort = sort if sort in _HISTORY_SORTS else "date_desc"
     conn = connect()
-    # htmx 요청(HX-Request) 또는 명시적 partial=1 → 셸 없이 조각만 렌더.
-    # 단 htmx 히스토리 복원 요청(HX-History-Restore-Request)은 페이지 셸 전체가 필요 →
-    # 조각을 주면 복원 시 body가 행 조각으로 덮여 깨진다. 이 경우는 전체 페이지로.
+    # htmx 요청(HX-Request)/명시적 partial=1 → 셸 없이 조각만. 단 히스토리 복원 요청은 전체 페이지.
     hx_partial = (request.headers.get("HX-Request") == "true"
                   and request.headers.get("HX-History-Restore-Request") != "true")
     is_partial = partial == "1" or hx_partial
-    update_tag = None if is_partial else check_update(conn)  # 부분갱신은 셸 미렌더 → 조회 불필요
-    ctx = history_context(conn, view, _parse_anchor(anchor), provider, sort, project or "")
-    # 부분갱신은 인터랙티브 영역 전체(_history_body: 보기 탭·기간 네비·필터·표)를 #history-body로
-    # swap한다 — 필터 변경 후에도 탭·기간 링크가 항상 최신 provider/sort를 반영하도록.
+    update_tag = None if is_partial else check_update(conn)
+    ctx = history_context(conn, _parse_anchor(anchor), provider, sort)
     template = "_history_body.html" if is_partial else "history.html"
     return templates.TemplateResponse(
-        request, template,
-        {**ctx, "notice": notice, "update_tag": update_tag},
+        request, template, {**ctx, "notice": notice, "update_tag": update_tag},
     )
 
 

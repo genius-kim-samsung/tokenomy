@@ -617,125 +617,54 @@ def _seed_history(conn):
          cost_usd=1.0, input_tokens=90, cache_read=10)   # s1 첫 등장은 6/12
 
 
-def test_history_context_grouped_default(monkeypatch, tmp_path):
+def test_history_context_tree_default(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
     conn = connect(":memory:")
-    _seed_history(conn)
-    ctx = history_context(conn, "day", _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
-    assert ctx["view"] == "day"
+    _seed_history(conn)   # 6/13: s1($2),s2($9) 같은 폴더 'proj' / 6/12: s1($1)
+    ctx = history_context(conn, _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
     assert ctx["active_nav"] == "history"
-    assert ctx["is_grouped"] is True
-    assert ctx["count"] == 3                      # (6/13,s1),(6/13,s2),(6/12,s1)
-    assert ctx["total"] == 12.0
-    # 날짜 최신순: 6/13 그룹이 먼저
-    assert [g.date for g in ctx["groups"]] == ["2026-06-13", "2026-06-12"]
-    # 6/13 소계 = 2 + 9 = 11
-    assert ctx["groups"][0].subtotal == 11.0
-    # 그룹 내부는 비용 내림차순: s2($9) 먼저
-    assert [r.session_id for r in ctx["groups"][0].rows] == ["s2", "s1"]
-    assert ctx["groups"][0].weekday == "토"        # 2026-06-13 = 토
+    assert ctx["count"] == 3 and ctx["total"] == 12.0
+    assert [d.date for d in ctx["tree"]] == ["2026-06-13", "2026-06-12"]
+    d13 = ctx["tree"][0]
+    assert d13.cost == 11.0
+    assert d13.folders[0].project == "proj"
+    assert [s.session_id for s in d13.folders[0].rows] == ["s2", "s1"]   # 비용 내림차순
 
 
-def test_history_context_date_asc(monkeypatch, tmp_path):
+def test_history_context_sort_date_asc(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
     conn = connect(":memory:")
     _seed_history(conn)
-    ctx = history_context(conn, "day", _ANCHOR_613, "", "date_asc", now_kst=_NOW_613)
-    assert [g.date for g in ctx["groups"]] == ["2026-06-12", "2026-06-13"]
+    ctx = history_context(conn, _ANCHOR_613, "", "date_asc", now_kst=_NOW_613)
+    assert [d.date for d in ctx["tree"]] == ["2026-06-12", "2026-06-13"]
 
 
-def test_history_context_day_cost_sorts_groups_by_subtotal(monkeypatch, tmp_path):
+def test_history_context_sort_day_cost(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
     conn = connect(":memory:")
     _seed_history(conn)
-    ctx = history_context(conn, "day", _ANCHOR_613, "", "day_cost", now_kst=_NOW_613)
-    # 6/13 소계 11 > 6/12 소계 1
-    assert [g.date for g in ctx["groups"]] == ["2026-06-13", "2026-06-12"]
-
-
-def test_history_context_flat_cost(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    conn = connect(":memory:")
-    _seed_history(conn)
-    ctx = history_context(conn, "day", _ANCHOR_613, "", "cost", now_kst=_NOW_613)
-    assert ctx["is_grouped"] is False
-    assert ctx["groups"] == []
-    # 평면 비용 내림차순: s2($9, 6/13), s1($2, 6/13), s1($1, 6/12)
-    assert [(r.date, r.cost) for r in ctx["flat_rows"]] == [
-        ("2026-06-13", 9.0), ("2026-06-13", 2.0), ("2026-06-12", 1.0),
-    ]
-
-
-def test_history_context_flat_cache(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    conn = connect(":memory:")
-    _seed_history(conn)
-    ctx = history_context(conn, "day", _ANCHOR_613, "", "cache", now_kst=_NOW_613)
-    assert ctx["is_grouped"] is False
-    # 캐시율 오름차순(낮은 것 먼저): 6/12 s1(0.1)이 맨 위
-    assert ctx["flat_rows"][0].cache_ratio == 0.1
+    ctx = history_context(conn, _ANCHOR_613, "", "day_cost", now_kst=_NOW_613)
+    assert [d.date for d in ctx["tree"]] == ["2026-06-13", "2026-06-12"]   # 소계 11 > 1
 
 
 def test_history_context_nav_and_provider(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
     conn = connect(":memory:")
     _seed_history(conn)
-    ctx = history_context(conn, "day", _ANCHOR_613, "claude", "date_desc", now_kst=_NOW_613)
+    ctx = history_context(conn, _ANCHOR_613, "claude", "date_desc", now_kst=_NOW_613)
     assert ctx["provider"] == "claude"
     assert ctx["period_label"] == "2026-06"
     assert ctx["anchor"] == "2026-06-13"
-    assert ctx["prev_anchor"] == "2026-05-31"     # 6/1 - 1일
+    assert ctx["prev_anchor"] == "2026-05-31"
     assert ctx["next_anchor"] == "2026-07-01"
-    assert ctx["has_next"] is False               # _NOW_613이 6월 → 다음 없음
+    assert ctx["has_next"] is False
 
 
 def test_history_context_empty(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    ctx = history_context(connect(":memory:"), "day", _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
-    assert ctx["count"] == 0 and ctx["total"] == 0.0 and ctx["groups"] == []
+    ctx = history_context(connect(":memory:"), _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
+    assert ctx["count"] == 0 and ctx["total"] == 0.0 and ctx["tree"] == []
     assert ctx["last_ts"] is None
-
-
-def test_history_context_session_view(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    conn = connect(":memory:")
-    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-10T10:00:00Z", cost_usd=2.0)
-    _msg(conn, dedup_key="b", session_id="s2", ts="2026-06-11T10:00:00Z", cost_usd=9.0)
-    ctx = history_context(conn, "session", _ANCHOR_613, "", "cost", now_kst=_NOW_613)
-    assert ctx["view"] == "session"
-    assert [r.session_id for r in ctx["rows"]] == ["s2", "s1"]
-    assert ctx["total"] == 11.0
-
-
-def test_history_context_folder_view(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    conn = connect(":memory:")
-    _msg(conn, dedup_key="a", session_id="s1", project="/p", ts="2026-06-10T10:00:00Z", cost_usd=4.0)
-    ctx = history_context(conn, "folder", _ANCHOR_613, "", "cost", now_kst=_NOW_613)
-    assert ctx["view"] == "folder"
-    assert ctx["rows"][0].project == "/p"
-    assert ctx["total"] == 4.0
-
-
-def test_history_context_week_view(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    conn = connect(":memory:")
-    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-09T10:00:00Z", cost_usd=3.0)
-    ctx = history_context(conn, "week", _ANCHOR_613, "", "recent", now_kst=_NOW_613)
-    assert ctx["view"] == "week"
-    assert ctx["total"] == 3.0
-    assert ctx["period_label"] == "2026-06"
-
-
-def test_history_context_month_view(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
-    conn = connect(":memory:")
-    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-10T10:00:00Z", cost_usd=6.0)
-    ctx = history_context(conn, "month", _ANCHOR_613, "", "recent", now_kst=_NOW_613)
-    assert ctx["view"] == "month"
-    assert ctx["period_label"] == "2026"
-    assert ctx["rows"][0].label == "2026-06"
-    assert ctx["has_next"] is False           # 2026이 올해 → 다음 연도 없음
 
 
 # ─── by_week / by_month ───────────────────────────────────────────────────────
