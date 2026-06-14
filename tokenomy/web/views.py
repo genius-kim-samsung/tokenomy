@@ -106,9 +106,6 @@ def _history_nav_month(anchor_kst: datetime, now_kst: datetime) -> dict:
     }
 
 
-_HISTORY_DAY_SORTS = ("date_desc", "date_asc", "day_cost", "cost", "cache")
-
-
 def history_context(conn, view: str, anchor_kst: datetime, provider: str,
                     sort: str, project: str = "", now_kst: datetime | None = None) -> dict:
     """내역 — view ∈ {session, folder, day, week, month} 디스패치.

@@ -348,7 +348,6 @@ def test_history_session_view_renders(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/history?anchor=2026-06-10&view=session")
     assert r.status_code == 200
-    assert "복기" not in r.text or True   # 세션 표 렌더
     assert "myproj" in r.text
 
 

@@ -3,8 +3,9 @@ from datetime import datetime
 import pytest
 
 from tokenomy.aggregate import (
-    KST, burndown, by_day_session, by_project, by_session, combined_burndown,
-    daily_series, insights, month_bounds, parse_ts, period_bounds, session_detail,
+    KST, burndown, by_day_session, by_month, by_project, by_session, by_week,
+    combined_burndown, daily_series, insights, month_bounds, parse_ts, period_bounds,
+    session_detail,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
@@ -729,8 +730,6 @@ def test_history_context_month_view(monkeypatch, tmp_path):
 
 # ─── by_week / by_month ───────────────────────────────────────────────────────
 
-from tokenomy.aggregate import by_week, by_month  # noqa: E402  (파일 상단 import에 합쳐도 됨)
-
 
 def test_by_week_covers_weeks_overlapping_month():
     conn = connect(":memory:")
@@ -758,6 +757,17 @@ def test_by_week_full_week_even_when_partial_in_month():
     starts = [w.week_start for w in weeks]
     assert "2026-05-18" not in starts        # 6월과 안 겹치는 5월 주 제외
     assert "2026-06-01" in starts
+
+
+def test_by_week_partial_leading_week_july_anchor():
+    conn = connect(":memory:")
+    # 2026-07 첫 주는 6/29(월)~7/5. 6/30 KST 지출이 그 주(week_start 2026-06-29)에 집계돼야 한다.
+    _insert(conn, "2026-06-30T01:00:00Z", 7.0, session="p")   # KST 6/30 10:00 → 6/29 주
+    _insert(conn, "2026-07-08T01:00:00Z", 2.0, session="q")   # KST 7/8 → 7/6 주
+    weeks = by_week(conn, "claude", datetime(2026, 7, 15, tzinfo=KST))
+    wk = {w.week_start: w for w in weeks}
+    assert "2026-06-29" in wk
+    assert wk["2026-06-29"].cost == 7.0
 
 
 def test_by_month_only_months_with_data():
