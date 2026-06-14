@@ -16,7 +16,7 @@ from tokenomy.db import connect
 from tokenomy.paths import resource_path
 from tokenomy.update import check_update
 from tokenomy.web.views import (
-    history_context, overview_context, session_context,
+    history_context, models_context, overview_context, session_context,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -110,6 +110,19 @@ def history_view(request: Request, view: str = "session", anchor: str | None = N
     template = "_history_rows.html" if is_partial else "history.html"
     return templates.TemplateResponse(
         request, template,
+        {**ctx, "notice": notice, "update_tag": update_tag},
+    )
+
+
+@app.get("/models")
+def models_view(request: Request, anchor: str | None = None, provider: str = "",
+                notice: str | None = None):
+    provider = provider if provider in PROVIDERS else ""
+    conn = connect()
+    update_tag = check_update(conn)
+    ctx = models_context(conn, _parse_anchor(anchor), provider)
+    return templates.TemplateResponse(
+        request, "models.html",
         {**ctx, "notice": notice, "update_tag": update_tag},
     )
 

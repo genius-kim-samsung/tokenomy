@@ -4,9 +4,9 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
-    KST, PROVIDERS, DayGroup, DaySessionRow, burndown, by_day_session, by_month,
-    by_project, by_session, by_week, combined_burndown, daily_series, insights,
-    month_bounds, period_bounds, session_detail,
+    KST, PROVIDERS, DayGroup, DaySessionRow, burndown, by_day_session, by_model,
+    by_month, by_project, by_session, by_week, combined_burndown, daily_series,
+    insights, month_bounds, period_bounds, session_detail,
 )
 from tokenomy.budget import budget_from_config, load_config, user_label
 
@@ -74,6 +74,36 @@ def session_context(conn, session_id: str) -> dict | None:
     if detail is None:
         return None
     return {"detail": detail}
+
+
+def models_context(conn, anchor_kst: datetime, provider: str,
+                   now_kst: datetime | None = None) -> dict:
+    """모델별 사용/비용. 월 범위(앵커 기준). 행에 비중%(share) 부여."""
+    now = now_kst or datetime.now(KST)
+    config = load_config()
+    start, nxt = month_bounds(anchor_kst)
+    rows = by_model(conn, provider or None, start, nxt)
+    total = round(sum(m.cost for m in rows), 4)
+    table = [
+        {"model": m.model or "(unknown)", "cost": m.cost,
+         "share": round(m.cost / total * 100, 1) if total else 0.0,
+         "sessions": m.sessions, "cache_ratio": m.cache_ratio,
+         "input_tokens": m.input_tokens, "output_tokens": m.output_tokens,
+         "cache_creation": m.cache_creation, "cache_read": m.cache_read}
+        for m in rows
+    ]
+    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    return {
+        "active_nav": "models", "user_label": user_label(config),
+        "provider": provider, "rows": table, "count": len(table), "total": total,
+        "period_label": start.strftime("%Y-%m"),
+        "anchor": anchor_kst.strftime("%Y-%m-%d"),
+        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "next_anchor": nxt.strftime("%Y-%m-%d"),
+        "has_next": nxt <= now,
+        "month": now.strftime("%Y-%m"),
+        "last_ts": last["t"] if last and last["t"] else None,
+    }
 
 
 _GROUPED_SORTS = ("date_desc", "date_asc", "day_cost")
