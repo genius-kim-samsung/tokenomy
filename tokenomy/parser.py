@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # version 필드는 "x.y.z..."(semver) 형태여야 정상 로그로 본다. 그 외(손상/미지원 스키마)는 폐기.
@@ -38,6 +39,7 @@ class UsageRecord:
     git_branch: str | None = None
     summary: str | None = None  # 세션 식별용 첫 프롬프트 발췌(Codex). Claude는 None(aiTitle 별도 경로).
     user_turns: int | None = None  # 세션 내 사용자 턴 수(Codex는 parse_rollout이 채움; Claude는 count_user_turns).
+    user_turns_by_day: dict | None = None  # {KST날짜: 턴수}. Codex는 parse_rollout이 채움.
 
     @property
     def total_tokens(self) -> int:
@@ -144,6 +146,26 @@ def parse_file(
     return records, end_offset
 
 
+_KST = timezone(timedelta(hours=9))
+
+
+def kst_day(ts: str | None) -> str | None:
+    """ISO 타임스탬프(UTC 가정)를 KST 날짜 문자열 'YYYY-MM-DD'로 변환.
+
+    aggregate.parse_ts(ts).date().isoformat()와 동일 규칙 — 두 경로의 날짜 키가
+    어긋나면 by_day_session 버킷과 session_day_turns가 안 맞으므로 반드시 동기화 유지.
+    """
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_KST).date().isoformat()
+
+
 # 사용자 턴 판별에서 제외할 문자열 content 래퍼(슬래시 명령/로컬 명령 출력 등).
 _NON_TURN_PREFIXES = (
     "<command-name>",
@@ -177,13 +199,14 @@ def _is_user_turn(obj: dict) -> bool:
     return False
 
 
-def count_user_turns(path: str) -> dict[str, int]:
-    """세션 파일 전체를 풀스캔해 {session_id: 사용자 턴 수}를 반환한다.
+def count_user_turns_by_day(path: str) -> dict[str, dict[str, int]]:
+    """세션 파일 전체를 풀스캔해 {session_id: {KST날짜: 사용자 턴 수}}를 반환한다.
 
     byte-offset 증분이 아닌 전체 스캔(parse_titles와 동일 이유 — 매번 정확한 총량).
     'user' 바이트가 없는 라인은 사용자 턴일 수 없어 건너뛴다(json.loads 회피).
+    ts가 없는 턴은 '' 키로 묶는다(세션 총량엔 포함, 날짜 트리엔 미반영).
     """
-    counts: dict[str, int] = {}
+    out: dict[str, dict[str, int]] = {}
     with open(path, "rb") as f:
         for raw in f:
             if b'"user"' not in raw:
@@ -195,8 +218,15 @@ def count_user_turns(path: str) -> dict[str, int]:
             if not isinstance(obj, dict) or not _is_user_turn(obj):
                 continue
             sid = obj.get("sessionId") or Path(path).stem
-            counts[sid] = counts.get(sid, 0) + 1
-    return counts
+            day = kst_day(obj.get("timestamp")) or ""
+            days = out.setdefault(sid, {})
+            days[day] = days.get(day, 0) + 1
+    return out
+
+
+def count_user_turns(path: str) -> dict[str, int]:
+    """{session_id: 사용자 턴 총수}. count_user_turns_by_day의 날짜별 합."""
+    return {sid: sum(days.values()) for sid, days in count_user_turns_by_day(path).items()}
 
 
 def parse_titles(path: str) -> dict[str, str]:

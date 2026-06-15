@@ -312,3 +312,31 @@ def test_ingest_user_turns_updates_sessions(tmp_path):
     ingest_user_turns(conn, tmp_path)
     row = conn.execute("SELECT user_turns FROM sessions WHERE session_id='sess-1'").fetchone()
     assert row["user_turns"] == 2
+
+
+def test_codex_record_persists_day_turns():
+    conn = connect(":memory:")
+    rec = _rec("cd", provider="codex", session_id="cd-1")
+    rec.user_turns = 3
+    rec.user_turns_by_day = {"2026-06-11": 2, "2026-06-12": 1}
+    ingest_records(conn, [rec], PRICING)
+    rows = dict(conn.execute(
+        "SELECT day, turns FROM session_day_turns WHERE session_id='cd-1'"
+    ).fetchall())
+    assert rows == {"2026-06-11": 2, "2026-06-12": 1}
+
+
+def test_ingest_user_turns_writes_day_turns(tmp_path):
+    conn = connect(":memory:")
+    ingest_records(conn, [_rec("m1", session_id="sess-1")], PRICING)
+    f = tmp_path / "sess.jsonl"
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": "a"}, "sessionId": "sess-1", "timestamp": "2026-06-11T01:00:00Z"},
+        {"type": "user", "message": {"role": "user", "content": "b"}, "sessionId": "sess-1", "timestamp": "2026-06-11T16:00:00Z"},
+    ]
+    f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    ingest_user_turns(conn, tmp_path)
+    total = conn.execute("SELECT user_turns FROM sessions WHERE session_id='sess-1'").fetchone()["user_turns"]
+    assert total == 2
+    rows = dict(conn.execute("SELECT day, turns FROM session_day_turns WHERE session_id='sess-1'").fetchall())
+    assert rows == {"2026-06-11": 1, "2026-06-12": 1}

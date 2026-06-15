@@ -148,3 +148,19 @@ def test_parse_rollout_counts_user_turns(tmp_path):
     rec = parse_rollout(str(f))
     assert rec is not None
     assert rec.user_turns == 2
+
+
+def test_parse_rollout_user_turns_by_day(tmp_path):
+    f = tmp_path / "rollout-byday.jsonl"
+    lines = [
+        {"type": "session_meta", "payload": {"id": "s-bd", "cwd": "/p", "timestamp": "2026-06-11T01:00:00Z"}},
+        {"type": "event_msg", "timestamp": "2026-06-11T01:00:00Z", "payload": {"type": "user_message", "message": "q1"}},
+        {"type": "event_msg", "timestamp": "2026-06-11T16:00:00Z", "payload": {"type": "user_message", "message": "q2"}},
+        {"type": "event_msg", "timestamp": "2026-06-11T17:00:00Z", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10}}}},
+    ]
+    f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    rec = parse_rollout(str(f))
+    assert rec is not None
+    assert rec.user_turns == 2
+    assert rec.user_turns_by_day == {"2026-06-11": 1, "2026-06-12": 1}

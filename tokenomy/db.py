@@ -56,6 +56,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     user_turns INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS session_day_turns (
+    session_id TEXT,
+    day TEXT,
+    turns INTEGER,
+    PRIMARY KEY (session_id, day)
+);
+
 CREATE TABLE IF NOT EXISTS users (
     user_id TEXT PRIMARY KEY,
     tier TEXT,
@@ -154,6 +161,18 @@ _REPLACE_WHEN = """
 """
 
 
+def _write_day_turns(conn: sqlite3.Connection, session_id: str, by_day: dict) -> None:
+    """{KST날짜: 턴수}를 session_day_turns에 UPSERT(덮어쓰기). 날짜 미상('') 키는 스킵."""
+    for day, turns in by_day.items():
+        if not day:
+            continue
+        conn.execute(
+            """INSERT INTO session_day_turns (session_id, day, turns) VALUES (?,?,?)
+               ON CONFLICT(session_id, day) DO UPDATE SET turns = excluded.turns""",
+            (session_id, day, turns),
+        )
+
+
 def ingest_records(conn: sqlite3.Connection, records: list[UsageRecord], pricing: dict) -> int:
     """records를 적재(dedup). 적재 시도한 레코드 수 반환."""
     for r in records:
@@ -196,6 +215,8 @@ def ingest_records(conn: sqlite3.Connection, records: list[UsageRecord], pricing
                    user_turns = COALESCE(excluded.user_turns, sessions.user_turns)""",
             (r.session_id, r.cwd, r.provider, r.ts, r.ts, r.summary, r.user_turns),
         )
+        if r.user_turns_by_day:
+            _write_day_turns(conn, r.session_id, r.user_turns_by_day)
     conn.commit()
     return len(records)
 
@@ -246,19 +267,21 @@ def ingest_titles(conn: sqlite3.Connection, root) -> int:
 
 
 def ingest_user_turns(conn: sqlite3.Connection, root) -> int:
-    """root 아래 Claude 세션 파일의 사용자 턴 수를 sessions.user_turns로 반영. 갱신 수 반환.
+    """root 아래 Claude 세션 파일의 사용자 턴 수를 sessions.user_turns + session_day_turns에 반영. 갱신 세션 수 반환.
 
     ingest_root로 세션 행이 먼저 생성된 뒤 호출한다(UPDATE 대상이 있어야 반영됨).
     parse_titles와 마찬가지로 전체 파일을 풀스캔한다(증분 오프셋 미사용 — 매번 정확한 총량).
     """
-    from tokenomy.parser import count_user_turns
+    from tokenomy.parser import count_user_turns_by_day
 
     n = 0
     for f in discover_session_files(root):
-        for sid, turns in count_user_turns(str(f)).items():
+        for sid, by_day in count_user_turns_by_day(str(f)).items():
             conn.execute(
-                "UPDATE sessions SET user_turns=? WHERE session_id=?", (turns, sid)
+                "UPDATE sessions SET user_turns=? WHERE session_id=?",
+                (sum(by_day.values()), sid),
             )
+            _write_day_turns(conn, sid, by_day)
             n += 1
     conn.commit()
     return n

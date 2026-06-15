@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tokenomy.parser import UsageRecord
+from tokenomy.parser import UsageRecord, kst_day
 
 CODEX_ROOT = Path.home() / ".codex" / "sessions"
 
@@ -89,7 +89,7 @@ def parse_rollout(path: str) -> UsageRecord | None:
     """rollout 파일 1개 → 세션 총량 UsageRecord. token_count 없으면 None."""
     session_id = cwd = ts = model = None
     last_total: dict | None = None
-    turns = 0
+    turns_by_day: dict[str, int] = {}
 
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -103,7 +103,8 @@ def parse_rollout(path: str) -> UsageRecord | None:
             if not isinstance(o, dict):
                 continue
             if _is_codex_user_msg(o):
-                turns += 1
+                day = kst_day(o.get("timestamp")) or ""
+                turns_by_day[day] = turns_by_day.get(day, 0) + 1
 
             t = o.get("type")
             payload = o.get("payload")
@@ -143,7 +144,8 @@ def parse_rollout(path: str) -> UsageRecord | None:
         cache_read=cached,
         message_id=session_id,  # 세션당 1레코드 → dedup_key = session_id
         summary=_extract_first_prompt(path),
-        user_turns=turns,
+        user_turns=sum(turns_by_day.values()),
+        user_turns_by_day=turns_by_day,
     )
 
 

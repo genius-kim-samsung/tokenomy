@@ -438,10 +438,13 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
             first_day[r["session_id"]] = dt.date().isoformat()
 
     meta = {
-        r["session_id"]: (r["label"], r["summary"], r["provider"], r["user_turns"])
-        for r in conn.execute(
-            "SELECT session_id, label, summary, provider, user_turns FROM sessions"
-        ).fetchall()
+        r["session_id"]: (r["label"], r["summary"], r["provider"])
+        for r in conn.execute("SELECT session_id, label, summary, provider FROM sessions").fetchall()
+    }
+
+    day_turns = {
+        (r["session_id"], r["day"]): r["turns"]
+        for r in conn.execute("SELECT session_id, day, turns FROM session_day_turns").fetchall()
     }
 
     agg: dict = {}
@@ -464,12 +467,12 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
         cache_ratio = (a["cr"] / a["den"]) if a["den"] else 0.0
         is_continued = first_day.get(sid, date) < date
         cache_miss = is_continued and cache_ratio < INSIGHT_CACHE_READ_MIN
-        label, summary, sprov, uturns = meta.get(sid, (None, None, None, None))
-        # msgs = 세션 전체 사용자 턴 수. 멀티데이 세션은 날짜별로 같은 총량이 반복 표시될 수 있음(드묾, 허용).
+        label, summary, sprov = meta.get(sid, (None, None, None))
+        # msgs = 그 날짜의 사용자 턴 수(session_day_turns). 멀티데이 세션도 날짜별 정확 카운트.
         out.append(DaySessionRow(
             date=date, session_id=sid, provider=sprov,
             summary=summary, project=a["project"], label=label,
-            cost=round(a["cost"], 4), msgs=(uturns or 0),
+            cost=round(a["cost"], 4), msgs=day_turns.get((sid, date), 0),
             cache_ratio=round(cache_ratio, 4),
             cache_read=a["cr"], cache_den=a["den"],
             is_continued=is_continued, cache_miss=cache_miss,

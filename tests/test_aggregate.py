@@ -1140,15 +1140,33 @@ def test_session_detail_null_user_turns_falls_back_to_zero():
 
 def test_by_day_session_msgs_uses_user_turns():
     conn = connect(":memory:")
-    # 한 세션에 메시지 행 3개, 사용자 턴은 2 → by_day_session이 행 수(3)가 아닌 user_turns(2)를 반환해야 함
+    # 한 세션에 메시지 행 3개, 사용자 턴은 2 → by_day_session이 행 수(3)가 아닌 session_day_turns(2)를 반환해야 함
     ingest_records(
         conn,
         [_claude_rec("a"), _claude_rec("b"), _claude_rec("c")],
         _PRICING,
     )
-    conn.execute("UPDATE sessions SET user_turns=2 WHERE session_id='s1'")
+    # _claude_rec ts는 "2026-06-11T10:00:00Z" (KST 6/11 19:00) → KST 날짜 2026-06-11
+    conn.execute("INSERT INTO session_day_turns (session_id, day, turns) VALUES ('s1','2026-06-11',2)")
     conn.commit()
-    # _claude_rec ts는 "2026-06-11T10:00:00Z" (KST 6/11 19:00) → _JUN(6/1~7/1) 범위 안
+    # _JUN(6/1~7/1) 범위 안
     rows = by_day_session(conn, None, start=_JUN[0], nxt=_JUN[1])
     assert len(rows) == 1
-    assert rows[0].msgs == 2   # 행 수(3)가 아니라 사용자 턴(2)
+    assert rows[0].msgs == 2   # 행 수(3)가 아니라 session_day_turns(2)
+
+
+def test_by_day_session_per_day_counts():
+    from datetime import datetime
+    conn = connect(":memory:")
+    # 같은 세션이 두 KST 날짜에 걸침: 01:00Z→06-11, 16:00Z→06-12
+    r1 = UsageRecord(provider="claude", session_id="s1", cwd="/p", ts="2026-06-11T01:00:00Z",
+                     model="claude-opus-4-8", input_tokens=1000, output_tokens=0,
+                     cache_creation=0, cache_read=0, message_id="a")
+    r2 = UsageRecord(provider="claude", session_id="s1", cwd="/p", ts="2026-06-11T16:00:00Z",
+                     model="claude-opus-4-8", input_tokens=1000, output_tokens=0,
+                     cache_creation=0, cache_read=0, message_id="b")
+    ingest_records(conn, [r1, r2], _PRICING)
+    conn.execute("INSERT INTO session_day_turns (session_id, day, turns) VALUES ('s1','2026-06-11',2),('s1','2026-06-12',1)")
+    rows = by_day_session(conn, None, start=datetime(2026, 6, 1, tzinfo=KST), nxt=datetime(2026, 7, 1, tzinfo=KST))
+    by_date = {r.date: r.msgs for r in rows}
+    assert by_date == {"2026-06-11": 2, "2026-06-12": 1}   # 날짜별 정확 카운트(행 수 아님)

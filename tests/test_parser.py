@@ -302,3 +302,26 @@ def test_count_user_turns_multiple_sessions(tmp_path):
     ]
     f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
     assert count_user_turns(str(f)) == {"s1": 2, "s2": 1}
+
+
+def test_kst_day_matches_parse_ts():
+    from tokenomy.aggregate import parse_ts
+    from tokenomy.parser import kst_day
+    for ts in ["2026-06-11T10:00:00Z", "2026-06-11T15:30:00Z", "2026-06-11T14:59:00+00:00"]:
+        assert kst_day(ts) == parse_ts(ts).date().isoformat()
+    assert kst_day(None) is None
+    assert kst_day("garbage") is None
+
+
+def test_count_user_turns_by_day_buckets_by_kst_date(tmp_path):
+    from tokenomy.parser import count_user_turns_by_day
+    # 01:00Z = KST 10:00 on 06-11; 02:00Z = KST 11:00 on 06-11; 16:00Z = KST 01:00 on 06-12
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": "a"}, "sessionId": "s1", "timestamp": "2026-06-11T01:00:00Z"},
+        {"type": "user", "message": {"role": "user", "content": "b"}, "sessionId": "s1", "timestamp": "2026-06-11T02:00:00Z"},
+        {"type": "user", "message": {"role": "user", "content": "c"}, "sessionId": "s1", "timestamp": "2026-06-11T16:00:00Z"},
+    ]
+    f = tmp_path / "sess.jsonl"
+    f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    result = count_user_turns_by_day(str(f))
+    assert result == {"s1": {"2026-06-11": 2, "2026-06-12": 1}}
