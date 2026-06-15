@@ -2,22 +2,56 @@
 <script src="/static/vendor/chart.min.js"></script>
 <script>
   const trendLabels = {{ daily_labels|tojson }};
-  const trendActual = {{ trend_totals|tojson }};
+  const trendSeries = {{ trend_series|tojson }};   // [{label,color,fill,top,cum}] 아래→위
+  const trendTotals = {{ trend_totals|tojson }};    // 그날 합계(=맨 위 밴드 top)
   const trendPace   = {{ daily_pace|tojson }};
   const trendBudget = {{ daily_budget|tojson }};
-  const trendSeries = {{ trend_series|tojson }};
+
+  // provider 밴드: top을 데이터로, fill 상대참조로 아래 밴드까지 채움
+  const areaSets = trendSeries.map((s, i) => ({
+    label: s.label,
+    data: s.top,
+    cum: s.cum,                          // 툴팁용 raw 누적(병렬 배열)
+    borderColor: s.color,
+    backgroundColor: s.fill,
+    fill: i === 0 ? 'origin' : '-1',
+    tension: .2,
+    pointRadius: 0,
+  }));
+
   new Chart(document.getElementById('trend'), {
     type: 'line',
     data: { labels: trendLabels, datasets: [
-      ...trendSeries.map(s => ({
-        label: s.label + ' 누적', data: s.cum,
-        borderColor: s.color, backgroundColor: s.fill, tension: .2, fill: false,
-      })),
-      { label: '예산 페이스', data: trendPace, borderColor: '#a09d96', borderDash: [5,4], pointRadius: 0 },
-      { label: '월 예산', data: trendBudget, borderColor: '#d4a017', borderDash: [2,2], pointRadius: 0 },
+      ...areaSets,
+      { label: '예산 페이스', data: trendPace, borderColor: '#a09d96', borderDash: [5,4], pointRadius: 0, fill: false },
+      { label: '월 예산', data: trendBudget, borderColor: '#d4a017', borderDash: [2,2], pointRadius: 0, fill: false },
     ]},
-    options: { plugins:{ legend:{ labels:{ color:'#faf9f5' } } },
-      scales:{ x:{ ticks:{ color:'#a09d96' } }, y:{ ticks:{ color:'#a09d96' } } } }
+    options: {
+      plugins: {
+        legend: { labels: { color: '#faf9f5' } },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const ds = ctx.dataset;
+              if (ds.cum) {                              // provider 밴드 → 금액 + % 점유율
+                const v = ds.cum[ctx.dataIndex];
+                if (v == null) return null;
+                const total = trendTotals[ctx.dataIndex] || 0;
+                const pct = total ? Math.round(v / total * 100) : 0;
+                return `${ds.label}  $${v.toFixed(2)} (${pct}%)`;
+              }
+              const y = ctx.parsed.y;                    // 기준선(페이스/예산)
+              return y == null ? null : `${ds.label}  $${y.toFixed(2)}`;
+            },
+            footer: (items) => {
+              const t = trendTotals[items[0].dataIndex];
+              return t == null ? '' : `합계  $${t.toFixed(2)}`;
+            },
+          },
+        },
+      },
+      scales: { x: { ticks: { color: '#a09d96' } }, y: { ticks: { color: '#a09d96' } } }
+    }
   });
 </script>
 {% endif %}
