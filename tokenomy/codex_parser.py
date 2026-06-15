@@ -14,6 +14,7 @@ Codex는 Claude와 구조가 다르다:
   cache_read  = cached_input_tokens
   output      = output_tokens (reasoning_output_tokens 포함)
   cache_write = 0  (Codex는 캐시 쓰기 구분 없음)
+캐시 효율과 별개로, 첫 사용자 프롬프트를 120자 발췌해 summary(작업요약)로 싣는다.
 """
 from __future__ import annotations
 

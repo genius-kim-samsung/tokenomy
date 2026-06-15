@@ -3,7 +3,7 @@
 AI 코딩 토큰 지출용 로컬 "가계부". Claude Code / Codex CLI의 **로컬** 세션 로그(JSONL)를
 파싱해 예산 대비 번다운(Claude 월간·Codex 주간 누적)·프로젝트/세션별 비용·캐시 효율을
 보여준다. 단발(single-shot) 데스크톱 앱(exe) 또는 소스로 실행. 전 과정 로컬,
-**대화 원문은 저장하지 않는다(토큰 메타만)**.
+**대화 원문은 저장하지 않는다(토큰 메타 + 세션 식별용 첫 프롬프트 발췌만)**.
 
 ## 명령어
 
@@ -54,8 +54,9 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 
 - **exe는 반드시 `.venv`로 빌드.** 시스템 Python으로 빌드하면 pywebview가 번들에서 빠져
   네이티브 창 대신 브라우저로 fallback한다. (PyInstaller는 런타임 의존성이 아니라 CI는 별도 설치.)
-- **프라이버시 경계 — 깨지 말 것.** 파서는 토큰 usage 메타만 추출한다. content/프롬프트/대화 원문을
-  DB·archive에 절대 넣지 않는다.
+- **프라이버시 경계 — 발췌선을 지킬 것.** 파서는 토큰 usage 메타를 추출하고, Codex는
+  세션 식별용으로 **첫 사용자 프롬프트만 120자 발췌**해 `sessions.summary`에 저장한다.
+  그 외 content/프롬프트/대화 본문 전체는 DB에 절대 넣지 않는다.
 - **데이터 위치가 실행 형태로 갈림**(`paths.data_dir()`): 소스 실행 → **repo 루트**(`data/`, `config/`),
   exe → `~/.tokenomy/`. `TOKENOMY_DATA`로 전체 override.
 - **증분 파싱은 byte-offset 기반**(`scan_offsets`). 파일은 append되므로 mtime이 아닌 offset으로

@@ -119,7 +119,7 @@ def test_settings_get_renders_form(tmp_path, monkeypatch):
     assert 'name="claude"' in r.text
     assert 'name="codex"' in r.text
     assert 'class="sidebar"' in r.text
-    assert "대화 원문은 저장하지 않습니다" in r.text
+    assert "전체 대화 기록은 저장하지 않습니다" in r.text
 
 
 def test_settings_post_writes_config(tmp_path, monkeypatch):

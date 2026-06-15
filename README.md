@@ -15,8 +15,9 @@ still track usage — costs show as *public-list-price estimates*.
 
 ## Privacy
 
-- Parses only token **metadata** (tokens, time, project, model). **No prompt
-  or conversation content is stored.**
+- Parses token **metadata** (tokens, time, project, model) plus a **short excerpt
+  of the first user prompt** (for session identification). **Full conversation
+  content is never stored.**
 - Runs fully locally. The web dashboard binds to `127.0.0.1` only — do not
   expose it to a network.
 
