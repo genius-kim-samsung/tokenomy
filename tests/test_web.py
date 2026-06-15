@@ -23,7 +23,7 @@ def test_dashboard_empty_db_ok(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/")
     assert r.status_code == 200
-    assert "번다운" in r.text
+    assert "총지출" in r.text
 
 
 def test_dashboard_bad_query_falls_back(tmp_path, monkeypatch):
@@ -72,7 +72,7 @@ def test_dashboard_renders_sections_with_data(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    for section in ("통합 번다운", "통합 추세", "통합 효율 코치", "통합 프로젝트별", "복기"):
+    for section in ("이번 달 총지출", "AI별 번다운", "통합 추세", "통합 효율 코치", "통합 프로젝트별", "복기"):
         assert section in r.text
     assert "공개 API 단가 기준 추정" in r.text   # §5.2 비용 신뢰도 표기
     assert "proj" in r.text                       # 프로젝트별 행
@@ -185,8 +185,8 @@ def test_root_renders_overview(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/")
     assert r.status_code == 200
-    assert "통합 번다운" in r.text
-    assert "AI별 현황" in r.text
+    assert "이번 달 총지출" in r.text
+    assert "AI별 번다운" in r.text
     assert 'class="sidebar"' in r.text
     assert 'href="/history"' in r.text
     assert 'href="/models"' in r.text
@@ -206,7 +206,7 @@ def test_overview_aggregates_providers(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    for section in ("통합 번다운", "AI별 현황", "통합 추세", "통합 효율 코치",
+    for section in ("이번 달 총지출", "AI별 번다운", "통합 추세", "통합 효율 코치",
                     "통합 프로젝트별", "복기"):
         assert section in r.text
     assert "proj" in r.text
@@ -428,3 +428,18 @@ def test_settings_post_blank_budget_start_is_null(tmp_path, monkeypatch):
     assert r.status_code == 303
     saved = json.loads(cfg.read_text(encoding="utf-8"))
     assert saved["budget_start"] is None
+
+
+def test_dashboard_shows_codex_weekly_card(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    # 예산 config 작성: _client는 TOKENOMY_CONFIG를 tmp_path/cfg.json으로 격리함
+    (tmp_path / "cfg.json").write_text(
+        '{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}', encoding="utf-8")
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','codex','s1','2026-06-13T01:00:00Z',6.0,1)")
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "주간" in r.text          # Codex 카드 주간 한도 표기
+    assert "Codex" in r.text
