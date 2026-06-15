@@ -836,3 +836,30 @@ def test_week_count_partial_first_week_of_month():
     # 7/1(수) effective → 1주차. 7/6(월) → 2주차
     assert week_count(datetime(2026, 7, 1, tzinfo=KST), datetime(2026, 7, 1, 12, tzinfo=KST)) == 1
     assert week_count(datetime(2026, 7, 1, tzinfo=KST), datetime(2026, 7, 6, 9, tzinfo=KST)) == 2
+
+
+def test_burndown_clamps_to_budget_start():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 50.0, session="pre")    # 도입 전(제외)
+    _insert(conn, "2026-06-13T00:00:00Z", 10.0, session="post")   # 도입 후
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
+    bs = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
+    bd = burndown(conn, Budget(claude=100, codex=0), now, "claude", budget_start=bs)
+    assert bd.spent == 10.0                       # 6/5 제외, 6/13만
+    # 기간 6/12~6/30(19일), 경과 6/12~6/15 = 4일
+    assert bd.days_in_month == 19
+    assert bd.day_of_month == 4
+    assert bd.daily_avg == 2.5                    # 10 / 4
+    assert bd.projected_month == round(2.5 * 19, 4)
+
+
+def test_burndown_no_budget_start_is_unchanged():
+    # budget_start 미지정이면 기존(달력 월) 동작 그대로
+    conn = connect(":memory:")
+    for _ in range(3):
+        _insert(conn, "2026-06-05T00:00:00Z", 10.0, session=str(_))
+    bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
+    assert bd.spent == 30.0
+    assert bd.days_in_month == 30
+    assert bd.day_of_month == 10                  # NOW = 6/10
+    assert bd.daily_avg == 3.0

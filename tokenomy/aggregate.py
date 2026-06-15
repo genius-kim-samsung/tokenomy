@@ -133,12 +133,19 @@ def _month_rows(conn, provider: str | None, now_kst: datetime) -> list:
 
 
 def _compute_burndown(provider: str, spent: float, limit: float,
-                      unpriced: int, now_kst: datetime) -> Burndown:
+                      unpriced: int, now_kst: datetime, *,
+                      period_start: datetime | None = None,
+                      period_end: datetime | None = None) -> Burndown:
     """집계된 (spent, limit, unpriced)로 Burndown을 산출하는 순수 함수.
-    provider별 burndown과 통합 combined_burndown이 공유한다."""
-    start, nxt = month_bounds(now_kst)
-    days_in_month = (nxt - start).days
-    day_of_month = now_kst.day
+
+    period_start/end 미지정 시 now_kst의 달력 월을 기간으로 쓴다(하위호환). 지정 시
+    그 기간 [start, end)를 기준으로 경과일·예상치를 계산한다(예: 도입일 clamp).
+    provider별 burndown과 통합 combined_burndown이 공유한다.
+    """
+    if period_start is None or period_end is None:
+        period_start, period_end = month_bounds(now_kst)
+    days_in_month = (period_end - period_start).days
+    day_of_month = (_midnight(now_kst) - period_start).days + 1
     days_left = days_in_month - day_of_month
     daily_avg = spent / day_of_month if day_of_month else 0.0
     projected = daily_avg * days_in_month
@@ -168,12 +175,16 @@ def _compute_burndown(provider: str, spent: float, limit: float,
     )
 
 
-def burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude") -> Burndown:
-    rows = _month_rows(conn, provider, now_kst)
+def burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude",
+             *, budget_start: datetime | None = None) -> Burndown:
+    period_start = effective_month_start(now_kst, budget_start)
+    _, period_end = month_bounds(now_kst)
+    rows = _range_rows(conn, provider, period_start, period_end)
     spent = sum((r["cost_usd"] or 0) for r in rows)
     unpriced = sum(1 for r in rows if not r["priced"])
     limit = budget.limit_for(provider)
-    return _compute_burndown(provider, spent, limit, unpriced, now_kst)
+    return _compute_burndown(provider, spent, limit, unpriced, now_kst,
+                             period_start=period_start, period_end=period_end)
 
 
 def combined_burndown(cards: list[Burndown], now_kst: datetime) -> Burndown:
