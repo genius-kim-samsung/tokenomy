@@ -57,7 +57,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **프라이버시 경계 — 발췌선을 지킬 것.** 파서는 토큰 usage 메타를 추출하고, Codex는
   세션 식별용으로 **첫 사용자 프롬프트만 120자 발췌**해 `sessions.summary`에 저장한다.
   그 외 content/프롬프트/대화 본문 전체는 DB에 적재하지 않는다(raw JSONL 원문은 archive.py가
-  약 30일 임시 보존 — 아래 "raw 로그 휘발" 게시 참고).
+  약 30일 임시 보존 — 아래 "raw 로그는 약 30일 후 휘발" 게시 참고).
 - **데이터 위치가 실행 형태로 갈림**(`paths.data_dir()`): 소스 실행 → **repo 루트**(`data/`, `config/`),
   exe → `~/.tokenomy/`. `TOKENOMY_DATA`로 전체 override.
 - **증분 파싱은 byte-offset 기반**(`scan_offsets`). 파일은 append되므로 mtime이 아닌 offset으로
