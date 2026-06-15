@@ -52,6 +52,7 @@ docs/superpowers/specs/*
 docs/superpowers/plans/*
 !docs/superpowers/plans/2026-06-15-budget-cycle-and-date-range.md
 !docs/superpowers/plans/2026-06-15-trend-budget-start-alignment.md
+!docs/superpowers/plans/2026-06-15-codex-work-summary.md
 
 # Tailwind standalone 바이너리 — dev 도구, 커밋 안 함(산출 app.css만 추적)
 tools/
