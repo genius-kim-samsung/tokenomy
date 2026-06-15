@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block body %}
+<h1 class="page-title">차원별</h1>
+
+<section class="card">
+  <div class="card-head">
+    <div class="period-nav">
+      <a class="btn" href="/analysis?dim={{ dim }}&anchor={{ prev_anchor }}&provider={{ provider }}&period={{ period }}">‹ 이전</a>
+      <span class="label">{{ period_label }}</span>
+      {% if has_next %}<a class="btn" href="/analysis?dim={{ dim }}&anchor={{ next_anchor }}&provider={{ provider }}&period={{ period }}">다음 ›</a>{% endif %}
+    </div>
+    <form class="filters" method="get" action="/analysis">
+      <input type="hidden" name="dim" value="{{ dim }}">
+      <input type="hidden" name="anchor" value="{{ anchor }}">
+      <input type="hidden" name="provider" value="{{ provider }}">
+      <select name="period" aria-label="기간 단위" onchange="this.form.submit()">
+        <option value="month" {{ 'selected' if period == 'month' }}>월간</option>
+        <option value="week" {{ 'selected' if period == 'week' }}>주간</option>
+      </select>
+      <span class="range">
+        <input type="date" name="start" value="{{ start }}" aria-label="시작일">
+        ~
+        <input type="date" name="end" value="{{ end }}" aria-label="종료일">
+        <button class="btn" type="submit">조회</button>
+      </span>
+    </form>
+    <nav class="toggle small">
+      <a href="/analysis?anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if provider == '' }}">전체</a>
+      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=claude" class="{{ 'on' if provider == 'claude' }}">Claude</a>
+      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=codex" class="{{ 'on' if provider == 'codex' }}">Codex</a>
+    </nav>
+  </div>
+
+  <nav class="toggle small" aria-label="차원 선택">
+    <a href="/analysis?dim=model&anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if dim == 'model' }}">모델</a>
+    <a href="/analysis?dim=skill&anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if dim == 'skill' }}">스킬</a>
+    <a href="/analysis?dim=branch&anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if dim == 'branch' }}">브랜치</a>
+  </nav>
+
+  {% if split.total_cost > 0 %}
+  <p class="muted">서브에이전트 비중: ${{ '%.2f'|format(split.sub_cost) }} / ${{ '%.2f'|format(split.total_cost) }} ({{ '%.1f'|format(split.sub_share) }}%) · 부모 ${{ '%.2f'|format(split.parent_cost) }}</p>
+  {% endif %}
+
+  {% if claude_only %}
+  <p class="muted">ⓘ 스킬·브랜치 귀속은 Claude 로그 기준(Codex는 귀속 메타 없음 → 미귀속).</p>
+  {% endif %}
+
+  <p class="muted">{{ period_label }} · {{ dim_label }} {{ count }}개 · 합계 ${{ '%.2f'|format(total) }}</p>
+
+  <table class="gtable">
+    <thead><tr><th>비용</th><th>비중</th><th>세션</th><th>캐시%</th><th>input</th><th>output</th><th>cache_rd</th><th>{{ dim_label }}</th></tr></thead>
+    <tbody>
+      {% for m in rows %}
+      <tr><td>${{ '%.2f'|format(m.cost) }}</td><td>{{ '%.1f'|format(m.share) }}%</td>
+          <td>{{ m.sessions }}</td><td>{{ '%.0f'|format(m.cache_ratio * 100) }}%</td>
+          <td>{{ '{:,}'.format(m.input_tokens) }}</td><td>{{ '{:,}'.format(m.output_tokens) }}</td>
+          <td>{{ '{:,}'.format(m.cache_read) }}</td><td>{{ m.key }}</td></tr>
+      {% else %}<tr><td colspan="8" class="muted">이 기간 데이터 없음</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  <p class="disclaimer">ⓘ 공개 API 단가 기준 추정 · 이 머신 데이터만</p>
+</section>
+{% endblock %}

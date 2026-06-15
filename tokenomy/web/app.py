@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
-from tokenomy.aggregate import KST, PROVIDERS, parse_ts
+from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
 from tokenomy.budget import budget_from_config, load_config, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
@@ -105,17 +105,24 @@ def history_view(request: Request, anchor: str | None = None, provider: str = ""
 
 
 @app.get("/models")
-def models_view(request: Request, anchor: str | None = None, provider: str = "",
-                period: str | None = None, start: str | None = None,
-                end: str | None = None, notice: str | None = None):
+def models_redirect():
+    return RedirectResponse("/analysis?dim=model", status_code=301)
+
+
+@app.get("/analysis")
+def analysis_view(request: Request, anchor: str | None = None, provider: str = "",
+                  dim: str = "model", period: str | None = None,
+                  start: str | None = None, end: str | None = None,
+                  notice: str | None = None):
+    dim = dim if dim in DIM_COLUMNS else "model"
     provider = provider if provider in PROVIDERS else ""
     period = period if period in _PERIODS else "month"
     conn = connect()
     update_tag = check_update(conn)
-    ctx = dimension_context(conn, _parse_anchor(anchor), provider, dim="model",
+    ctx = dimension_context(conn, _parse_anchor(anchor), provider, dim=dim,
                             period=period, start=start, end=end)
     return templates.TemplateResponse(
-        request, "models.html",
+        request, "analysis.html",
         {**ctx, "notice": notice, "update_tag": update_tag},
     )
 

@@ -192,7 +192,7 @@ def test_root_renders_overview(tmp_path, monkeypatch):
     assert "AI별 번다운" in r.text
     assert 'class="sidebar"' in r.text
     assert 'href="/history"' in r.text
-    assert 'href="/models"' in r.text
+    assert 'href="/analysis"' in r.text   # 나브: 모델별→차원별
 
 
 def test_overview_aggregates_providers(tmp_path, monkeypatch):
@@ -364,12 +364,11 @@ def test_history_partial_refreshes_nav_links_with_filter(tmp_path, monkeypatch):
     assert "anchor=2026-05-31&provider=claude&sort=date_desc" in r.text
 
 
-def test_models_page_ok(tmp_path, monkeypatch):
+def test_models_redirects_to_analysis(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/models")
-    assert r.status_code == 200
-    assert "모델별" in r.text
-    assert "비중" in r.text
+    r = client.get("/models", follow_redirects=False)
+    assert r.status_code == 301
+    assert r.headers["location"] == "/analysis?dim=model"
 
 
 def test_history_has_collapse_ui(tmp_path, monkeypatch):
@@ -392,13 +391,13 @@ def test_history_folder_key_is_index_not_path(tmp_path, monkeypatch):
     assert 'data-folder="2026-06-10::myproj"' not in r.text  # 폴더명/경로가 키에 들어가지 않음
 
 
-def test_models_page_renders_rows(tmp_path, monkeypatch):
+def test_analysis_renders_rows(tmp_path, monkeypatch):
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
     conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,model,cost_usd,priced) "
                  "VALUES ('a','claude','s1','2026-06-10T10:00:00Z','claude-opus-4-8',12.5,1)")
     conn.commit()
-    r = client.get("/models?anchor=2026-06-10")
+    r = client.get("/analysis?anchor=2026-06-10&dim=model")
     assert r.status_code == 200
     assert "claude-opus-4-8" in r.text
     assert "합계 $12.50" in r.text
@@ -476,13 +475,13 @@ def test_history_bad_period_falls_back(tmp_path, monkeypatch):
     assert r.status_code == 200                      # 크래시 없이 월간 폴백
 
 
-def test_models_week_period_param(tmp_path, monkeypatch):
+def test_analysis_week_period_param(tmp_path, monkeypatch):
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
     conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,model,cost_usd,priced) "
                  "VALUES ('a','claude','s1','2026-06-09T10:00:00Z','claude-opus-4-8',8.0,1)")
     conn.commit()
-    r = client.get("/models?anchor=2026-06-13&period=week")
+    r = client.get("/analysis?anchor=2026-06-13&period=week&dim=model")
     assert r.status_code == 200
     assert "2026-06-08 ~ 06-14" in r.text
 
@@ -495,9 +494,40 @@ def test_history_has_period_toggle_and_range(tmp_path, monkeypatch):
     assert 'name="start"' in r.text and 'name="end"' in r.text   # 날짜 범위 입력
 
 
-def test_models_has_period_toggle_and_range(tmp_path, monkeypatch):
+def test_analysis_has_period_toggle_and_range(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
-    r = client.get("/models")
+    r = client.get("/analysis")
     assert r.status_code == 200
     assert 'name="period"' in r.text
     assert 'name="start"' in r.text and 'name="end"' in r.text
+
+
+def test_analysis_dim_selector_and_skill(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,model,cost_usd,priced,attribution_skill) "
+                 "VALUES ('a','claude','s1','2026-06-10T10:00:00Z','claude-opus-4-8',5.0,1,'brainstorming')")
+    conn.commit()
+    r = client.get("/analysis?anchor=2026-06-10&dim=skill")
+    assert r.status_code == 200
+    assert "brainstorming" in r.text
+    assert ">스킬</a>" in r.text                       # 차원 선택기 항목
+    assert "Claude 로그 기준" in r.text                # claude_only 안내
+
+
+def test_analysis_bad_dim_falls_back(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/analysis?dim=evil")
+    assert r.status_code == 200                        # 화이트리스트 폴백
+
+
+def test_analysis_shows_sidechain_card(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,model,cost_usd,priced,is_sidechain) "
+                 "VALUES ('a','claude','s1','2026-06-10T10:00:00Z','claude-opus-4-8',8.0,1,0)")
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,model,cost_usd,priced,is_sidechain) "
+                 "VALUES ('b','claude','s1','2026-06-10T11:00:00Z','claude-opus-4-8',2.0,1,1)")
+    conn.commit()
+    r = client.get("/analysis?anchor=2026-06-10")
+    assert "서브에이전트 비중" in r.text
