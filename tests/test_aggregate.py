@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 
 from tokenomy.aggregate import (
-    DayPoint, KST, burndown, by_day_session, by_model, by_project, by_session,
+    DayPoint, KST, burndown, by_day_session, by_dimension, by_model, by_project, by_session,
     combined_burndown, daily_series, insights, month_bounds, normalize_project,
     parse_ts, period_bounds, session_detail, stacked_trend,
 )
@@ -143,10 +143,12 @@ def _msg(conn, **kw):
         """INSERT INTO messages
            (dedup_key, provider, session_id, project, ts, model,
             input_tokens, output_tokens, cache_creation, cache_read,
-            web_search, web_fetch, cost_usd, priced, request_id, is_sidechain)
+            web_search, web_fetch, cost_usd, priced, request_id, is_sidechain,
+            attribution_skill, git_branch)
            VALUES (:dedup_key,:provider,:session_id,:project,:ts,:model,
             :input_tokens,:output_tokens,:cache_creation,:cache_read,
-            :web_search,:web_fetch,:cost_usd,:priced,:request_id,:is_sidechain)""",
+            :web_search,:web_fetch,:cost_usd,:priced,:request_id,:is_sidechain,
+            :attribution_skill,:git_branch)""",
         {
             "dedup_key": kw["dedup_key"], "provider": kw.get("provider", "claude"),
             "session_id": kw.get("session_id", "s1"), "project": kw.get("project", "proj"),
@@ -156,6 +158,7 @@ def _msg(conn, **kw):
             "web_search": kw.get("web_search", 0), "web_fetch": kw.get("web_fetch", 0),
             "cost_usd": kw.get("cost_usd", 0.0), "priced": kw.get("priced", 1),
             "request_id": kw.get("request_id"), "is_sidechain": kw.get("is_sidechain", 0),
+            "attribution_skill": kw.get("attribution_skill"), "git_branch": kw.get("git_branch"),
         },
     )
     conn.commit()
@@ -817,6 +820,50 @@ def test_by_model_excludes_other_months_and_providers():
     rows = by_model(conn, "claude", start, nxt)
     assert len(rows) == 1
     assert rows[0].cost == 3.0            # 5월·codex 제외
+
+
+# ─── by_dimension ────────────────────────────────────────────────────────────
+
+
+def test_by_dimension_skill_groups_with_null_bucket():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", ts="2026-06-10T10:00:00Z", cost_usd=10.0, attribution_skill="brainstorming")
+    _msg(conn, dedup_key="b", ts="2026-06-11T10:00:00Z", cost_usd=4.0, attribution_skill="brainstorming")
+    _msg(conn, dedup_key="c", ts="2026-06-12T10:00:00Z", cost_usd=2.0, attribution_skill=None)
+    start, nxt = month_bounds(datetime(2026, 6, 15, tzinfo=KST))
+    rows = by_dimension(conn, "claude", start, nxt, "skill")
+    assert [r.key for r in rows] == ["brainstorming", None]   # 비용 내림차순, NULL 버킷 포함
+    assert rows[0].cost == 14.0
+
+
+def test_by_dimension_branch_and_range_filter():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", ts="2026-06-08T00:00:00Z", cost_usd=5.0, git_branch="main")     # KST 6/8 (주 안)
+    _msg(conn, dedup_key="b", ts="2026-06-20T00:00:00Z", cost_usd=9.0, git_branch="main")     # 주 밖
+    start, nxt, _ = period_bounds("week", datetime(2026, 6, 13, tzinfo=KST))
+    rows = by_dimension(conn, "claude", start, nxt, "branch")
+    assert len(rows) == 1
+    assert rows[0].key == "main" and rows[0].cost == 5.0
+
+
+def test_by_dimension_empty_string_folds_into_null_bucket():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", ts="2026-06-10T10:00:00Z", cost_usd=3.0, git_branch="")
+    start, nxt = month_bounds(datetime(2026, 6, 15, tzinfo=KST))
+    rows = by_dimension(conn, "claude", start, nxt, "branch")
+    assert rows[0].key is None and rows[0].cost == 3.0    # "" → None 버킷
+
+
+def test_by_dimension_model_matches_by_model_wrapper():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", model="claude-opus-4-8", ts="2026-06-10T10:00:00Z",
+         cost_usd=20.0, input_tokens=100, cache_read=40)
+    _msg(conn, dedup_key="b", model="claude-haiku-4-5", ts="2026-06-11T10:00:00Z", cost_usd=4.0)
+    start, nxt = month_bounds(datetime(2026, 6, 15, tzinfo=KST))
+    dim_rows = by_dimension(conn, "claude", start, nxt, "model")
+    model_rows = by_model(conn, "claude", start, nxt)
+    assert [r.key for r in dim_rows] == [m.model for m in model_rows]
+    assert [r.cost for r in dim_rows] == [m.cost for m in model_rows]
 
 
 # ─── models_context ──────────────────────────────────────────────────────────
