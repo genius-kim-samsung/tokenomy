@@ -103,6 +103,7 @@ def test_trend_data_embedded(tmp_path, monkeypatch):
     assert "trendSeries" in r.text          # AI별 스택 시리즈 데이터
     assert "trendBudget" in r.text          # 월 예산 가로선 데이터
     assert "월 예산" in r.text               # 가로선 레이블
+    assert "endLabels" in r.text            # 끝점 라벨 플러그인(상시 구성 표시)
 
 
 def _client_with_config(tmp_path, monkeypatch):

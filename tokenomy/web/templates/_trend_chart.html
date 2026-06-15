@@ -20,8 +20,74 @@
     pointRadius: 0,
   }));
 
+  // 끝점 라벨: 마지막 실제 데이터 지점 옆 빈 공간에 AI별 이름+%+금액을 항상 표시.
+  // 툴팁(hover)과 달리 상시 노출 — 그래프 우측 여백(미래 날짜)을 활용한다.
+  const endLabelPlugin = {
+    id: 'endLabels',
+    afterDatasetsDraw(chart) {
+      const areas = chart.data.datasets
+        .map((ds, i) => ({ ds, i }))
+        .filter((o) => o.ds.isArea);
+      if (!areas.length) return;
+
+      // 마지막 non-null 인덱스(실제 데이터가 끝나는 날). 모든 밴드가 동일 시점에 끝남.
+      const cum0 = areas[0].ds.cum;
+      let li = -1;
+      for (let k = cum0.length - 1; k >= 0; k--) {
+        if (cum0[k] != null) { li = k; break; }
+      }
+      if (li < 0) return;
+      const total = trendTotals[li] || 0;
+
+      const { ctx, chartArea } = chart;
+      ctx.save();
+      ctx.font = '12px sans-serif';
+      ctx.textBaseline = 'middle';
+
+      // 위→아래 순서(맨 위 밴드부터)로 라벨 구성
+      const lines = areas.slice().reverse().map((o) => {
+        const v = o.ds.cum[li] || 0;
+        const pct = total ? Math.round((v / total) * 100) : 0;
+        return {
+          text: `${o.ds.label}  ${pct}%  $${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+          color: o.ds.borderColor,
+        };
+      });
+
+      // 앵커: 맨 위 밴드의 마지막 지점(=누적 합계 위치)
+      const anchor = chart.getDatasetMeta(areas[areas.length - 1].i).data[li];
+
+      // 오른쪽 공간이 없으면(달 막바지) 지점 왼쪽에 우측정렬로 표시
+      const widest = Math.max(...lines.map((l) => ctx.measureText(l.text).width));
+      let x = anchor.x + 10;
+      ctx.textAlign = 'left';
+      if (x + widest > chartArea.right) {
+        x = anchor.x - 10;
+        ctx.textAlign = 'right';
+      }
+
+      // 앵커 y 중심으로 세로 정렬, 차트 영역 안으로 clamp
+      const lh = 16;
+      let y0 = anchor.y - ((lines.length - 1) * lh) / 2;
+      y0 = Math.max(chartArea.top + 8, Math.min(y0, chartArea.bottom - (lines.length - 1) * lh - 8));
+
+      // 앵커 점 — 라벨과 밴드 끝을 시각적으로 연결
+      ctx.fillStyle = lines[0].color;
+      ctx.beginPath();
+      ctx.arc(anchor.x, anchor.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      lines.forEach((l, idx) => {
+        ctx.fillStyle = l.color;
+        ctx.fillText(l.text, x, y0 + idx * lh);
+      });
+      ctx.restore();
+    },
+  };
+
   new Chart(document.getElementById('trend'), {
     type: 'line',
+    plugins: [endLabelPlugin],
     data: { labels: trendLabels, datasets: [
       ...areaSets,
       { label: '예산 페이스', data: trendPace, borderColor: '#a09d96', borderDash: [5,4], pointRadius: 0, fill: false },
