@@ -116,3 +116,35 @@ def test_summary_truncated_and_normalized(tmp_path):
 
 def test_summary_none_when_no_user_input(tmp_path):
     assert parse_rollout(str(_write_rollout(tmp_path))).summary is None
+
+
+from tokenomy.codex_parser import _is_codex_user_msg
+
+
+def test_is_codex_user_msg_filters_environment():
+    assert _is_codex_user_msg(
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "안녕"}}
+    ) is True
+    assert _is_codex_user_msg(
+        {"type": "event_msg", "payload": {"type": "user_message",
+         "message": "<environment_context> ... </environment_context>"}}
+    ) is False
+    assert _is_codex_user_msg(
+        {"type": "event_msg", "payload": {"type": "token_count"}}
+    ) is False
+
+
+def test_parse_rollout_counts_user_turns(tmp_path):
+    f = tmp_path / "rollout-turns.jsonl"
+    lines = [
+        {"type": "session_meta", "payload": {"id": "s-turns", "cwd": "/p", "timestamp": "2026-06-11T12:50:14Z"}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "<environment_context>x</environment_context>"}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "첫 질문"}},
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "둘째 질문"}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 10}}}},
+    ]
+    f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    rec = parse_rollout(str(f))
+    assert rec is not None
+    assert rec.user_turns == 2

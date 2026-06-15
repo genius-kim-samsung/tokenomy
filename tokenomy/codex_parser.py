@@ -72,10 +72,24 @@ def _extract_first_prompt(path: str, limit: int = 120) -> str | None:
     return fallback
 
 
+def _is_codex_user_msg(o: dict) -> bool:
+    """rollout 이벤트가 사람이 입력한 user_message면 True. 환경 컨텍스트는 제외."""
+    if o.get("type") != "event_msg":
+        return False
+    p = o.get("payload")
+    if not isinstance(p, dict) or p.get("type") != "user_message":
+        return False
+    m = p.get("message")
+    if isinstance(m, str) and m.lstrip().startswith("<environment_context"):
+        return False
+    return True
+
+
 def parse_rollout(path: str) -> UsageRecord | None:
     """rollout 파일 1개 → 세션 총량 UsageRecord. token_count 없으면 None."""
     session_id = cwd = ts = model = None
     last_total: dict | None = None
+    turns = 0
 
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -88,6 +102,8 @@ def parse_rollout(path: str) -> UsageRecord | None:
                 continue
             if not isinstance(o, dict):
                 continue
+            if _is_codex_user_msg(o):
+                turns += 1
 
             t = o.get("type")
             payload = o.get("payload")
@@ -127,6 +143,7 @@ def parse_rollout(path: str) -> UsageRecord | None:
         cache_read=cached,
         message_id=session_id,  # 세션당 1레코드 → dedup_key = session_id
         summary=_extract_first_prompt(path),
+        user_turns=turns,
     )
 
 
