@@ -36,6 +36,7 @@ app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static"
 
 _SORTS = ("cost", "sessions", "cache")
 _HISTORY_SORTS = ("date_desc", "date_asc", "day_cost")
+_PERIODS = ("week", "month")
 
 
 def _parse_anchor(value: str | None) -> datetime:
@@ -83,16 +84,20 @@ def sessions_redirect():
 
 @app.get("/history")
 def history_view(request: Request, anchor: str | None = None, provider: str = "",
-                 sort: str | None = None, partial: str | None = None, notice: str | None = None):
+                 sort: str | None = None, period: str | None = None,
+                 start: str | None = None, end: str | None = None,
+                 partial: str | None = None, notice: str | None = None):
     provider = provider if provider in PROVIDERS else ""
     sort = sort if sort in _HISTORY_SORTS else "date_desc"
+    period = period if period in _PERIODS else "month"
     conn = connect()
     # htmx 요청(HX-Request)/명시적 partial=1 → 셸 없이 조각만. 단 히스토리 복원 요청은 전체 페이지.
     hx_partial = (request.headers.get("HX-Request") == "true"
                   and request.headers.get("HX-History-Restore-Request") != "true")
     is_partial = partial == "1" or hx_partial
     update_tag = None if is_partial else check_update(conn)
-    ctx = history_context(conn, _parse_anchor(anchor), provider, sort)
+    ctx = history_context(conn, _parse_anchor(anchor), provider, sort,
+                          period=period, start=start, end=end)
     template = "_history_body.html" if is_partial else "history.html"
     return templates.TemplateResponse(
         request, template, {**ctx, "notice": notice, "update_tag": update_tag},
@@ -101,11 +106,14 @@ def history_view(request: Request, anchor: str | None = None, provider: str = ""
 
 @app.get("/models")
 def models_view(request: Request, anchor: str | None = None, provider: str = "",
-                notice: str | None = None):
+                period: str | None = None, start: str | None = None,
+                end: str | None = None, notice: str | None = None):
     provider = provider if provider in PROVIDERS else ""
+    period = period if period in _PERIODS else "month"
     conn = connect()
     update_tag = check_update(conn)
-    ctx = models_context(conn, _parse_anchor(anchor), provider)
+    ctx = models_context(conn, _parse_anchor(anchor), provider,
+                         period=period, start=start, end=end)
     return templates.TemplateResponse(
         request, "models.html",
         {**ctx, "notice": notice, "update_tag": update_tag},

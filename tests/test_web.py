@@ -443,3 +443,42 @@ def test_dashboard_shows_codex_weekly_card(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "주간" in r.text          # Codex 카드 주간 한도 표기
     assert "Codex" in r.text
+
+
+def test_history_week_period_param(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','myproj','2026-06-09T01:00:00Z',2.0,1)")
+    conn.commit()
+    r = client.get("/history?anchor=2026-06-13&period=week")
+    assert r.status_code == 200
+    assert "2026-06-08 ~ 06-14" in r.text
+
+
+def test_history_custom_range_param(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','myproj','2026-06-12T01:00:00Z',3.0,1)")
+    conn.commit()
+    r = client.get("/history?start=2026-06-12&end=2026-06-30")
+    assert r.status_code == 200
+    assert "2026-06-12 ~ 2026-06-30" in r.text
+
+
+def test_history_bad_period_falls_back(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/history?period=decade&start=nonsense")
+    assert r.status_code == 200                      # 크래시 없이 월간 폴백
+
+
+def test_models_week_period_param(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,model,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','2026-06-09T10:00:00Z','claude-opus-4-8',8.0,1)")
+    conn.commit()
+    r = client.get("/models?anchor=2026-06-13&period=week")
+    assert r.status_code == 200
+    assert "2026-06-08 ~ 06-14" in r.text
