@@ -13,7 +13,7 @@ from pathlib import Path
 from tokenomy.aggregate import KST, burndown, by_project, by_session, parse_ts
 from tokenomy.codex_parser import CODEX_ROOT, ingest_codex
 from tokenomy.archive import archive_tree
-from tokenomy.db import connect, ingest_root, ingest_titles
+from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns
 from tokenomy.freshness import CLEANUP_DAYS, freshness, record_ingest
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.budget import budget_from_config, load_config, user_label
@@ -29,10 +29,11 @@ def cmd_ingest(conn) -> None:
     archive_tree(CODEX_ROOT, conn, provider="codex")
     # 세션 작업 요약(aiTitle)을 휘발 전 L1에 캐시. Codex엔 ai-title이 없어 claude만.
     n_titles = ingest_titles(conn, CLAUDE_ROOT)
+    n_turns = ingest_user_turns(conn, CLAUDE_ROOT)
     record_ingest(conn, datetime.now(KST))
     print(
         f"[ingest] claude={n_claude}  codex={n_codex}  "
-        f"archived_files={n_arch}  titles={n_titles}  new records"
+        f"archived_files={n_arch}  titles={n_titles}  turns={n_turns}  new records"
     )
 
 
