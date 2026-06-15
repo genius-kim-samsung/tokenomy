@@ -4,5 +4,6 @@
     "claude": 100,
     "codex": 50
   },
+  "budget_start": null,
   "pricing_overrides": {}
 }

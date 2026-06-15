@@ -399,3 +399,32 @@ def test_models_page_renders_rows(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "claude-opus-4-8" in r.text
     assert "합계 $12.50" in r.text
+
+
+def test_settings_get_shows_budget_start_field(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
+                   encoding="utf-8")
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert 'name="budget_start"' in r.text
+    assert "2026-06-12" in r.text          # 기존 값 표시
+
+
+def test_settings_post_writes_budget_start(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings",
+                    data={"claude": "200", "codex": "40", "budget_start": "2026-06-12"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved["budget_start"] == "2026-06-12"
+
+
+def test_settings_post_blank_budget_start_is_null(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"claude": "200", "codex": "40", "budget_start": ""},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved["budget_start"] is None

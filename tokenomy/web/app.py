@@ -131,6 +131,7 @@ def settings_get(request: Request):
     return templates.TemplateResponse(
         request, "settings.html",
         {"claude": budget.claude, "codex": budget.codex,
+         "budget_start": config.get("budget_start") or "",
          "active_nav": "settings", "update_tag": check_update(conn),
          "last_ts": last["t"] if last and last["t"] else None},
     )
@@ -143,10 +144,23 @@ def _to_float(value: str | None) -> float:
         return 0.0
 
 
+def _valid_date_or_none(value: str | None) -> str | None:
+    """'YYYY-MM-DD'면 그대로, 아니면 None. 잘못된 입력으로 config가 깨지지 않게 한다."""
+    if not value:
+        return None
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+        return value
+    except ValueError:
+        return None
+
+
 @app.post("/settings")
-def settings_post(claude: str = Form(""), codex: str = Form("")):
+def settings_post(claude: str = Form(""), codex: str = Form(""),
+                  budget_start: str = Form("")):
     config = load_config()
     config["budget"]["claude"] = _to_float(claude)
     config["budget"]["codex"] = _to_float(codex)
+    config["budget_start"] = _valid_date_or_none(budget_start)
     save_config(config)
     return RedirectResponse("/", status_code=303)
