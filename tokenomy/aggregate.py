@@ -563,6 +563,46 @@ def by_model(conn, provider: str | None, start: datetime, nxt: datetime) -> list
 
 
 @dataclass
+class SidechainSplit:
+    parent_cost: float
+    sub_cost: float
+    total_cost: float
+    sub_share: float        # 서브에이전트 비중 % (= sub/total*100)
+    parent_tokens: int
+    sub_tokens: int
+
+
+def sidechain_split(conn, provider: str | None, start: datetime, nxt: datetime) -> SidechainSplit:
+    """기간 [start, nxt) 내 is_sidechain 기준 부모 vs 서브에이전트 비용·토큰 분리."""
+    sql = ("SELECT ts, is_sidechain, cost_usd, input_tokens, output_tokens, "
+           "cache_creation, cache_read FROM messages")
+    if provider is None:
+        rows = conn.execute(sql).fetchall()
+    else:
+        rows = conn.execute(sql + " WHERE provider=?", (provider,)).fetchall()
+    pc = sc = 0.0
+    pt = st = 0
+    for r in rows:
+        dt = parse_ts(r["ts"])
+        if not (dt and start <= dt < nxt):
+            continue
+        tok = (r["input_tokens"] or 0) + (r["output_tokens"] or 0) \
+            + (r["cache_creation"] or 0) + (r["cache_read"] or 0)
+        if r["is_sidechain"]:
+            sc += r["cost_usd"] or 0
+            st += tok
+        else:
+            pc += r["cost_usd"] or 0
+            pt += tok
+    total = pc + sc
+    return SidechainSplit(
+        parent_cost=round(pc, 4), sub_cost=round(sc, 4), total_cost=round(total, 4),
+        sub_share=round(sc / total * 100, 1) if total else 0.0,
+        parent_tokens=pt, sub_tokens=st,
+    )
+
+
+@dataclass
 class ModelRow:
     model: str | None
     cost: float

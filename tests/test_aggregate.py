@@ -5,7 +5,7 @@ import pytest
 from tokenomy.aggregate import (
     DayPoint, KST, burndown, by_day_session, by_dimension, by_model, by_project, by_session,
     combined_burndown, daily_series, insights, month_bounds, normalize_project,
-    parse_ts, period_bounds, session_detail, stacked_trend,
+    parse_ts, period_bounds, session_detail, sidechain_split, SidechainSplit, stacked_trend,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
@@ -864,6 +864,28 @@ def test_by_dimension_model_matches_by_model_wrapper():
     model_rows = by_model(conn, "claude", start, nxt)
     assert [r.key for r in dim_rows] == [m.model for m in model_rows]
     assert [r.cost for r in dim_rows] == [m.cost for m in model_rows]
+
+
+# ─── sidechain_split ─────────────────────────────────────────────────────────
+
+
+def test_sidechain_split_parent_and_sub():
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", ts="2026-06-10T10:00:00Z", cost_usd=8.0, is_sidechain=0)
+    _msg(conn, dedup_key="b", ts="2026-06-11T10:00:00Z", cost_usd=2.0, is_sidechain=1)
+    start, nxt = month_bounds(datetime(2026, 6, 15, tzinfo=KST))
+    sp = sidechain_split(conn, "claude", start, nxt)
+    assert sp.parent_cost == 8.0
+    assert sp.sub_cost == 2.0
+    assert sp.total_cost == 10.0
+    assert sp.sub_share == 20.0       # 2 / 10 * 100
+
+
+def test_sidechain_split_empty_is_zero():
+    conn = connect(":memory:")
+    start, nxt = month_bounds(datetime(2026, 6, 15, tzinfo=KST))
+    sp = sidechain_split(conn, "claude", start, nxt)
+    assert sp.total_cost == 0.0 and sp.sub_share == 0.0
 
 
 # ─── models_context ──────────────────────────────────────────────────────────
