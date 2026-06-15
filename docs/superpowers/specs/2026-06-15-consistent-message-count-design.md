@@ -66,6 +66,8 @@ Claude는 정상적으로 여러 건으로 나온다.
 추가로 **`session_day_turns(session_id, day, turns)`** 테이블(PK `(session_id, day)`,
 `day`=KST 날짜 `YYYY-MM-DD`)을 둔다 — 내역 날짜 트리(`by_day_session`)가 **날짜별 정확 카운트**를
 쓰도록. `sessions.user_turns` = 해당 세션의 `session_day_turns.turns` 합과 일치(불변식).
+단 **타임스탬프가 없는 턴**은 `user_turns` 총합엔 포함되지만 날짜 버킷이 없어
+`session_day_turns`엔 적재되지 않는다(날짜 트리엔 미반영) — 실로그에선 거의 발생하지 않는 예외.
 전체 테이블이라 `CREATE TABLE IF NOT EXISTS`로 생성되며(기존 DB에도 connect 시 생성) `_MIGRATE_COLS` 불필요.
 
 ### Codex 적재 경로
