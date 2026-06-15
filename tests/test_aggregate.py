@@ -4,8 +4,8 @@ import pytest
 
 from tokenomy.aggregate import (
     KST, burndown, by_day_session, by_model, by_project, by_session,
-    combined_burndown, daily_series, insights, month_bounds, parse_ts, period_bounds,
-    session_detail,
+    combined_burndown, daily_series, insights, month_bounds, normalize_project,
+    parse_ts, period_bounds, session_detail,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
@@ -75,6 +75,44 @@ def test_unpriced_counted():
     _insert(conn, "2026-06-05T00:00:00Z", 0.0, priced=0)
     bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
     assert bd.unpriced_count == 1
+
+
+@pytest.mark.parametrize("cwd,expected", [
+    # Windows 워크트리(Claude) → 부모 repo 경로로 접힘
+    (r"C:\projects\tokenomy\.claude\worktrees\history-view-spec",
+     r"C:\projects\tokenomy"),
+    # unix 슬래시(Codex가 unix 경로를 기록하는 경우) → 부모
+    ("/home/u/proj/.claude/worktrees/feat-x", "/home/u/proj"),
+    # 워크트리 하위 디렉토리에서 실행해도 부모 repo로 접힘(마커 이후 전부 제거)
+    (r"C:\projects\tokenomy\.claude\worktrees\history-view-spec\sub\dir",
+     r"C:\projects\tokenomy"),
+    # 대소문자 무관(.Claude/Worktrees)
+    (r"C:\proj\.Claude\Worktrees\b", r"C:\proj"),
+    # 비워크트리 경로 → 원본 그대로
+    (r"C:\projects\tokenomy", r"C:\projects\tokenomy"),
+    # .claude 있지만 worktrees가 아님 → 원본 그대로
+    (r"C:\projects\tokenomy\.claude\agents",
+     r"C:\projects\tokenomy\.claude\agents"),
+    # None/비경로 → 그대로
+    (None, None),
+    ("(unknown)", "(unknown)"),
+])
+def test_normalize_project_folds_worktree_to_parent(cwd, expected):
+    assert normalize_project(cwd) == expected
+
+
+def test_by_project_folds_worktree_into_parent():
+    # 워크트리 세션 비용이 부모 프로젝트에 합산되어 한 행으로 묶인다(provider 무관 경로 정규화).
+    conn = connect(":memory:")
+    parent = r"C:\projects\tokenomy"
+    wt = r"C:\projects\tokenomy\.claude\worktrees\history-view-spec"
+    _insert(conn, "2026-06-05T00:00:00Z", 10.0, project=parent, session="a")
+    _insert(conn, "2026-06-06T00:00:00Z", 5.0, project=wt, session="b")
+    rows = by_project(conn, "claude", NOW)
+    assert len(rows) == 1
+    assert rows[0].project == parent
+    assert rows[0].cost == 15.0
+    assert rows[0].sessions == 2
 
 
 def test_by_project_sorted_with_cache_ratio():
@@ -265,6 +303,19 @@ def test_session_detail_groups_by_model():
 def test_session_detail_missing_returns_none():
     conn = connect(":memory:")
     assert session_detail(conn, "does-not-exist") is None
+
+
+def test_session_detail_folds_worktree_project():
+    # 세션 상세도 내역 목록과 일관되게 워크트리 cwd를 부모 repo로 표시한다.
+    conn = connect(":memory:")
+    wt = r"C:\projects\tokenomy\.claude\worktrees\history-view-spec"
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-10T10:00:00Z",
+         model="claude-opus-4-8", cost_usd=3.0)
+    conn.execute("INSERT INTO sessions (session_id, project, provider) "
+                 "VALUES ('s1', ?, 'claude')", (wt,))
+    conn.commit()
+    d = session_detail(conn, "s1")
+    assert d.project == r"C:\projects\tokenomy"
 
 
 def test_insights_low_cache_and_websearch():
