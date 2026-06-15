@@ -207,6 +207,58 @@ def combined_burndown(cards: list[Burndown], now_kst: datetime) -> Burndown:
     return _compute_burndown("전체", spent, limit, unpriced, now_kst)
 
 
+@dataclass
+class CodexBurndown:
+    """Codex 주간 누적(carryover) 번다운.
+
+    분모 limit_to_date = weekly_limit(W) × weeks_elapsed(N).
+    분자 spent = effective_start ~ 이번 달 누적 지출. remaining = 이번 주 가용(이월 포함).
+    월이 바뀌면 분자·분모 모두 리셋(이월 소멸). 주간 모델이라 예상 월말은 내지 않는다.
+    """
+    provider: str           # "codex"
+    weekly_limit: float     # W = 월한도 ÷ 4
+    weeks_elapsed: int      # N (이번 달 충전 횟수)
+    limit_to_date: float    # W × N
+    spent: float            # 이번 달 누적 지출(effective_start~)
+    remaining: float        # 이번 주 가용 = limit_to_date − spent
+    pct: float
+    status: str             # "ok" | "exceeds"
+    unpriced_count: int
+    week_spent: float       # 이번 주(월요일~)만의 지출(표시용)
+
+
+def codex_burndown(conn, budget: Budget, now_kst: datetime,
+                   *, budget_start: datetime | None = None) -> CodexBurndown:
+    """Codex 주간 누적(carryover) 번다운을 산출한다.
+
+    effective_start(도입일 or 달력 월 1일)부터 이번 달 말까지의 누적 지출과
+    weekly_limit × weeks_elapsed를 비교한다. 이월 모델이라 일별 예상치는 제공하지 않는다.
+    """
+    month_start, month_end = month_bounds(now_kst)
+    eff = effective_month_start(now_kst, budget_start)
+    weekly = budget.weekly_codex_limit()
+    weeks = week_count(eff, now_kst)
+    limit_to_date = round(weekly * weeks, 4)
+
+    rows = _range_rows(conn, "codex", eff, month_end)
+    spent = round(sum((r["cost_usd"] or 0) for r in rows), 4)
+    unpriced = sum(1 for r in rows if not r["priced"])
+    remaining = round(limit_to_date - spent, 4)
+    pct = round(spent / limit_to_date, 4) if limit_to_date > 0 else 0.0
+
+    week_start = max(_midnight(now_kst) - timedelta(days=now_kst.weekday()), eff)
+    week_rows = _range_rows(conn, "codex", week_start, month_end)
+    week_spent = round(sum((r["cost_usd"] or 0) for r in week_rows), 4)
+
+    status = "exceeds" if (limit_to_date > 0 and spent >= limit_to_date) else "ok"
+
+    return CodexBurndown(
+        provider="codex", weekly_limit=round(weekly, 4), weeks_elapsed=weeks,
+        limit_to_date=limit_to_date, spent=spent, remaining=remaining, pct=pct,
+        status=status, unpriced_count=unpriced, week_spent=week_spent,
+    )
+
+
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None,
                *, start: datetime | None = None, nxt: datetime | None = None) -> list[ProjectRow]:
     assert (start is None) == (nxt is None), "start/nxt는 함께 지정해야 한다"

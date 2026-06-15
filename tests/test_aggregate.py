@@ -863,3 +863,68 @@ def test_burndown_no_budget_start_is_unchanged():
     assert bd.days_in_month == 30
     assert bd.day_of_month == 10                  # NOW = 6/10
     assert bd.daily_avg == 3.0
+
+
+# ─── codex_burndown: 주간 누적(carryover) 모델 ────────────────────────────────
+
+from tokenomy.aggregate import CodexBurndown, codex_burndown
+
+
+def test_codex_burndown_carryover_denominator_and_remaining():
+    conn = connect(":memory:")
+    # 월한도 40 → W=10. 도입 6/12(2주차), 오늘 6/15(3주차) → N=2 → 분모 20
+    _insert(conn, "2026-06-13T00:00:00Z", 6.0, session="x", provider="codex")  # KST 6/13 09:00
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
+    bs = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
+    cb = codex_burndown(conn, Budget(claude=0, codex=40), now, budget_start=bs)
+    assert cb.weekly_limit == 10.0
+    assert cb.weeks_elapsed == 2
+    assert cb.limit_to_date == 20.0
+    assert cb.spent == 6.0
+    assert cb.remaining == 14.0          # 20 - 6 (3주차 새 10 + 2주차 미사용 4 이월)
+    assert cb.pct == 0.3
+    assert cb.status == "ok"
+
+
+def test_codex_burndown_excludes_pre_budget_start():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 99.0, session="pre", provider="codex")  # 도입 전
+    _insert(conn, "2026-06-13T00:00:00Z", 3.0, session="post", provider="codex")
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
+    bs = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
+    cb = codex_burndown(conn, Budget(claude=0, codex=40), now, budget_start=bs)
+    assert cb.spent == 3.0               # 6/5 제외
+
+
+def test_codex_burndown_exceeds_when_over_accumulated():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-13T00:00:00Z", 25.0, session="x", provider="codex")
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
+    bs = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
+    cb = codex_burndown(conn, Budget(claude=0, codex=40), now, budget_start=bs)
+    assert cb.limit_to_date == 20.0
+    assert cb.spent == 25.0
+    assert cb.remaining == -5.0
+    assert cb.status == "exceeds"
+
+
+def test_codex_burndown_no_budget_start_uses_month_first():
+    conn = connect(":memory:")
+    # 도입일 없음 → 6/1부터. 6/1=월이라 6/15(월)=3주차 → N=3 → 분모 30
+    _insert(conn, "2026-06-02T00:00:00Z", 5.0, session="x", provider="codex")
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
+    cb = codex_burndown(conn, Budget(claude=0, codex=40), now)
+    assert cb.weeks_elapsed == 3
+    assert cb.limit_to_date == 30.0
+    assert cb.spent == 5.0
+
+
+def test_codex_burndown_week_spent_only_current_week():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-13T00:00:00Z", 4.0, session="prev", provider="codex")  # 2주차
+    _insert(conn, "2026-06-15T03:00:00Z", 2.0, session="cur", provider="codex")   # KST 6/15 12:00 (3주차)
+    now = datetime(2026, 6, 15, 18, 0, tzinfo=KST)
+    bs = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
+    cb = codex_burndown(conn, Budget(claude=0, codex=40), now, budget_start=bs)
+    assert cb.spent == 6.0               # 전체 누적
+    assert cb.week_spent == 2.0          # 이번 주(6/15~)만
