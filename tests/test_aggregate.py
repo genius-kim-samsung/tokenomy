@@ -794,3 +794,45 @@ def test_build_date_tree_zero_den_cache_zero():
 def test_build_date_tree_unknown_project():
     f = build_date_tree([_dsr("2026-06-13", "s1", None, 1.0)], "date_desc")[0].folders[0]
     assert f.project == "(unknown)"
+
+
+# ─── effective_month_start + week_count ────────────────────────────────────────
+
+from tokenomy.aggregate import effective_month_start, week_count
+
+
+def test_effective_month_start_clamps_to_budget_start():
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
+    bs = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
+    assert effective_month_start(now, bs) == datetime(2026, 6, 12, 0, 0, tzinfo=KST)
+
+
+def test_effective_month_start_none_returns_month_first():
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
+    assert effective_month_start(now, None) == datetime(2026, 6, 1, 0, 0, tzinfo=KST)
+
+
+def test_effective_month_start_ignores_other_month_budget_start():
+    # 도입일이 이번 달(6월)이 아니면(과거/미래) 달력 월 1일 사용
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
+    assert effective_month_start(now, datetime(2026, 5, 3, tzinfo=KST)) == datetime(2026, 6, 1, 0, 0, tzinfo=KST)
+    assert effective_month_start(now, datetime(2026, 7, 9, tzinfo=KST)) == datetime(2026, 6, 1, 0, 0, tzinfo=KST)
+
+
+def test_week_count_same_week_is_one():
+    eff = datetime(2026, 6, 12, 0, 0, tzinfo=KST)   # 금
+    now = datetime(2026, 6, 12, 18, 0, tzinfo=KST)  # 같은 주
+    assert week_count(eff, now) == 1
+
+
+def test_week_count_counts_monday_resets():
+    # 도입 6/12(금, 2주차 6/8~14) → 오늘 6/15(월, 3주차) = 2회 충전
+    eff = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
+    now = datetime(2026, 6, 15, 9, 0, tzinfo=KST)
+    assert week_count(eff, now) == 2
+
+
+def test_week_count_partial_first_week_of_month():
+    # 7/1(수) effective → 1주차. 7/6(월) → 2주차
+    assert week_count(datetime(2026, 7, 1, tzinfo=KST), datetime(2026, 7, 1, 12, tzinfo=KST)) == 1
+    assert week_count(datetime(2026, 7, 1, tzinfo=KST), datetime(2026, 7, 6, 9, tzinfo=KST)) == 2
