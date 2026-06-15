@@ -1135,7 +1135,7 @@ def test_codex_burndown_week_spent_only_current_week():
     assert cb.week_spent == 2.0          # 이번 주(6/15~)만
 
 
-# ─── Task 8: history_context/models_context 주/월 기간 + 사용자 지정 구간 ──────
+# ─── Task 8: history_context/dimension_context 주/월 기간 + 사용자 지정 구간 ──────
 
 def test_history_context_week_period(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
@@ -1172,7 +1172,7 @@ def test_history_context_invalid_range_falls_back_to_month(monkeypatch, tmp_path
     assert ctx["period_label"] == "2026-06"
 
 
-def test_models_context_week_period(monkeypatch, tmp_path):
+def test_dimension_context_week_period(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", session_id="s1", model="claude-opus-4-8",
