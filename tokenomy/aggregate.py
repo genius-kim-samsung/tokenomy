@@ -555,11 +555,20 @@ def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None) -> l
 @dataclass
 class DayPoint:
     day: int
-    cumulative_cost: float
+    cumulative_cost: float | None   # 미래(오늘 이후) 구간은 None → 차트에서 선이 끊김
 
 
-def daily_series(conn, provider: str | None, now_kst: datetime) -> list[DayPoint]:
-    rows = _month_rows(conn, provider, now_kst)
+def daily_series(conn, provider: str | None, now_kst: datetime,
+                 *, budget_start: datetime | None = None) -> list[DayPoint]:
+    """일별 누적 비용 시계열. 기간 [effective_month_start, 말일].
+
+    실제 누적값은 오늘까지만 채우고 이후 날은 None(미래 구간 — 차트에서 선이 끊김).
+    budget_start로 도입일을 clamp한다(번다운 카드와 동일). 미지정 시 달력 월 1일(하위호환).
+    """
+    period_start = effective_month_start(now_kst, budget_start)
+    _, period_end = month_bounds(now_kst)
+    last_day = (period_end - timedelta(days=1)).day
+    rows = _range_rows(conn, provider, period_start, period_end)
     per_day: dict = {}
     for r in rows:
         dt = parse_ts(r["ts"])
@@ -567,9 +576,12 @@ def daily_series(conn, provider: str | None, now_kst: datetime) -> list[DayPoint
             per_day[dt.day] = per_day.get(dt.day, 0.0) + (r["cost_usd"] or 0)
     out: list[DayPoint] = []
     cumulative = 0.0
-    for d in range(1, now_kst.day + 1):
-        cumulative += per_day.get(d, 0.0)
-        out.append(DayPoint(day=d, cumulative_cost=round(cumulative, 4)))
+    for d in range(period_start.day, last_day + 1):
+        if d <= now_kst.day:
+            cumulative += per_day.get(d, 0.0)
+            out.append(DayPoint(day=d, cumulative_cost=round(cumulative, 4)))
+        else:
+            out.append(DayPoint(day=d, cumulative_cost=None))
     return out
 
 

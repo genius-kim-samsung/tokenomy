@@ -302,16 +302,33 @@ def test_insights_clean_returns_placeholder():
     assert "특이 신호 없음" in cards[0].text
 
 
+def test_daily_series_clamps_to_budget_start():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 50.0, session="pre")    # 도입 전(제외)
+    _insert(conn, "2026-06-13T00:00:00Z", 10.0, session="post")   # 도입 후(KST 6/13)
+    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
+    bs = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
+    pts = daily_series(conn, "claude", now, budget_start=bs)
+    assert len(pts) == 19                       # 6/12~6/30
+    assert pts[0].day == 12 and pts[0].cumulative_cost == 0.0    # 12일 지출 없음
+    assert pts[1].day == 13 and pts[1].cumulative_cost == 10.0   # 6/5 $50 제외
+    assert pts[3].day == 15 and pts[3].cumulative_cost == 10.0   # 오늘까지 누적 유지
+    assert pts[4].cumulative_cost is None       # 16일(미래) → None
+    assert pts[-1].day == 30 and pts[-1].cumulative_cost is None
+
+
 def test_daily_series_cumulative():
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", ts="2026-06-01T10:00:00Z", cost_usd=5.0)
     _msg(conn, dedup_key="b", ts="2026-06-02T10:00:00Z", cost_usd=3.0)
     _msg(conn, dedup_key="c", ts="2026-06-02T12:00:00Z", cost_usd=2.0)
-    pts = daily_series(conn, "claude", _NOW_STATUS)   # _NOW_STATUS = 6/15
-    assert len(pts) == 15                      # 1일~15일
+    pts = daily_series(conn, "claude", _NOW_STATUS)   # budget_start 미지정 → 6/1부터
+    assert len(pts) == 30                       # 1일~30일(말일까지 확장)
     assert pts[0].day == 1 and pts[0].cumulative_cost == 5.0
-    assert pts[1].cumulative_cost == 10.0      # 5 + (3+2) 누적
-    assert pts[14].cumulative_cost == 10.0     # 이후 변동 없음, 누적 유지
+    assert pts[1].cumulative_cost == 10.0       # 5 + (3+2) 누적
+    assert pts[14].day == 15 and pts[14].cumulative_cost == 10.0   # 오늘(마지막 실제값)
+    assert pts[15].cumulative_cost is None      # 16일(미래) → None
+    assert pts[-1].day == 30 and pts[-1].cumulative_cost is None
 
 
 def test_session_context_missing():
