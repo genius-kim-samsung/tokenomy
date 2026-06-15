@@ -619,11 +619,11 @@ def stacked_trend(
         - 어떤 날 cum 또는 아래 밴드 top이 None이면 그 날 top도 None(미래 끊김 전파).
     """
     out: list[dict] = []
-    running: list | None = None   # 직전(아래) 밴드의 top 배열
+    running: list[float | None] | None = None   # 직전(아래) 밴드의 top 배열
     for provider, points in per_provider:
         cum = [p.cumulative_cost for p in points]
         if running is None:
-            top = list(cum)
+            top = [round(c, 4) if c is not None else None for c in cum]
         else:
             top = [
                 None if c is None or r is None else round(r + c, 4)

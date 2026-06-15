@@ -1123,3 +1123,13 @@ def test_stacked_trend_future_none_propagates():
 
 def test_stacked_trend_empty():
     assert stacked_trend([]) == []
+
+
+def test_stacked_trend_asymmetric_none():
+    # 한 provider만 None이어도(아래 밴드 None) 위 밴드 top은 None 전파
+    a = [DayPoint(1, 5.0), DayPoint(2, None)]   # A는 2일에 None
+    b = [DayPoint(1, 2.0), DayPoint(2, 3.0)]    # B는 2일에 데이터
+    bands = stacked_trend([("a", a), ("b", b)])
+    assert bands[0]["cum"][1] is None
+    assert bands[0]["top"][1] is None
+    assert bands[1]["top"] == [7.0, None]
