@@ -280,3 +280,25 @@ def test_count_user_turns_groups_by_session(tmp_path):
     ]
     f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
     assert count_user_turns(str(f)) == {"sess-1": 2}
+
+
+def test_is_user_turn_empty_string_excluded():
+    assert _is_user_turn(_user_line("")) is False
+    assert _is_user_turn(_user_line("   ")) is False  # 공백만인 경우도 제외
+
+
+def test_is_user_turn_counts_role_only_user_line():
+    # type 필드 없이 message.role == "user"만 있어도 사용자 턴으로 인정
+    obj = {"message": {"role": "user", "content": "안녕"}, "sessionId": "sess-1"}
+    assert _is_user_turn(obj) is True
+
+
+def test_count_user_turns_multiple_sessions(tmp_path):
+    f = tmp_path / "multi.jsonl"
+    lines = [
+        _user_line("a", session_id="s1"),
+        _user_line("b", session_id="s1"),
+        _user_line("c", session_id="s2"),
+    ]
+    f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    assert count_user_turns(str(f)) == {"s1": 2, "s2": 1}

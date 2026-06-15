@@ -161,6 +161,7 @@ def _is_user_turn(obj: dict) -> bool:
     msg = obj.get("message")
     if not isinstance(msg, dict):
         return False
+    # type 또는 role 둘 중 하나가 "user"면 통과(한쪽 필드 누락 대비).
     if obj.get("type") != "user" and msg.get("role") != "user":
         return False
     if obj.get("isSidechain") or obj.get("isMeta"):
