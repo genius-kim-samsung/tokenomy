@@ -53,14 +53,23 @@ dashboard (`/settings`):
 {
   "user_label": "me",
   "budget": { "claude": 100, "codex": 50 },
+  "budget_start": null,
   "pricing_overrides": {}
 }
 ```
 
-- `budget.claude` / `budget.codex`: your monthly cap in USD. `0` = no cap
-  (usage-only tracking).
+- `budget.claude`: Claude **monthly** cap in USD. `0` = no cap (usage-only tracking).
+- `budget.codex`: Codex monthly cap — but Codex runs on a **weekly limit (monthly ÷ 4)**:
+  topped up every Monday, unused credit rolls over within the month (resets when the
+  month changes). The dashboard's Codex card shows what's available this week.
+- `budget_start`: budget start date (`YYYY-MM-DD`). When set, that month is computed
+  from the start date (earlier spend excluded). Leave `null` to use the 1st of each
+  month. One-off — only affects the first month.
 - `pricing_overrides`: override per-model rates if your billing differs from
   public list prices, e.g. `{"opus": {"input": 9.0, "output": 36.0}}`.
+
+> The History and Models pages support a **week/month toggle** and a **custom date
+> range** for querying.
 
 ## Data sources
 
