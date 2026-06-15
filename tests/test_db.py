@@ -259,3 +259,56 @@ def test_codex_summary_updates_on_reingest():
     ingest_records(conn, [_rec("c1", session_id="s1", provider="codex", summary="B")], PRICING)
     row = conn.execute("SELECT summary FROM sessions WHERE session_id='s1'").fetchone()
     assert row["summary"] == "B"
+
+
+import sqlite3
+from tokenomy.db import ingest_user_turns
+
+
+def test_migrate_adds_user_turns_to_old_db(tmp_path):
+    # user_turns 컬럼이 없던 구버전 DB
+    path = str(tmp_path / "old.db")
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE sessions (session_id TEXT PRIMARY KEY, project TEXT, "
+                "provider TEXT, first_ts TEXT, last_ts TEXT, label TEXT, summary TEXT)")
+    raw.commit(); raw.close()
+    conn = connect(path)
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    assert "user_turns" in cols
+
+
+def test_codex_record_persists_user_turns():
+    conn = connect(":memory:")
+    rec = _rec("cx", provider="codex", session_id="cx-1")
+    rec.user_turns = 4
+    ingest_records(conn, [rec], PRICING)
+    row = conn.execute("SELECT user_turns FROM sessions WHERE session_id='cx-1'").fetchone()
+    assert row["user_turns"] == 4
+
+
+def test_claude_none_preserves_existing_user_turns():
+    conn = connect(":memory:")
+    # 먼저 user_turns=2로 적재
+    r1 = _rec("m1", session_id="s9"); r1.user_turns = 2
+    ingest_records(conn, [r1], PRICING)
+    # user_turns=None인 후속 레코드는 기존 값을 덮지 않는다(COALESCE)
+    r2 = _rec("m2", session_id="s9")  # user_turns 기본 None
+    ingest_records(conn, [r2], PRICING)
+    row = conn.execute("SELECT user_turns FROM sessions WHERE session_id='s9'").fetchone()
+    assert row["user_turns"] == 2
+
+
+def test_ingest_user_turns_updates_sessions(tmp_path):
+    conn = connect(":memory:")
+    # 세션 행 선생성(ingest_root가 하던 역할 대체)
+    ingest_records(conn, [_rec("m1", session_id="sess-1")], PRICING)
+    # 사용자 턴 2개짜리 파일
+    f = tmp_path / "sess.jsonl"
+    lines = [
+        {"type": "user", "message": {"role": "user", "content": "a"}, "sessionId": "sess-1"},
+        {"type": "user", "message": {"role": "user", "content": "b"}, "sessionId": "sess-1"},
+    ]
+    f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    ingest_user_turns(conn, tmp_path)
+    row = conn.execute("SELECT user_turns FROM sessions WHERE session_id='sess-1'").fetchone()
+    assert row["user_turns"] == 2

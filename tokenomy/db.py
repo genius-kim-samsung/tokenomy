@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     first_ts TEXT,
     last_ts TEXT,
     label TEXT,
-    summary TEXT
+    summary TEXT,
+    user_turns INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -97,6 +98,7 @@ _MIGRATE_COLS = {
     },
     "sessions": {
         "summary": "TEXT",  # 세션 작업 요약(Claude Code aiTitle 캐시). raw 30일 휘발 대비 영구 보존.
+        "user_turns": "INTEGER",  # 세션 내 사용자 턴 수(메시지 수 표시용).
     },
 }
 
@@ -182,15 +184,17 @@ def ingest_records(conn: sqlite3.Connection, records: list[UsageRecord], pricing
             ),
         )
         conn.execute(
-            """INSERT INTO sessions (session_id, project, provider, first_ts, last_ts, summary)
-               VALUES (?,?,?,?,?,?)
+            """INSERT INTO sessions (session_id, project, provider, first_ts, last_ts, summary, user_turns)
+               VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(session_id) DO UPDATE SET
                    last_ts = MAX(sessions.last_ts, excluded.last_ts),
                    first_ts = MIN(sessions.first_ts, excluded.first_ts),
                    project = COALESCE(sessions.project, excluded.project),
                    -- summary: 새 발췌 우선(재인제스트 시 갱신), NULL이면 기존 aiTitle 유지
-                   summary = COALESCE(excluded.summary, sessions.summary)""",
-            (r.session_id, r.cwd, r.provider, r.ts, r.ts, r.summary),
+                   summary = COALESCE(excluded.summary, sessions.summary),
+                   -- user_turns: 새 카운트 우선, NULL이면 기존 값 유지(Claude는 별도 경로로 채움)
+                   user_turns = COALESCE(excluded.user_turns, sessions.user_turns)""",
+            (r.session_id, r.cwd, r.provider, r.ts, r.ts, r.summary, r.user_turns),
         )
     conn.commit()
     return len(records)
@@ -235,6 +239,25 @@ def ingest_titles(conn: sqlite3.Connection, root) -> int:
         for sid, title in parse_titles(str(f)).items():
             conn.execute(
                 "UPDATE sessions SET summary=? WHERE session_id=?", (title, sid)
+            )
+            n += 1
+    conn.commit()
+    return n
+
+
+def ingest_user_turns(conn: sqlite3.Connection, root) -> int:
+    """root 아래 Claude 세션 파일의 사용자 턴 수를 sessions.user_turns로 반영. 갱신 수 반환.
+
+    ingest_root로 세션 행이 먼저 생성된 뒤 호출한다(UPDATE 대상이 있어야 반영됨).
+    parse_titles와 마찬가지로 전체 파일을 풀스캔한다(증분 오프셋 미사용 — 매번 정확한 총량).
+    """
+    from tokenomy.parser import count_user_turns
+
+    n = 0
+    for f in discover_session_files(root):
+        for sid, turns in count_user_turns(str(f)).items():
+            conn.execute(
+                "UPDATE sessions SET user_turns=? WHERE session_id=?", (turns, sid)
             )
             n += 1
     conn.commit()
