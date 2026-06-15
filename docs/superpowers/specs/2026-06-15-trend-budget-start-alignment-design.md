@@ -105,15 +105,15 @@ new Chart(..., {
     { label: '누적 실제', data: trendActual, borderColor: '#cc785c', ... },   // 기존
     { label: '예산 페이스', data: trendPace, borderColor: '#a09d96',
       borderDash: [5,4], pointRadius: 0 },                                     // 기존
-    { label: '월 예산', data: trendBudget, borderColor: '#b9472e',
+    { label: '월 예산', data: trendBudget, borderColor: '#d4a017',
       borderDash: [2,2], pointRadius: 0 },                                     // NEW 가로선
   ]},
 });
 ```
 
-- 가로선 색은 한도 천장을 나타내는, 기존 실제(`#cc785c` 클레이)·페이스(`#a09d96` 웜그레이)와
-  시각적으로 구분되는 warm 계열 빨강. 기본값 `#b9472e`(구현 시 디자인 토큰
-  `static/src/input.css`과 대조해 미세조정 가능).
+- 가로선 색 = `#d4a017`(디자인 토큰 `--color-warn`, 임계/한도 의미). 실제선 코랄
+  (`#cc785c`)·페이스 웜그레이(`#a09d96`)와 hue가 확실히 구분된다. 초기 후보 `#b9472e`는
+  코랄과 같은 테라코타 계열이라 대비가 약해(≈1.6:1) 최종적으로 `--color-warn`로 정했다.
 - 실제선의 `null` 꼬리는 Chart.js 기본(`spanGaps:false`)으로 자동 끊김 — 추가 옵션 불필요.
 
 ## 데이터 흐름
