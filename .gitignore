@@ -48,11 +48,13 @@ docs/superpowers/specs/*
 !docs/superpowers/specs/2026-06-15-budget-cycle-and-date-range-design.md
 !docs/superpowers/specs/2026-06-15-trend-budget-start-alignment-design.md
 !docs/superpowers/specs/2026-06-15-codex-work-summary-design.md
+!docs/superpowers/specs/2026-06-15-trend-ai-composition-design.md
 !docs/superpowers/plans/
 docs/superpowers/plans/*
 !docs/superpowers/plans/2026-06-15-budget-cycle-and-date-range.md
 !docs/superpowers/plans/2026-06-15-trend-budget-start-alignment.md
 !docs/superpowers/plans/2026-06-15-codex-work-summary.md
+!docs/superpowers/plans/2026-06-15-trend-ai-composition.md
 
 # Tailwind standalone 바이너리 — dev 도구, 커밋 안 함(산출 app.css만 추적)
 tools/

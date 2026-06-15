@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, DateGroup, DaySessionRow, FolderGroup, burndown, by_day_session,
     by_model, by_project, by_session, codex_burndown, daily_series,
-    insights, period_bounds, session_detail,
+    insights, period_bounds, session_detail, stacked_trend,
 )
 from tokenomy.budget import budget_from_config, budget_start_kst, load_config, user_label
 
@@ -14,6 +14,13 @@ _SORT_KEYS = {
     "cost": lambda x: x.cost,
     "sessions": lambda x: x.sessions,
     "cache": lambda x: x.cache_ratio,
+}
+
+# 통합 추세 스택 영역 — provider별 (라벨, 선 색, 채움 색[반투명]).
+# 스택 순서 = 등록 순서(아래→위). 신규 provider는 여기 한 줄만 추가하면 밴드가 자동 생성된다.
+_TREND_STYLE: dict[str, tuple[str, str, str]] = {
+    "claude": ("Claude", "#cc785c", "rgba(204,120,92,0.5)"),   # 코랄(기존 누적선 색 유지)
+    "codex": ("Codex", "#5db8a6", "rgba(93,184,166,0.5)"),     # teal(DESIGN.md accent-teal)
 }
 
 
@@ -42,6 +49,20 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     coach = insights(conn, claude_bd, now, None)
     daily = daily_series(conn, None, now, budget_start=bs)
 
+    # 통합 추세: provider별 누적을 스택 밴드로. 데이터 있는 provider만 등록 순서대로.
+    trend_providers = [p for p in _TREND_STYLE if _provider_has_data(conn, p)]
+    bands = stacked_trend(
+        [(p, daily_series(conn, p, now, budget_start=bs)) for p in trend_providers]
+    )
+    trend_series = [
+        {"label": _TREND_STYLE[b["provider"]][0],
+         "color": _TREND_STYLE[b["provider"]][1],
+         "fill": _TREND_STYLE[b["provider"]][2],
+         "top": b["top"], "cum": b["cum"]}
+        for b in bands
+    ]
+    trend_totals = bands[-1]["top"] if bands else [None for _ in daily]
+
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     has_data = last is not None and last["t"] is not None
 
@@ -56,7 +77,8 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "codex_has_data": _provider_has_data(conn, "codex"),
         "projects": projects, "sessions": sessions, "insights": coach,
         "daily_labels": [p.day for p in daily],
-        "daily_actual": [p.cumulative_cost for p in daily],
+        "trend_series": trend_series,
+        "trend_totals": trend_totals,
         # 추세 기준 = 통합 월 예산(Claude+Codex). 페이스선 0→limit(말일에 예산 도달),
         # 가로선 = 예산 천장. 둘이 말일에서 수렴. 분모는 clamp된 기간 일수(len(daily)).
         "daily_pace": [round(budget.total / len(daily) * (i + 1), 4) if budget.total else 0.0

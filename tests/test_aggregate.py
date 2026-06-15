@@ -3,9 +3,9 @@ from datetime import datetime
 import pytest
 
 from tokenomy.aggregate import (
-    KST, burndown, by_day_session, by_model, by_project, by_session,
+    DayPoint, KST, burndown, by_day_session, by_model, by_project, by_session,
     combined_burndown, daily_series, insights, month_bounds, normalize_project,
-    parse_ts, period_bounds, session_detail,
+    parse_ts, period_bounds, session_detail, stacked_trend,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
@@ -504,10 +504,16 @@ def test_overview_context_trend_uses_combined_budget(monkeypatch, tmp_path):
     assert ctx["daily_labels"][0] == 12
     assert ctx["daily_labels"][-1] == 30
     assert len(ctx["daily_labels"]) == 19
-    # 실제선: 6/5(도입 전) 제외, 오늘 이후 None
-    assert ctx["daily_actual"][0] == 0.0        # 6/12 지출 없음
-    assert ctx["daily_actual"][1] == 10.0       # 6/13
-    assert ctx["daily_actual"][-1] is None      # 6/30(미래)
+    # 추세 스택: codex 데이터 없음 → Claude 밴드 1개
+    assert "daily_actual" not in ctx
+    series = ctx["trend_series"]
+    assert [s["label"] for s in series] == ["Claude"]
+    assert series[0]["cum"][0] == 0.0           # 6/12 지출 없음
+    assert series[0]["cum"][1] == 10.0          # 6/13
+    assert series[0]["cum"][-1] is None         # 6/30(미래)
+    assert series[0]["top"] == series[0]["cum"] # 단일 밴드: top == cum
+    assert ctx["trend_totals"][1] == 10.0
+    assert ctx["trend_totals"][-1] is None
     # 페이스선·가로선: 통합 예산(100+40=140) 기준, 말일에 수렴
     assert ctx["daily_pace"][-1] == 140.0
     assert ctx["daily_budget"] == [140.0] * 19
@@ -1088,3 +1094,71 @@ def test_models_context_week_period(monkeypatch, tmp_path):
     ctx = models_context(conn, _ANCHOR_613, "", now_kst=_NOW_613, period="week")
     assert ctx["total"] == 8.0
     assert ctx["period_label"] == "2026-06-08 ~ 06-14"
+
+
+# ─── stacked_trend: provider별 누적 → 스택 밴드 경계 ───────────────────────────
+
+def test_stacked_trend_two_providers():
+    claude = [DayPoint(1, 5.0), DayPoint(2, 8.0), DayPoint(3, None)]
+    codex = [DayPoint(1, 2.0), DayPoint(2, 3.0), DayPoint(3, None)]
+    bands = stacked_trend([("claude", claude), ("codex", codex)])
+    assert [b["provider"] for b in bands] == ["claude", "codex"]
+    assert bands[0]["cum"] == [5.0, 8.0, None]
+    assert bands[0]["top"] == [5.0, 8.0, None]          # 첫 밴드 top = cum
+    assert bands[1]["cum"] == [2.0, 3.0, None]
+    assert bands[1]["top"] == [7.0, 11.0, None]         # running sum(아래 밴드까지)
+    # 불변식: 마지막 밴드 top == provider별 cum 합
+    assert bands[-1]["top"][0] == 5.0 + 2.0
+    assert bands[-1]["top"][1] == 8.0 + 3.0
+
+
+def test_stacked_trend_single_provider_passthrough():
+    claude = [DayPoint(1, 5.0), DayPoint(2, None)]
+    bands = stacked_trend([("claude", claude)])
+    assert bands[0]["cum"] == [5.0, None]
+    assert bands[0]["top"] == [5.0, None]               # 단일 밴드: top == cum
+
+
+def test_stacked_trend_future_none_propagates():
+    # 어떤 날 한 provider가 None이면 그 위 밴드 top도 None
+    a = [DayPoint(1, 1.0), DayPoint(2, None)]
+    b = [DayPoint(1, 2.0), DayPoint(2, None)]
+    bands = stacked_trend([("a", a), ("b", b)])
+    assert bands[1]["top"] == [3.0, None]
+
+
+def test_stacked_trend_empty():
+    assert stacked_trend([]) == []
+
+
+def test_stacked_trend_asymmetric_none():
+    # 한 provider만 None이어도(아래 밴드 None) 위 밴드 top은 None 전파
+    a = [DayPoint(1, 5.0), DayPoint(2, None)]   # A는 2일에 None
+    b = [DayPoint(1, 2.0), DayPoint(2, 3.0)]    # B는 2일에 데이터
+    bands = stacked_trend([("a", a), ("b", b)])
+    assert bands[0]["cum"][1] is None
+    assert bands[0]["top"][1] is None
+    assert bands[1]["top"] == [7.0, None]
+
+
+def test_overview_context_trend_series_stacks_providers(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"budget": {"claude": 100, "codex": 40}}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="c1", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
+    _msg(conn, dedup_key="x1", provider="codex", ts="2026-06-11T10:00:00Z", cost_usd=4.0)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)   # 6/15, budget_start 미설정 → 6/1 시작
+    assert "daily_actual" not in ctx
+    series = ctx["trend_series"]
+    assert [s["label"] for s in series] == ["Claude", "Codex"]
+    assert series[0]["color"] == "#cc785c"      # Claude 코랄
+    assert series[1]["color"] == "#5db8a6"      # Codex teal
+    # x축 6/1~6/30(30일). 6/10 → idx9, 6/11 → idx10
+    assert series[0]["cum"][9] == 10.0          # Claude 누적
+    assert series[1]["cum"][10] == 4.0          # Codex 누적
+    assert series[1]["top"][10] == 14.0         # 스택 top = claude+codex 누적
+    assert ctx["trend_totals"][10] == 14.0      # 합계
+    # 미래(6/16~) None
+    assert series[0]["cum"][-1] is None
+    assert ctx["trend_totals"][-1] is None
