@@ -100,7 +100,7 @@ def test_trend_data_embedded(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert "/static/vendor/chart.min.js" in r.text
-    assert "trendActual" in r.text          # 임베드된 데이터 변수
+    assert "trendSeries" in r.text          # AI별 스택 시리즈 데이터
     assert "trendBudget" in r.text          # 월 예산 가로선 데이터
     assert "월 예산" in r.text               # 가로선 레이블
 

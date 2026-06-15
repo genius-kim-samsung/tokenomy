@@ -613,6 +613,34 @@ def daily_series(conn, provider: str | None, now_kst: datetime,
     return out
 
 
+def stacked_trend(
+    per_provider: list[tuple[str, list[DayPoint]]],
+) -> list[dict]:
+    """provider별 누적 시계열을 스택 밴드 경계값으로 변환.
+
+    per_provider: [(provider, [DayPoint, …]), …] — 모든 리스트가 같은 길이·날짜 정렬
+        (동일 now_kst/budget_start로 만든 daily_series라 보장됨).
+    반환: [{"provider": str, "cum": [float|None], "top": [float|None]}, …]
+        - cum = 그 provider의 원본 누적(툴팁 표시·% 분모용)
+        - top = 아래 밴드까지 더한 running sum(차트 fill 경계용)
+        - 어떤 날 cum 또는 아래 밴드 top이 None이면 그 날 top도 None(미래 끊김 전파).
+    """
+    out: list[dict] = []
+    running: list[float | None] | None = None   # 직전(아래) 밴드의 top 배열
+    for provider, points in per_provider:
+        cum = [p.cumulative_cost for p in points]
+        if running is None:
+            top = [round(c, 4) if c is not None else None for c in cum]
+        else:
+            top = [
+                None if c is None or r is None else round(r + c, 4)
+                for c, r in zip(cum, running)
+            ]
+        out.append({"provider": provider, "cum": cum, "top": top})
+        running = top
+    return out
+
+
 def session_detail(conn, session_id: str) -> SessionDetail | None:
     totals = conn.execute(
         "SELECT COUNT(*) rows, SUM(cost_usd) cost, SUM(web_search) ws, "
