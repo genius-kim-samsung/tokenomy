@@ -504,10 +504,16 @@ def test_overview_context_trend_uses_combined_budget(monkeypatch, tmp_path):
     assert ctx["daily_labels"][0] == 12
     assert ctx["daily_labels"][-1] == 30
     assert len(ctx["daily_labels"]) == 19
-    # 실제선: 6/5(도입 전) 제외, 오늘 이후 None
-    assert ctx["daily_actual"][0] == 0.0        # 6/12 지출 없음
-    assert ctx["daily_actual"][1] == 10.0       # 6/13
-    assert ctx["daily_actual"][-1] is None      # 6/30(미래)
+    # 추세 스택: codex 데이터 없음 → Claude 밴드 1개
+    assert "daily_actual" not in ctx
+    series = ctx["trend_series"]
+    assert [s["label"] for s in series] == ["Claude"]
+    assert series[0]["cum"][0] == 0.0           # 6/12 지출 없음
+    assert series[0]["cum"][1] == 10.0          # 6/13
+    assert series[0]["cum"][-1] is None         # 6/30(미래)
+    assert series[0]["top"] == series[0]["cum"] # 단일 밴드: top == cum
+    assert ctx["trend_totals"][1] == 10.0
+    assert ctx["trend_totals"][-1] is None
     # 페이스선·가로선: 통합 예산(100+40=140) 기준, 말일에 수렴
     assert ctx["daily_pace"][-1] == 140.0
     assert ctx["daily_budget"] == [140.0] * 19
@@ -1133,3 +1139,26 @@ def test_stacked_trend_asymmetric_none():
     assert bands[0]["cum"][1] is None
     assert bands[0]["top"][1] is None
     assert bands[1]["top"] == [7.0, None]
+
+
+def test_overview_context_trend_series_stacks_providers(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"budget": {"claude": 100, "codex": 40}}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="c1", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
+    _msg(conn, dedup_key="x1", provider="codex", ts="2026-06-11T10:00:00Z", cost_usd=4.0)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)   # 6/15, budget_start 미설정 → 6/1 시작
+    assert "daily_actual" not in ctx
+    series = ctx["trend_series"]
+    assert [s["label"] for s in series] == ["Claude", "Codex"]
+    assert series[0]["color"] == "#cc785c"      # Claude 코랄
+    assert series[1]["color"] == "#5db8a6"      # Codex teal
+    # x축 6/1~6/30(30일). 6/10 → idx9, 6/11 → idx10
+    assert series[0]["cum"][9] == 10.0          # Claude 누적
+    assert series[1]["cum"][10] == 4.0          # Codex 누적
+    assert series[1]["top"][10] == 14.0         # 스택 top = claude+codex 누적
+    assert ctx["trend_totals"][10] == 14.0      # 합계
+    # 미래(6/16~) None
+    assert series[0]["cum"][-1] is None
+    assert ctx["trend_totals"][-1] is None

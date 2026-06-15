@@ -2,13 +2,17 @@
 <script src="/static/vendor/chart.min.js"></script>
 <script>
   const trendLabels = {{ daily_labels|tojson }};
-  const trendActual = {{ daily_actual|tojson }};
+  const trendActual = {{ trend_totals|tojson }};
   const trendPace   = {{ daily_pace|tojson }};
   const trendBudget = {{ daily_budget|tojson }};
+  const trendSeries = {{ trend_series|tojson }};
   new Chart(document.getElementById('trend'), {
     type: 'line',
     data: { labels: trendLabels, datasets: [
-      { label: '누적 실제', data: trendActual, borderColor: '#cc785c', backgroundColor: '#cc785c', tension: .2 },
+      ...trendSeries.map(s => ({
+        label: s.label + ' 누적', data: s.cum,
+        borderColor: s.color, backgroundColor: s.fill, tension: .2, fill: false,
+      })),
       { label: '예산 페이스', data: trendPace, borderColor: '#a09d96', borderDash: [5,4], pointRadius: 0 },
       { label: '월 예산', data: trendBudget, borderColor: '#d4a017', borderDash: [2,2], pointRadius: 0 },
     ]},
