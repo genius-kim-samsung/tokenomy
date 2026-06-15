@@ -6,6 +6,12 @@ on:
 permissions:
   contents: write
 
+# 2026-06-16부터 GitHub Actions가 Node 20 기반 액션을 Node 24로 강제 실행한다.
+# 미리 opt-in해 deprecation 경고를 없애고 호환을 확보한다.
+# (근본 해결은 checkout/setup-python/action-gh-release 메이저 버전 업그레이드 — 다음 점검 시.)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-windows:
     runs-on: windows-latest
