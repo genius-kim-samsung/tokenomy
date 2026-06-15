@@ -49,7 +49,7 @@
         const v = o.ds.cum[li] || 0;
         const pct = total ? Math.round((v / total) * 100) : 0;
         return {
-          text: `${o.ds.label}  ${pct}%  $${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+          text: `${o.ds.label}  $${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}(${pct}%)`,
           color: o.ds.borderColor,
         };
       });
