@@ -12,11 +12,12 @@ PRICING = {
 
 def _rec(msg_id, **kw):
     return UsageRecord(
-        provider="claude", session_id=kw.get("session_id", "s1"), cwd="/p",
+        provider=kw.get("provider", "claude"), session_id=kw.get("session_id", "s1"), cwd="/p",
         ts=kw.get("ts", "2026-06-11T10:00:00Z"), model="claude-opus-4-8",
         input_tokens=kw.get("input_tokens", 1_000_000), output_tokens=0,
         cache_creation=0, cache_read=0, message_id=msg_id,
         request_id=kw.get("request_id"), is_sidechain=kw.get("is_sidechain", False),
+        summary=kw.get("summary"),
     )
 
 
@@ -230,3 +231,21 @@ def test_connect_default_uses_paths_db(tmp_path, monkeypatch):
     conn.execute("INSERT INTO meta (key, value) VALUES ('x', '1')")
     conn.commit()
     assert (tmp_path / "data" / "tokenomy.db").exists()
+
+
+def test_codex_summary_persisted_to_sessions():
+    conn = connect(":memory:")
+    ingest_records(conn, [_rec("c1", session_id="s1", provider="codex",
+                               summary="codex 첫 프롬프트")], PRICING)
+    row = conn.execute("SELECT summary FROM sessions WHERE session_id='s1'").fetchone()
+    assert row["summary"] == "codex 첫 프롬프트"
+
+
+def test_summary_none_does_not_overwrite_existing():
+    # aiTitle(별도 경로)로 채워진 summary를, 뒤이은 summary=None 적재가 덮지 않아야 한다
+    conn = connect(":memory:")
+    ingest_records(conn, [_rec("m1", session_id="s2", summary="기존 요약")], PRICING)
+    ingest_records(conn, [_rec("m2", session_id="s2", summary=None,
+                               ts="2026-06-12T00:00:00Z")], PRICING)
+    row = conn.execute("SELECT summary FROM sessions WHERE session_id='s2'").fetchone()
+    assert row["summary"] == "기존 요약"

@@ -182,13 +182,14 @@ def ingest_records(conn: sqlite3.Connection, records: list[UsageRecord], pricing
             ),
         )
         conn.execute(
-            """INSERT INTO sessions (session_id, project, provider, first_ts, last_ts)
-               VALUES (?,?,?,?,?)
+            """INSERT INTO sessions (session_id, project, provider, first_ts, last_ts, summary)
+               VALUES (?,?,?,?,?,?)
                ON CONFLICT(session_id) DO UPDATE SET
                    last_ts = MAX(sessions.last_ts, excluded.last_ts),
                    first_ts = MIN(sessions.first_ts, excluded.first_ts),
-                   project = COALESCE(sessions.project, excluded.project)""",
-            (r.session_id, r.cwd, r.provider, r.ts, r.ts),
+                   project = COALESCE(sessions.project, excluded.project),
+                   summary = COALESCE(excluded.summary, sessions.summary)""",
+            (r.session_id, r.cwd, r.provider, r.ts, r.ts, r.summary),
         )
     conn.commit()
     return len(records)
