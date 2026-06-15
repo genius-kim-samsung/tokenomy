@@ -16,7 +16,7 @@ from tokenomy.db import connect
 from tokenomy.paths import resource_path
 from tokenomy.update import check_update
 from tokenomy.web.views import (
-    history_context, models_context, overview_context, session_context,
+    dimension_context, history_context, overview_context, session_context,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -112,8 +112,8 @@ def models_view(request: Request, anchor: str | None = None, provider: str = "",
     period = period if period in _PERIODS else "month"
     conn = connect()
     update_tag = check_update(conn)
-    ctx = models_context(conn, _parse_anchor(anchor), provider,
-                         period=period, start=start, end=end)
+    ctx = dimension_context(conn, _parse_anchor(anchor), provider, dim="model",
+                            period=period, start=start, end=end)
     return templates.TemplateResponse(
         request, "models.html",
         {**ctx, "notice": notice, "update_tag": update_tag},

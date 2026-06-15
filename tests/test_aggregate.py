@@ -9,7 +9,7 @@ from tokenomy.aggregate import (
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
-from tokenomy.web.views import history_context, models_context, overview_context, session_context
+from tokenomy.web.views import history_context, dimension_context, overview_context, session_context
 
 # June 2026 has 30 days
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
@@ -888,24 +888,41 @@ def test_sidechain_split_empty_is_zero():
     assert sp.total_cost == 0.0 and sp.sub_share == 0.0
 
 
-# ─── models_context ──────────────────────────────────────────────────────────
+# ─── dimension_context ───────────────────────────────────────────────────────
 
 
-def test_models_context_shape(monkeypatch, tmp_path):
+def test_dimension_context_model_shape(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", session_id="s1", model="claude-opus-4-8",
          ts="2026-06-10T10:00:00Z", cost_usd=8.0)
     _msg(conn, dedup_key="b", session_id="s2", model="claude-haiku-4-5",
          ts="2026-06-10T10:00:00Z", cost_usd=2.0)
-    ctx = models_context(conn, _ANCHOR_613, "", now_kst=_NOW_613)
-    assert ctx["active_nav"] == "models"
+    ctx = dimension_context(conn, _ANCHOR_613, "", dim="model", now_kst=_NOW_613)
+    assert ctx["active_nav"] == "analysis"
+    assert ctx["dim"] == "model" and ctx["dim_label"] == "모델"
     assert ctx["total"] == 10.0
-    assert ctx["period_label"] == "2026-06"
-    # 비중%: opus 80%, 행에 share 포함
     top = ctx["rows"][0]
-    assert top["model"] == "claude-opus-4-8"
+    assert top["key"] == "claude-opus-4-8"
     assert top["share"] == 80.0
+    assert ctx["claude_only"] is False
+    assert ctx["split"].total_cost == 10.0
+
+
+def test_dimension_context_skill_null_bucket_and_flag(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", ts="2026-06-10T10:00:00Z", cost_usd=5.0, attribution_skill=None)
+    ctx = dimension_context(conn, _ANCHOR_613, "", dim="skill", now_kst=_NOW_613)
+    assert ctx["dim_label"] == "스킬" and ctx["claude_only"] is True
+    assert ctx["rows"][0]["key"] == "(미귀속)"      # NULL → 미귀속 라벨
+
+
+def test_dimension_context_bad_dim_falls_back_to_model(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    ctx = dimension_context(conn, _ANCHOR_613, "", dim="evil", now_kst=_NOW_613)
+    assert ctx["dim"] == "model"
 
 
 # ─── build_date_tree: 날짜→폴더→세션 2단 그룹핑 ───────────────────────────────
@@ -1162,7 +1179,7 @@ def test_models_context_week_period(monkeypatch, tmp_path):
          ts="2026-06-09T10:00:00Z", cost_usd=8.0)                       # 주 안
     _msg(conn, dedup_key="b", session_id="s2", model="claude-haiku-4-5",
          ts="2026-06-20T10:00:00Z", cost_usd=2.0)                       # 주 밖
-    ctx = models_context(conn, _ANCHOR_613, "", now_kst=_NOW_613, period="week")
+    ctx = dimension_context(conn, _ANCHOR_613, "", dim="model", now_kst=_NOW_613, period="week")
     assert ctx["total"] == 8.0
     assert ctx["period_label"] == "2026-06-08 ~ 06-14"
 

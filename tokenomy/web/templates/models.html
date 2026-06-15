@@ -39,7 +39,7 @@
       <tr><td>${{ '%.2f'|format(m.cost) }}</td><td>{{ '%.1f'|format(m.share) }}%</td>
           <td>{{ m.sessions }}</td><td>{{ '%.0f'|format(m.cache_ratio * 100) }}%</td>
           <td>{{ '{:,}'.format(m.input_tokens) }}</td><td>{{ '{:,}'.format(m.output_tokens) }}</td>
-          <td>{{ '{:,}'.format(m.cache_read) }}</td><td>{{ m.model }}</td></tr>
+          <td>{{ '{:,}'.format(m.cache_read) }}</td><td>{{ m.key }}</td></tr>
       {% else %}<tr><td colspan="8" class="muted">이 기간 데이터 없음</td></tr>{% endfor %}
     </tbody>
   </table>

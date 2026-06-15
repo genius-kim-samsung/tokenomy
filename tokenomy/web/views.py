@@ -4,9 +4,10 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
-    KST, DateGroup, DaySessionRow, FolderGroup, burndown, by_day_session,
-    by_model, by_project, by_session, codex_burndown, daily_series,
-    insights, period_bounds, session_detail, stacked_trend,
+    KST, DIM_COLUMNS, DateGroup, DaySessionRow, FolderGroup, burndown,
+    by_day_session, by_dimension, by_project, by_session, codex_burndown,
+    daily_series, insights, period_bounds, session_detail, sidechain_split,
+    stacked_trend,
 )
 from tokenomy.budget import budget_from_config, budget_start_kst, load_config, user_label
 
@@ -123,30 +124,38 @@ def _resolve_range(anchor_kst: datetime, period: str, start: str | None, end: st
     return start_dt, nxt_dt, label, period, False
 
 
-def models_context(conn, anchor_kst: datetime, provider: str,
-                   now_kst: datetime | None = None, *,
-                   period: str = "month", start: str | None = None,
-                   end: str | None = None) -> dict:
-    """모델별 사용/비용. 주/월 기간 또는 사용자 지정 [start, end]. 행에 비중%(share)."""
+DIM_LABELS = {"model": "모델", "skill": "스킬", "branch": "브랜치"}
+_NULL_BUCKET = {"model": "(unknown)", "skill": "(미귀속)", "branch": "(브랜치 없음)"}
+
+
+def dimension_context(conn, anchor_kst: datetime, provider: str, *,
+                      dim: str = "model", now_kst: datetime | None = None,
+                      period: str = "month", start: str | None = None,
+                      end: str | None = None) -> dict:
+    """차원별(모델/스킬/브랜치) 사용/비용 + 서브에이전트 비중. 주/월 또는 사용자 지정 구간."""
+    dim = dim if dim in DIM_COLUMNS else "model"
     now = now_kst or datetime.now(KST)
     config = load_config()
     s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
-    rows = by_model(conn, provider or None, s, nxt)
-    total = round(sum(m.cost for m in rows), 4)
+    rows = by_dimension(conn, provider or None, s, nxt, dim)
+    total = round(sum(r.cost for r in rows), 4)
+    null_label = _NULL_BUCKET[dim]
     table = [
-        {"model": m.model or "(unknown)", "cost": m.cost,
-         "share": round(m.cost / total * 100, 1) if total else 0.0,
-         "sessions": m.sessions, "cache_ratio": m.cache_ratio,
-         "input_tokens": m.input_tokens, "output_tokens": m.output_tokens,
-         "cache_creation": m.cache_creation, "cache_read": m.cache_read}
-        for m in rows
+        {"key": (r.key if r.key not in (None, "") else null_label), "cost": r.cost,
+         "share": round(r.cost / total * 100, 1) if total else 0.0,
+         "sessions": r.sessions, "cache_ratio": r.cache_ratio,
+         "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
+         "cache_creation": r.cache_creation, "cache_read": r.cache_read}
+        for r in rows
     ]
+    split = sidechain_split(conn, provider or None, s, nxt)
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     return {
-        "active_nav": "models", "user_label": user_label(config),
-        "provider": provider, "rows": table, "count": len(table), "total": total,
-        "period": period, "custom": custom,
-        "period_label": label,
+        "active_nav": "analysis", "user_label": user_label(config),
+        "provider": provider, "dim": dim, "dim_label": DIM_LABELS[dim],
+        "claude_only": dim in ("skill", "branch"), "split": split,
+        "rows": table, "count": len(table), "total": total,
+        "period": period, "custom": custom, "period_label": label,
         "anchor": anchor_kst.strftime("%Y-%m-%d"),
         "start": start or "", "end": end or "",
         "prev_anchor": (s - timedelta(days=1)).strftime("%Y-%m-%d"),
