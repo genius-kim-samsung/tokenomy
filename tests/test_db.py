@@ -242,10 +242,20 @@ def test_codex_summary_persisted_to_sessions():
 
 
 def test_summary_none_does_not_overwrite_existing():
-    # aiTitle(별도 경로)로 채워진 summary를, 뒤이은 summary=None 적재가 덮지 않아야 한다
+    # Claude 경로 재현: ingest_titles의 UPDATE로 채운 aiTitle을 이후 None 적재가 덮지 않음
     conn = connect(":memory:")
-    ingest_records(conn, [_rec("m1", session_id="s2", summary="기존 요약")], PRICING)
+    ingest_records(conn, [_rec("m1", session_id="s2", summary=None)], PRICING)
+    conn.execute("UPDATE sessions SET summary='aiTitle 요약' WHERE session_id='s2'")
     ingest_records(conn, [_rec("m2", session_id="s2", summary=None,
                                ts="2026-06-12T00:00:00Z")], PRICING)
     row = conn.execute("SELECT summary FROM sessions WHERE session_id='s2'").fetchone()
-    assert row["summary"] == "기존 요약"
+    assert row["summary"] == "aiTitle 요약"
+
+
+def test_codex_summary_updates_on_reingest():
+    # 재인제스트로 발췌가 바뀌면 새 값으로 갱신(excluded 우선)
+    conn = connect(":memory:")
+    ingest_records(conn, [_rec("c1", session_id="s1", provider="codex", summary="A")], PRICING)
+    ingest_records(conn, [_rec("c1", session_id="s1", provider="codex", summary="B")], PRICING)
+    row = conn.execute("SELECT summary FROM sessions WHERE session_id='s1'").fetchone()
+    assert row["summary"] == "B"

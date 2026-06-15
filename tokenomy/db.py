@@ -188,6 +188,7 @@ def ingest_records(conn: sqlite3.Connection, records: list[UsageRecord], pricing
                    last_ts = MAX(sessions.last_ts, excluded.last_ts),
                    first_ts = MIN(sessions.first_ts, excluded.first_ts),
                    project = COALESCE(sessions.project, excluded.project),
+                   -- summary: 새 발췌 우선(재인제스트 시 갱신), NULL이면 기존 aiTitle 유지
                    summary = COALESCE(excluded.summary, sessions.summary)""",
             (r.session_id, r.cwd, r.provider, r.ts, r.ts, r.summary),
         )
