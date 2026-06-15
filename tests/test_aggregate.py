@@ -3,9 +3,9 @@ from datetime import datetime
 import pytest
 
 from tokenomy.aggregate import (
-    KST, burndown, by_day_session, by_model, by_project, by_session,
+    DayPoint, KST, burndown, by_day_session, by_model, by_project, by_session,
     combined_burndown, daily_series, insights, month_bounds, normalize_project,
-    parse_ts, period_bounds, session_detail,
+    parse_ts, period_bounds, session_detail, stacked_trend,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
@@ -1088,3 +1088,38 @@ def test_models_context_week_period(monkeypatch, tmp_path):
     ctx = models_context(conn, _ANCHOR_613, "", now_kst=_NOW_613, period="week")
     assert ctx["total"] == 8.0
     assert ctx["period_label"] == "2026-06-08 ~ 06-14"
+
+
+# ─── stacked_trend: provider별 누적 → 스택 밴드 경계 ───────────────────────────
+
+def test_stacked_trend_two_providers():
+    claude = [DayPoint(1, 5.0), DayPoint(2, 8.0), DayPoint(3, None)]
+    codex = [DayPoint(1, 2.0), DayPoint(2, 3.0), DayPoint(3, None)]
+    bands = stacked_trend([("claude", claude), ("codex", codex)])
+    assert [b["provider"] for b in bands] == ["claude", "codex"]
+    assert bands[0]["cum"] == [5.0, 8.0, None]
+    assert bands[0]["top"] == [5.0, 8.0, None]          # 첫 밴드 top = cum
+    assert bands[1]["cum"] == [2.0, 3.0, None]
+    assert bands[1]["top"] == [7.0, 11.0, None]         # running sum(아래 밴드까지)
+    # 불변식: 마지막 밴드 top == provider별 cum 합
+    assert bands[-1]["top"][0] == 5.0 + 2.0
+    assert bands[-1]["top"][1] == 8.0 + 3.0
+
+
+def test_stacked_trend_single_provider_passthrough():
+    claude = [DayPoint(1, 5.0), DayPoint(2, None)]
+    bands = stacked_trend([("claude", claude)])
+    assert bands[0]["cum"] == [5.0, None]
+    assert bands[0]["top"] == [5.0, None]               # 단일 밴드: top == cum
+
+
+def test_stacked_trend_future_none_propagates():
+    # 어떤 날 한 provider가 None이면 그 위 밴드 top도 None
+    a = [DayPoint(1, 1.0), DayPoint(2, None)]
+    b = [DayPoint(1, 2.0), DayPoint(2, None)]
+    bands = stacked_trend([("a", a), ("b", b)])
+    assert bands[1]["top"] == [3.0, None]
+
+
+def test_stacked_trend_empty():
+    assert stacked_trend([]) == []
