@@ -531,3 +531,11 @@ def test_analysis_shows_sidechain_card(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/analysis?anchor=2026-06-10")
     assert "서브에이전트 비중" in r.text
+
+
+def test_analysis_all_provider_link_preserves_dim(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/analysis?dim=branch")
+    assert r.status_code == 200
+    # 모든 네비 링크가 dim을 보존해야 함 — dim 없는 /analysis?anchor= 링크가 존재하면 안 됨
+    assert "/analysis?anchor=" not in r.text

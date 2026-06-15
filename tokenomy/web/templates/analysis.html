@@ -25,7 +25,7 @@
       </span>
     </form>
     <nav class="toggle small">
-      <a href="/analysis?anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if provider == '' }}">전체</a>
+      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if provider == '' }}">전체</a>
       <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=claude" class="{{ 'on' if provider == 'claude' }}">Claude</a>
       <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=codex" class="{{ 'on' if provider == 'codex' }}">Codex</a>
     </nav>
