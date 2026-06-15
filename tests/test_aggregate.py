@@ -440,6 +440,28 @@ def test_overview_context_applies_budget_start(monkeypatch, tmp_path):
     assert ctx["claude_bd"].days_in_month == 19          # 6/12~6/30
 
 
+def test_overview_context_trend_uses_combined_budget(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
+                   encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="pre", provider="claude", ts="2026-06-05T10:00:00Z", cost_usd=99.0)
+    _msg(conn, dedup_key="post", provider="claude", ts="2026-06-13T10:00:00Z", cost_usd=10.0)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)   # 6/15
+    # x축: 6/12~6/30 (19일)
+    assert ctx["daily_labels"][0] == 12
+    assert ctx["daily_labels"][-1] == 30
+    assert len(ctx["daily_labels"]) == 19
+    # 실제선: 6/5(도입 전) 제외, 오늘 이후 None
+    assert ctx["daily_actual"][0] == 0.0        # 6/12 지출 없음
+    assert ctx["daily_actual"][1] == 10.0       # 6/13
+    assert ctx["daily_actual"][-1] is None      # 6/30(미래)
+    # 페이스선·가로선: 통합 예산(100+40=140) 기준, 말일에 수렴
+    assert ctx["daily_pace"][-1] == 140.0
+    assert ctx["daily_budget"] == [140.0] * 19
+
+
 def test_overview_context_no_budget_unconfigured(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
     conn = connect(":memory:")

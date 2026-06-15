@@ -40,7 +40,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     sessions = by_session(conn, None, now, limit_n=10)
     # 효율 코치/추세는 전 AI 합산·달력 월 기준 유지(설계). Burndown 인자는 claude 카드 재사용.
     coach = insights(conn, claude_bd, now, None)
-    daily = daily_series(conn, None, now)
+    daily = daily_series(conn, None, now, budget_start=bs)
 
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     has_data = last is not None and last["t"] is not None
@@ -57,8 +57,11 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "projects": projects, "sessions": sessions, "insights": coach,
         "daily_labels": [p.day for p in daily],
         "daily_actual": [p.cumulative_cost for p in daily],
-        "daily_pace": [round(claude_bd.limit / claude_bd.days_in_month * p.day, 4)
-                       if claude_bd.limit else 0.0 for p in daily],
+        # 추세 기준 = 통합 월 예산(Claude+Codex). 페이스선 0→limit(말일에 예산 도달),
+        # 가로선 = 예산 천장. 둘이 말일에서 수렴. 분모는 clamp된 기간 일수(len(daily)).
+        "daily_pace": [round(budget.total / len(daily) * (i + 1), 4) if budget.total else 0.0
+                       for i, _ in enumerate(daily)],
+        "daily_budget": [budget.total if budget.total else 0.0 for _ in daily],
         "last_ts": last["t"] if has_data else None,
         "has_data": has_data,
     }
