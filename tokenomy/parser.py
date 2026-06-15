@@ -36,6 +36,7 @@ class UsageRecord:
     cache_creation_1h: int = 0  # cache_creation 중 1시간 캐시 분량(단가 = input × 2). 나머지는 5분 캐시.
     attribution_skill: str | None = None
     git_branch: str | None = None
+    summary: str | None = None  # 세션 식별용 첫 프롬프트 발췌(Codex). Claude는 None(aiTitle 별도 경로).
 
     @property
     def total_tokens(self) -> int:

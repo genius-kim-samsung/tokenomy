@@ -60,3 +60,59 @@ def test_malformed_lines_skipped(tmp_path):
     rec = parse_rollout(str(f))
     assert rec is not None
     assert rec.input_tokens == 50
+
+
+def _rollout_with_messages(tmp_path, msgs, name="rollout-msg.jsonl"):
+    """session_meta + token_count 뒤에 msgs 라인을 붙인 rollout 파일을 만든다."""
+    f = tmp_path / name
+    lines = [
+        {"type": "session_meta", "payload": {"id": "sess-m", "cwd": "/proj",
+                                             "timestamp": "2026-06-11T12:50:14Z"}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 100, "cached_input_tokens": 40,
+                                  "output_tokens": 10}}}},
+    ]
+    lines.extend(msgs)
+    f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    return f
+
+
+def test_summary_from_user_message(tmp_path):
+    f = _rollout_with_messages(tmp_path, [
+        {"type": "response_item", "payload": {"type": "message", "role": "user",
+            "content": [{"type": "input_text",
+                         "text": "<environment_context>\n  <cwd>/proj</cwd>\n</environment_context>"}]}},
+        {"type": "event_msg", "payload": {"type": "user_message",
+                                          "message": "내역에 codex 요약 추가해줘"}},
+    ])
+    rec = parse_rollout(str(f))
+    assert rec.summary == "내역에 codex 요약 추가해줘"
+
+
+def test_summary_fallback_skips_environment_context(tmp_path):
+    f = _rollout_with_messages(tmp_path, [
+        {"type": "response_item", "payload": {"type": "message", "role": "user",
+            "content": [{"type": "input_text",
+                         "text": "<environment_context>\n  <cwd>/proj</cwd>\n</environment_context>"}]}},
+        {"type": "response_item", "payload": {"type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "실제 사용자 입력"}]}},
+    ])
+    rec = parse_rollout(str(f))
+    assert rec.summary == "실제 사용자 입력"
+
+
+def test_summary_truncated_and_normalized(tmp_path):
+    f = _rollout_with_messages(tmp_path, [
+        {"type": "event_msg", "payload": {"type": "user_message",
+                                          "message": "줄1\n줄2   여러   공백"}},
+    ])
+    assert parse_rollout(str(f)).summary == "줄1 줄2 여러 공백"
+
+    f2 = _rollout_with_messages(tmp_path, [
+        {"type": "event_msg", "payload": {"type": "user_message", "message": "가" * 200}},
+    ], name="rollout-long.jsonl")
+    assert len(parse_rollout(str(f2)).summary) == 120
+
+
+def test_summary_none_when_no_user_input(tmp_path):
+    assert parse_rollout(str(_write_rollout(tmp_path))).summary is None

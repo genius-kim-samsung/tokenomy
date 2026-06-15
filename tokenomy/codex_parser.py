@@ -25,6 +25,52 @@ from tokenomy.parser import UsageRecord
 CODEX_ROOT = Path.home() / ".codex" / "sessions"
 
 
+def _truncate(text: str, limit: int = 120) -> str:
+    """개행→공백, 연속 공백을 접고 limit자로 자른다."""
+    return " ".join(text.split())[:limit]
+
+
+def _extract_first_prompt(path: str, limit: int = 120) -> str | None:
+    """rollout에서 첫 사용자 프롬프트를 limit자로 발췌. 없으면 None.
+
+    1순위: payload.type == 'user_message'의 message(환경 컨텍스트가 빠진 순수 입력).
+    2순위: message(role=user) content의 첫 텍스트 중 '<environment_context'로
+           시작하지 않는 것. (user_message가 전무한 세션 대비 fallback)
+    rollout은 세션당 1파일이라 작아 parse_rollout과 별도로 한 번 더 읽어도 무방.
+    """
+    fallback: str | None = None
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                o = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(o, dict):
+                continue
+            p = o.get("payload")
+            p = p if isinstance(p, dict) else {}
+            if p.get("type") == "user_message":
+                msg = p.get("message")
+                if isinstance(msg, str) and msg.strip():
+                    return _truncate(msg, limit)
+            elif fallback is None and p.get("role") == "user":
+                content = p.get("content")
+                txt = None
+                if isinstance(content, str):
+                    txt = content
+                elif isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and isinstance(c.get("text"), str) and c["text"].strip():
+                            txt = c["text"]
+                            break
+                if txt and not txt.lstrip().startswith("<environment_context"):
+                    fallback = _truncate(txt, limit)
+    return fallback
+
+
 def parse_rollout(path: str) -> UsageRecord | None:
     """rollout 파일 1개 → 세션 총량 UsageRecord. token_count 없으면 None."""
     session_id = cwd = ts = model = None
@@ -79,6 +125,7 @@ def parse_rollout(path: str) -> UsageRecord | None:
         cache_creation=0,
         cache_read=cached,
         message_id=session_id,  # 세션당 1레코드 → dedup_key = session_id
+        summary=_extract_first_prompt(path),
     )
 
 
