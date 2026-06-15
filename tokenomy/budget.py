@@ -11,7 +11,10 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+KST = timezone(timedelta(hours=9))
 
 
 @dataclass
@@ -25,6 +28,10 @@ class Budget:
 
     def limit_for(self, provider: str) -> float:
         return self.claude if provider == "claude" else self.codex
+
+    def weekly_codex_limit(self) -> float:
+        """Codex 주간 한도 = 월 한도 ÷ 4 (예산 정책)."""
+        return self.codex / 4
 
 
 def _default_label() -> str:
@@ -44,6 +51,7 @@ def _config_path(path: str | Path | None = None) -> Path:
 def load_config(path: str | Path | None = None) -> dict:
     base = {"user_label": _default_label(),
             "budget": {"claude": 0.0, "codex": 0.0},
+            "budget_start": None,
             "pricing_overrides": {}}
     p = _config_path(path)
     if not p.exists():
@@ -69,3 +77,17 @@ def budget_from_config(config: dict) -> Budget:
 
 def user_label(config: dict) -> str:
     return config.get("user_label") or _default_label()
+
+
+def budget_start_kst(config: dict) -> datetime | None:
+    """config['budget_start']('YYYY-MM-DD')를 KST 자정 datetime으로 파싱.
+
+    빈 문자열·None·형식 오류는 모두 None(미설정)으로 취급한다(하위호환).
+    """
+    raw = config.get("budget_start")
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=KST)
+    except (ValueError, TypeError):
+        return None

@@ -68,3 +68,38 @@ def test_config_path_default_uses_paths(tmp_path, monkeypatch):
     monkeypatch.delenv("TOKENOMY_CONFIG", raising=False)
     monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
     assert _config_path() == tmp_path / "config" / "tokenomy.config.json"
+
+
+from datetime import datetime, timezone, timedelta
+
+from tokenomy.budget import budget_start_kst
+
+_KST = timezone(timedelta(hours=9))
+
+
+def test_weekly_codex_limit_is_quarter():
+    b = Budget(claude=200, codex=40)
+    assert b.weekly_codex_limit() == 10.0   # 40 / 4
+
+
+def test_budget_start_kst_parses_iso_date():
+    dt = budget_start_kst({"budget_start": "2026-06-12"})
+    assert dt == datetime(2026, 6, 12, 0, 0, tzinfo=_KST)
+
+
+def test_budget_start_kst_none_when_absent_or_blank():
+    assert budget_start_kst({}) is None
+    assert budget_start_kst({"budget_start": ""}) is None
+    assert budget_start_kst({"budget_start": "garbage"}) is None
+
+
+def test_load_config_keeps_budget_start(tmp_path):
+    p = tmp_path / "c.json"
+    save_config({"budget": {"claude": 1, "codex": 2}, "budget_start": "2026-06-12"}, p)
+    cfg = load_config(p)
+    assert cfg["budget_start"] == "2026-06-12"
+
+
+def test_load_config_missing_budget_start_is_none(tmp_path):
+    cfg = load_config(tmp_path / "nope.json")
+    assert cfg.get("budget_start") is None
