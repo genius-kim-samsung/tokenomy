@@ -12,6 +12,7 @@
     label: s.label,
     data: s.top,
     cum: s.cum,                          // 툴팁용 raw 누적(병렬 배열)
+    isArea: true,                        // 툴팁에서 provider 밴드 판별용
     borderColor: s.color,
     backgroundColor: s.fill,
     fill: i === 0 ? 'origin' : '-1',
@@ -33,7 +34,7 @@
           callbacks: {
             label: (ctx) => {
               const ds = ctx.dataset;
-              if (ds.cum) {                              // provider 밴드 → 금액 + % 점유율
+              if (ds.isArea) {                           // provider 밴드 → 금액 + % 점유율
                 const v = ds.cum[ctx.dataIndex];
                 if (v == null) return null;
                 const total = trendTotals[ctx.dataIndex] || 0;
@@ -44,6 +45,7 @@
               return y == null ? null : `${ds.label}  $${y.toFixed(2)}`;
             },
             footer: (items) => {
+              if (!items.length) return '';
               const t = trendTotals[items[0].dataIndex];
               return t == null ? '' : `합계  $${t.toFixed(2)}`;
             },
