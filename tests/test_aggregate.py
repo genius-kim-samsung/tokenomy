@@ -949,3 +949,52 @@ def test_codex_burndown_week_spent_only_current_week():
     cb = codex_burndown(conn, Budget(claude=0, codex=40), now, budget_start=bs)
     assert cb.spent == 6.0               # 전체 누적
     assert cb.week_spent == 2.0          # 이번 주(6/15~)만
+
+
+# ─── Task 8: history_context/models_context 주/월 기간 + 사용자 지정 구간 ──────
+
+def test_history_context_week_period(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="in", session_id="s1", ts="2026-06-09T01:00:00Z", cost_usd=2.0)  # 6/9 주 안
+    _msg(conn, dedup_key="out", session_id="s2", ts="2026-06-20T01:00:00Z", cost_usd=9.0)  # 주 밖
+    ctx = history_context(conn, _ANCHOR_613, "", "date_desc", now_kst=_NOW_613, period="week")
+    assert ctx["period"] == "week"
+    assert ctx["total"] == 2.0                       # 6/8~6/14 주만
+    assert ctx["period_label"] == "2026-06-08 ~ 06-14"
+
+
+def test_history_context_custom_range(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-12T01:00:00Z", cost_usd=3.0)
+    _msg(conn, dedup_key="b", session_id="s2", ts="2026-06-30T01:00:00Z", cost_usd=7.0)
+    _msg(conn, dedup_key="c", session_id="s3", ts="2026-06-05T01:00:00Z", cost_usd=5.0)  # 범위 밖
+    ctx = history_context(conn, _ANCHOR_613, "", "date_desc", now_kst=_NOW_613,
+                          start="2026-06-12", end="2026-06-30")
+    assert ctx["total"] == 10.0                      # 6/12~6/30 (6/5 제외)
+    assert ctx["period_label"] == "2026-06-12 ~ 2026-06-30"
+    assert ctx["custom"] is True
+
+
+def test_history_context_invalid_range_falls_back_to_month(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-12T01:00:00Z", cost_usd=3.0)
+    # start>end → 폴백(월간)
+    ctx = history_context(conn, _ANCHOR_613, "", "date_desc", now_kst=_NOW_613,
+                          start="2026-06-30", end="2026-06-01")
+    assert ctx["custom"] is False
+    assert ctx["period_label"] == "2026-06"
+
+
+def test_models_context_week_period(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", model="claude-opus-4-8",
+         ts="2026-06-09T10:00:00Z", cost_usd=8.0)                       # 주 안
+    _msg(conn, dedup_key="b", session_id="s2", model="claude-haiku-4-5",
+         ts="2026-06-20T10:00:00Z", cost_usd=2.0)                       # 주 밖
+    ctx = models_context(conn, _ANCHOR_613, "", now_kst=_NOW_613, period="week")
+    assert ctx["total"] == 8.0
+    assert ctx["period_label"] == "2026-06-08 ~ 06-14"

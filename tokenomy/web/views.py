@@ -71,13 +71,42 @@ def session_context(conn, session_id: str) -> dict | None:
     return {"detail": detail, "active_nav": "history"}
 
 
+def _parse_date(value: str | None) -> datetime | None:
+    """YYYY-MM-DD → KST 자정. 빈/오류 → None."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=KST)
+    except ValueError:
+        return None
+
+
+def _resolve_range(anchor_kst: datetime, period: str, start: str | None, end: str | None):
+    """조회 기간 [start, nxt)와 표시 메타를 해석한다.
+
+    우선순위: 유효한 사용자 지정(start≤end) > period(week/month) + anchor.
+    반환: (start_dt, nxt_dt, label, period, custom)
+    """
+    s = _parse_date(start)
+    e = _parse_date(end)
+    if s and e and s <= e:
+        nxt = e + timedelta(days=1)
+        label = f"{s.strftime('%Y-%m-%d')} ~ {e.strftime('%Y-%m-%d')}"
+        return s, nxt, label, period, True
+    period = period if period in ("week", "month") else "month"
+    start_dt, nxt_dt, label = period_bounds(period, anchor_kst)
+    return start_dt, nxt_dt, label, period, False
+
+
 def models_context(conn, anchor_kst: datetime, provider: str,
-                   now_kst: datetime | None = None) -> dict:
-    """모델별 사용/비용. 월 범위(앵커 기준). 행에 비중%(share) 부여."""
+                   now_kst: datetime | None = None, *,
+                   period: str = "month", start: str | None = None,
+                   end: str | None = None) -> dict:
+    """모델별 사용/비용. 주/월 기간 또는 사용자 지정 [start, end]. 행에 비중%(share)."""
     now = now_kst or datetime.now(KST)
     config = load_config()
-    start, nxt = month_bounds(anchor_kst)
-    rows = by_model(conn, provider or None, start, nxt)
+    s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
+    rows = by_model(conn, provider or None, s, nxt)
     total = round(sum(m.cost for m in rows), 4)
     table = [
         {"model": m.model or "(unknown)", "cost": m.cost,
@@ -91,9 +120,11 @@ def models_context(conn, anchor_kst: datetime, provider: str,
     return {
         "active_nav": "models", "user_label": user_label(config),
         "provider": provider, "rows": table, "count": len(table), "total": total,
-        "period_label": start.strftime("%Y-%m"),
+        "period": period, "custom": custom,
+        "period_label": label,
         "anchor": anchor_kst.strftime("%Y-%m-%d"),
-        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "start": start or "", "end": end or "",
+        "prev_anchor": (s - timedelta(days=1)).strftime("%Y-%m-%d"),
         "next_anchor": nxt.strftime("%Y-%m-%d"),
         "has_next": nxt <= now,
         "month": now.strftime("%Y-%m"),
@@ -169,23 +200,27 @@ def build_date_tree(rows: list[DaySessionRow], sort: str) -> list[DateGroup]:
 
 
 def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
-                    now_kst: datetime | None = None) -> dict:
-    """내역 — 날짜→폴더→세션 단일 계위 트리. 월 범위(앵커 기준 KST)."""
+                    now_kst: datetime | None = None, *,
+                    period: str = "month", start: str | None = None,
+                    end: str | None = None) -> dict:
+    """내역 — 날짜→폴더→세션 트리. 주/월 기간 또는 사용자 지정 [start, end]."""
     now = now_kst or datetime.now(KST)
     config = load_config()
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
-    start, nxt = month_bounds(anchor_kst)
-    rows = by_day_session(conn, provider or None, start=start, nxt=nxt)
+    s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
+    rows = by_day_session(conn, provider or None, start=s, nxt=nxt)
     tree = build_date_tree(rows, sort)
     return {
         "active_nav": "history",
         "user_label": user_label(config),
         "provider": provider, "sort": sort,
+        "period": period, "custom": custom,
         "anchor": anchor_kst.strftime("%Y-%m-%d"),
+        "start": start or "", "end": end or "",
         "month": now.strftime("%Y-%m"),
         "last_ts": last["t"] if last and last["t"] else None,
-        "period_label": start.strftime("%Y-%m"),
-        "prev_anchor": (start - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "period_label": label,
+        "prev_anchor": (s - timedelta(days=1)).strftime("%Y-%m-%d"),
         "next_anchor": nxt.strftime("%Y-%m-%d"),
         "has_next": nxt <= now,
         "tree": tree,
