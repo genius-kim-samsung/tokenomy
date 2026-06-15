@@ -378,8 +378,10 @@ def by_session(
     assert (start is None) == (nxt is None), "start/nxt는 함께 지정해야 한다"
     rows = _range_rows(conn, provider, start, nxt) if (start and nxt) else _month_rows(conn, provider, now_kst)
     meta = {
-        r["session_id"]: (r["label"], r["summary"], r["provider"])
-        for r in conn.execute("SELECT session_id, label, summary, provider FROM sessions").fetchall()
+        r["session_id"]: (r["label"], r["summary"], r["provider"], r["user_turns"])
+        for r in conn.execute(
+            "SELECT session_id, label, summary, provider, user_turns FROM sessions"
+        ).fetchall()
     }
     agg: dict = {}
     for r in rows:
@@ -388,11 +390,10 @@ def by_session(
         sid = r["session_id"]
         a = agg.setdefault(
             sid,
-            {"project": r["project"], "cost": 0.0, "msgs": 0,
+            {"project": r["project"], "cost": 0.0,
              "first": r["ts"], "last": r["ts"], "cr": 0, "den": 0},
         )
         a["cost"] += r["cost_usd"] or 0
-        a["msgs"] += 1
         if r["ts"] and (a["first"] is None or r["ts"] < a["first"]):
             a["first"] = r["ts"]
         if r["ts"] and (a["last"] is None or r["ts"] > a["last"]):
@@ -403,11 +404,12 @@ def by_session(
     out = [
         SessionRow(
             session_id=sid, project=a["project"],
-            provider=meta.get(sid, (None, None, None))[2],
-            label=meta.get(sid, (None, None, None))[0],
-            summary=meta.get(sid, (None, None, None))[1],
+            provider=meta.get(sid, (None, None, None, None))[2],
+            label=meta.get(sid, (None, None, None, None))[0],
+            summary=meta.get(sid, (None, None, None, None))[1],
             cost=round(a["cost"], 4), first_ts=a["first"], last_ts=a["last"],
-            msgs=a["msgs"], cache_ratio=round(a["cr"] / a["den"], 4) if a["den"] else 0.0,
+            msgs=(meta.get(sid, (None, None, None, None))[3] or 0),
+            cache_ratio=round(a["cr"] / a["den"], 4) if a["den"] else 0.0,
         )
         for sid, a in agg.items()
     ]
@@ -608,16 +610,16 @@ def daily_series(conn, provider: str | None, now_kst: datetime,
 
 def session_detail(conn, session_id: str) -> SessionDetail | None:
     totals = conn.execute(
-        "SELECT COUNT(*) msgs, SUM(cost_usd) cost, SUM(web_search) ws, "
+        "SELECT COUNT(*) rows, SUM(cost_usd) cost, SUM(web_search) ws, "
         "SUM(web_fetch) wf, MIN(ts) first_ts, MAX(ts) last_ts, MAX(provider) provider "
         "FROM messages WHERE session_id=?",
         (session_id,),
     ).fetchone()
-    if not totals or not totals["msgs"]:
+    if not totals or not totals["rows"]:
         return None
 
     meta = conn.execute(
-        "SELECT project, provider, label FROM sessions WHERE session_id=?",
+        "SELECT project, provider, label, user_turns FROM sessions WHERE session_id=?",
         (session_id,),
     ).fetchone()
 
@@ -634,7 +636,7 @@ def session_detail(conn, session_id: str) -> SessionDetail | None:
         provider=(meta["provider"] if meta else None) or totals["provider"],
         label=meta["label"] if meta else None,
         first_ts=totals["first_ts"], last_ts=totals["last_ts"],
-        cost=round(totals["cost"] or 0, 4), msgs=totals["msgs"],
+        cost=round(totals["cost"] or 0, 4), msgs=(meta["user_turns"] if meta and meta["user_turns"] is not None else 0),
         web_search=totals["ws"] or 0, web_fetch=totals["wf"] or 0,
         models=[
             ModelRow(

@@ -256,6 +256,7 @@ def test_by_session_aggregates_and_sorts():
     _msg(conn, dedup_key="c", session_id="s2", ts="2026-06-12T10:00:00Z",
          cost_usd=50.0, cache_read=0, input_tokens=100)
     conn.execute("INSERT INTO sessions (session_id, label) VALUES ('s1', '대시보드 작업')")
+    conn.execute("UPDATE sessions SET user_turns=2 WHERE session_id='s1'")
     conn.commit()
 
     rows = by_session(conn, "claude", _NOW_STATUS)
@@ -285,6 +286,7 @@ def test_session_detail_groups_by_model():
          model="claude-haiku-4-5", cost_usd=1.0, input_tokens=10, web_search=0)
     conn.execute("INSERT INTO sessions (session_id, project, provider, label) "
                  "VALUES ('s1', 'proj', 'claude', '라벨')")
+    conn.execute("UPDATE sessions SET user_turns=2 WHERE session_id='s1'")
     conn.commit()
 
     d = session_detail(conn, "s1")
@@ -1088,3 +1090,49 @@ def test_models_context_week_period(monkeypatch, tmp_path):
     ctx = models_context(conn, _ANCHOR_613, "", now_kst=_NOW_613, period="week")
     assert ctx["total"] == 8.0
     assert ctx["period_label"] == "2026-06-08 ~ 06-14"
+
+
+# ─── Task 5: 집계가 user_turns 사용 ──────────────────────────────────────────
+
+from tokenomy.db import ingest_records
+from tokenomy.parser import UsageRecord
+
+
+def _claude_rec(msg_id, session_id="s1", **kw):
+    return UsageRecord(
+        provider="claude", session_id=session_id, cwd="/p",
+        ts="2026-06-11T10:00:00Z", model="claude-opus-4-8",
+        input_tokens=1000, output_tokens=0, cache_creation=0, cache_read=0,
+        message_id=msg_id,
+    )
+
+
+_PRICING = {"match": [{"contains": "opus", "provider": "claude",
+                       "input": 15.0, "output": 75.0, "cache_write": 18.75, "cache_read": 1.50}]}
+
+
+def test_by_session_msgs_uses_user_turns():
+    conn = connect(":memory:")
+    # 한 세션에 메시지 행 3개(어시스턴트 응답), 사용자 턴은 2
+    ingest_records(conn, [_claude_rec("a"), _claude_rec("b"), _claude_rec("c")], _PRICING)
+    conn.execute("UPDATE sessions SET user_turns=2 WHERE session_id='s1'")
+    rows = by_session(conn, None, datetime(2026, 6, 11, tzinfo=KST))
+    assert len(rows) == 1
+    assert rows[0].msgs == 2   # 행 수(3)가 아니라 사용자 턴(2)
+
+
+def test_session_detail_msgs_uses_user_turns():
+    conn = connect(":memory:")
+    ingest_records(conn, [_claude_rec("a"), _claude_rec("b")], _PRICING)
+    conn.execute("UPDATE sessions SET user_turns=1 WHERE session_id='s1'")
+    d = session_detail(conn, "s1")
+    assert d is not None
+    assert d.msgs == 1
+
+
+def test_session_detail_null_user_turns_falls_back_to_zero():
+    conn = connect(":memory:")
+    ingest_records(conn, [_claude_rec("a")], _PRICING)  # user_turns 미설정(NULL)
+    d = session_detail(conn, "s1")
+    assert d is not None
+    assert d.msgs == 0   # 세션은 노출되되 카운트는 0
