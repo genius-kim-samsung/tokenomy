@@ -5,7 +5,7 @@
 - users:    현재 미사용 — 향후 멀티유저 확장용 발판 테이블
 - scan_offsets: 파일별 마지막 파싱 byte-offset (증분 스캔)
 
-대화 원문은 저장하지 않는다 (메타만).
+대화 본문 전체는 저장하지 않는다. Codex는 첫 사용자 프롬프트 발췌(≤120자)를 sessions.summary에 저장한다.
 """
 from __future__ import annotations
 
