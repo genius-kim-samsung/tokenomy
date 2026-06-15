@@ -380,22 +380,22 @@ def test_combined_burndown_empty_cards():
 
 def test_overview_context_shape(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 50}}', encoding="utf-8")
+    cfg.write_text('{"budget": {"claude": 100, "codex": 40}}', encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0, project="/p")
     _msg(conn, dedup_key="b", provider="codex", ts="2026-06-11T10:00:00Z", cost_usd=4.0, project="/p")
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
     assert ctx["active_nav"] == "dashboard"
-    assert ctx["combined"].spent == 14.0           # 10 + 4
-    assert ctx["combined"].limit == 150.0
+    # provider별 분리 카드
+    assert ctx["claude_bd"].spent == 10.0
+    assert ctx["codex_bd"].spent == 4.0
+    assert ctx["codex_bd"].weekly_limit == 10.0          # 40 / 4
+    # 총지출 요약 = 두 카드 spent 합
+    assert ctx["month_total"] == 14.0
     assert ctx["budget_configured"] is True
-    assert len(ctx["cards"]) == 2
-    assert {c["provider"] for c in ctx["cards"]} == {"claude", "codex"}
-    assert all(c["has_data"] for c in ctx["cards"])
     assert ctx["projects"][0].project == "/p"
-    assert ctx["projects"][0].cost == 14.0          # provider 무관 합산
-    assert len(ctx["projects"]) <= 10
+    assert ctx["projects"][0].cost == 14.0
     assert ctx["has_data"] is True
     assert "daily_labels" in ctx and "insights" in ctx and "sessions" in ctx
 
@@ -405,10 +405,31 @@ def test_overview_context_provider_without_data(monkeypatch, tmp_path):
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
-    by_p = {c["provider"]: c for c in ctx["cards"]}
-    assert by_p["claude"]["has_data"] is True
-    assert by_p["codex"]["has_data"] is False       # codex 로그 없음
-    assert ctx["budget_configured"] is False         # 예산 미설정 → 사용량만
+    assert ctx["claude_has_data"] is True
+    assert ctx["codex_has_data"] is False                # codex 로그 없음
+    assert ctx["budget_configured"] is False
+
+
+def test_overview_context_applies_budget_start(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
+                   encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="pre", provider="claude", ts="2026-06-05T10:00:00Z", cost_usd=99.0)
+    _msg(conn, dedup_key="post", provider="claude", ts="2026-06-13T10:00:00Z", cost_usd=10.0)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)   # _NOW_STATUS = 6/15
+    assert ctx["claude_bd"].spent == 10.0                # 6/5(도입 전) 제외
+    assert ctx["claude_bd"].days_in_month == 19          # 6/12~6/30
+
+
+def test_overview_context_no_budget_unconfigured(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["budget_configured"] is False
+    assert ctx["claude_bd"].limit == 0
 
 
 # ─── period_bounds: 일/주/월 경계 + 라벨 ──────────────────────────────────────

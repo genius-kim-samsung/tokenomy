@@ -5,10 +5,10 @@ from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
     KST, PROVIDERS, DateGroup, DaySessionRow, FolderGroup, burndown, by_day_session,
-    by_model, by_project, by_session, combined_burndown, daily_series,
-    insights, month_bounds, session_detail,
+    by_model, by_project, by_session, codex_burndown, daily_series,
+    insights, month_bounds, period_bounds, session_detail,
 )
-from tokenomy.budget import budget_from_config, load_config, user_label
+from tokenomy.budget import budget_from_config, budget_start_kst, load_config, user_label
 
 _SORT_KEYS = {
     "cost": lambda x: x.cost,
@@ -28,26 +28,19 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     now = now_kst or datetime.now(KST)
     config = load_config()
     budget = budget_from_config(config)
+    bs = budget_start_kst(config)
 
-    cards = [
-        {"provider": p, "name": p.capitalize(),
-         "bd": burndown(conn, budget, now, p),
-         "has_data": _provider_has_data(conn, p)}
-        for p in PROVIDERS
-    ]
-    # 통합 바(combined)는 한도 있는 provider만 합산(분자/분모 일치)하지만, 아래
-    # 프로젝트·세션·추세는 전 AI 합산이다(의도된 설계 — 통합 바엔 "(한도 설정한 AI 합산)"
-    # 라벨을 단다). 둘 다 한도 거는 일반 케이스에선 일치한다.
-    combined = combined_burndown([c["bd"] for c in cards], now)
+    claude_bd = burndown(conn, budget, now, "claude", budget_start=bs)
+    codex_bd = codex_burndown(conn, budget, now, budget_start=bs)
+    month_total = round(claude_bd.spent + codex_bd.spent, 4)
 
     projects = by_project(conn, None, now)
     projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
-    projects = projects[:10]   # Top 10 롤업 (전체 목록은 각 provider 상세 탭)
+    projects = projects[:10]
     sessions = by_session(conn, None, now, limit_n=10)
-    coach = insights(conn, combined, now, None)
+    # 효율 코치/추세는 전 AI 합산·달력 월 기준 유지(설계). Burndown 인자는 claude 카드 재사용.
+    coach = insights(conn, claude_bd, now, None)
     daily = daily_series(conn, None, now)
-    pace = [round(combined.limit / combined.days_in_month * p.day, 4)
-            if combined.limit else 0.0 for p in daily]
 
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     has_data = last is not None and last["t"] is not None
@@ -55,15 +48,17 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     return {
         "active_nav": "dashboard", "sort": sort,
         "user_label": user_label(config),
-        # combined.limit>0 == budget.total>0 (Budget가 PROVIDERS와 동일) — 통합 바에
-        # 직결되도록 combined 기준 사용.
-        "budget_configured": combined.limit > 0,
+        "budget_configured": budget.total > 0,
+        "budget_start": config.get("budget_start"),
         "month": now.strftime("%Y-%m"),
-        "combined": combined, "cards": cards,
+        "claude_bd": claude_bd, "codex_bd": codex_bd, "month_total": month_total,
+        "claude_has_data": _provider_has_data(conn, "claude"),
+        "codex_has_data": _provider_has_data(conn, "codex"),
         "projects": projects, "sessions": sessions, "insights": coach,
         "daily_labels": [p.day for p in daily],
         "daily_actual": [p.cumulative_cost for p in daily],
-        "daily_pace": pace,
+        "daily_pace": [round(claude_bd.limit / claude_bd.days_in_month * p.day, 4)
+                       if claude_bd.limit else 0.0 for p in daily],
         "last_ts": last["t"] if has_data else None,
         "has_data": has_data,
     }
