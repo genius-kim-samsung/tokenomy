@@ -482,3 +482,19 @@ def test_models_week_period_param(tmp_path, monkeypatch):
     r = client.get("/models?anchor=2026-06-13&period=week")
     assert r.status_code == 200
     assert "2026-06-08 ~ 06-14" in r.text
+
+
+def test_history_has_period_toggle_and_range(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/history")
+    assert r.status_code == 200
+    assert 'name="period"' in r.text                 # 주/월 토글
+    assert 'name="start"' in r.text and 'name="end"' in r.text   # 날짜 범위 입력
+
+
+def test_models_has_period_toggle_and_range(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/models")
+    assert r.status_code == 200
+    assert 'name="period"' in r.text
+    assert 'name="start"' in r.text and 'name="end"' in r.text

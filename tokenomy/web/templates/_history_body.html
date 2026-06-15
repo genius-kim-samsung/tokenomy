@@ -1,8 +1,8 @@
 <div class="card-head">
   <div class="period-nav">
-    <a class="btn" href="/history?anchor={{ prev_anchor }}&provider={{ provider }}&sort={{ sort }}">‹ 이전</a>
+    <a class="btn" href="/history?anchor={{ prev_anchor }}&provider={{ provider }}&sort={{ sort }}&period={{ period }}">‹ 이전</a>
     <span class="label">{{ period_label }}</span>
-    {% if has_next %}<a class="btn" href="/history?anchor={{ next_anchor }}&provider={{ provider }}&sort={{ sort }}">다음 ›</a>{% endif %}
+    {% if has_next %}<a class="btn" href="/history?anchor={{ next_anchor }}&provider={{ provider }}&sort={{ sort }}&period={{ period }}">다음 ›</a>{% endif %}
   </div>
 
   {# 컨트롤+표 전체를 #history-body 한 조각으로 swap → 필터 변경 후에도 기간 네비가 현재 상태 반영 #}
@@ -10,6 +10,10 @@
         hx-swap="innerHTML" hx-trigger="change" hx-push-url="true"
         hx-indicator="#history-loading">
     <input type="hidden" name="anchor" value="{{ anchor }}">
+    <select id="period-filter" name="period" aria-label="기간 단위">
+      <option value="month" {{ 'selected' if period == 'month' }}>월간</option>
+      <option value="week" {{ 'selected' if period == 'week' }}>주간</option>
+    </select>
     <select id="provider-filter" name="provider" aria-label="AI 필터">
       <option value="" {{ 'selected' if provider == '' }}>전체</option>
       <option value="claude" {{ 'selected' if provider == 'claude' }}>Claude</option>
@@ -21,6 +25,11 @@
       <option value="{{ val }}" {{ 'selected' if sort == val }}>{{ lbl }}</option>
       {% endfor %}
     </select>
+    <span class="range">
+      <input type="date" name="start" value="{{ start }}" aria-label="시작일">
+      ~
+      <input type="date" name="end" value="{{ end }}" aria-label="종료일">
+    </span>
     <button type="button" class="btn" id="toggle-all" data-collapsed="false">모두 접기</button>
     <span id="history-loading" class="htmx-indicator muted">갱신 중…</span>
   </form>
