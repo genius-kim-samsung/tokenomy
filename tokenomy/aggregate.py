@@ -401,18 +401,18 @@ def by_session(
         a["cr"] += r["cache_read"] or 0
         a["den"] += (r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0)
 
-    out = [
-        SessionRow(
+    out = []
+    for sid, a in agg.items():
+        m = meta.get(sid, (None, None, None, None))
+        out.append(SessionRow(
             session_id=sid, project=a["project"],
-            provider=meta.get(sid, (None, None, None, None))[2],
-            label=meta.get(sid, (None, None, None, None))[0],
-            summary=meta.get(sid, (None, None, None, None))[1],
+            provider=m[2],
+            label=m[0],
+            summary=m[1],
             cost=round(a["cost"], 4), first_ts=a["first"], last_ts=a["last"],
-            msgs=(meta.get(sid, (None, None, None, None))[3] or 0),
+            msgs=(m[3] or 0),
             cache_ratio=round(a["cr"] / a["den"], 4) if a["den"] else 0.0,
-        )
-        for sid, a in agg.items()
-    ]
+        ))
     if order == "recent":
         out.sort(key=lambda x: x.last_ts or "", reverse=True)
     else:
@@ -438,8 +438,10 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
             first_day[r["session_id"]] = dt.date().isoformat()
 
     meta = {
-        r["session_id"]: (r["label"], r["summary"], r["provider"])
-        for r in conn.execute("SELECT session_id, label, summary, provider FROM sessions").fetchall()
+        r["session_id"]: (r["label"], r["summary"], r["provider"], r["user_turns"])
+        for r in conn.execute(
+            "SELECT session_id, label, summary, provider, user_turns FROM sessions"
+        ).fetchall()
     }
 
     agg: dict = {}
@@ -451,10 +453,9 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
         key = (date, r["session_id"])
         a = agg.setdefault(
             key,
-            {"project": r["project"], "cost": 0.0, "msgs": 0, "cr": 0, "den": 0},
+            {"project": r["project"], "cost": 0.0, "cr": 0, "den": 0},
         )
         a["cost"] += r["cost_usd"] or 0
-        a["msgs"] += 1
         a["cr"] += r["cache_read"] or 0
         a["den"] += (r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0)
 
@@ -463,11 +464,12 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
         cache_ratio = (a["cr"] / a["den"]) if a["den"] else 0.0
         is_continued = first_day.get(sid, date) < date
         cache_miss = is_continued and cache_ratio < INSIGHT_CACHE_READ_MIN
-        label, summary, sprov = meta.get(sid, (None, None, None))
+        label, summary, sprov, uturns = meta.get(sid, (None, None, None, None))
+        # msgs = 세션 전체 사용자 턴 수. 멀티데이 세션은 날짜별로 같은 총량이 반복 표시될 수 있음(드묾, 허용).
         out.append(DaySessionRow(
             date=date, session_id=sid, provider=sprov,
             summary=summary, project=a["project"], label=label,
-            cost=round(a["cost"], 4), msgs=a["msgs"],
+            cost=round(a["cost"], 4), msgs=(uturns or 0),
             cache_ratio=round(cache_ratio, 4),
             cache_read=a["cr"], cache_den=a["den"],
             is_continued=is_continued, cache_miss=cache_miss,
@@ -636,7 +638,8 @@ def session_detail(conn, session_id: str) -> SessionDetail | None:
         provider=(meta["provider"] if meta else None) or totals["provider"],
         label=meta["label"] if meta else None,
         first_ts=totals["first_ts"], last_ts=totals["last_ts"],
-        cost=round(totals["cost"] or 0, 4), msgs=(meta["user_turns"] if meta and meta["user_turns"] is not None else 0),
+        cost=round(totals["cost"] or 0, 4),
+        msgs=(meta["user_turns"] if meta and meta["user_turns"] is not None else 0),
         web_search=totals["ws"] or 0, web_fetch=totals["wf"] or 0,
         models=[
             ModelRow(

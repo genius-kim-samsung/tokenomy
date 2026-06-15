@@ -1136,3 +1136,19 @@ def test_session_detail_null_user_turns_falls_back_to_zero():
     d = session_detail(conn, "s1")
     assert d is not None
     assert d.msgs == 0   # 세션은 노출되되 카운트는 0
+
+
+def test_by_day_session_msgs_uses_user_turns():
+    conn = connect(":memory:")
+    # 한 세션에 메시지 행 3개, 사용자 턴은 2 → by_day_session이 행 수(3)가 아닌 user_turns(2)를 반환해야 함
+    ingest_records(
+        conn,
+        [_claude_rec("a"), _claude_rec("b"), _claude_rec("c")],
+        _PRICING,
+    )
+    conn.execute("UPDATE sessions SET user_turns=2 WHERE session_id='s1'")
+    conn.commit()
+    # _claude_rec ts는 "2026-06-11T10:00:00Z" (KST 6/11 19:00) → _JUN(6/1~7/1) 범위 안
+    rows = by_day_session(conn, None, start=_JUN[0], nxt=_JUN[1])
+    assert len(rows) == 1
+    assert rows[0].msgs == 2   # 행 수(3)가 아니라 사용자 턴(2)
