@@ -56,7 +56,7 @@ def _extract_first_prompt(path: str, limit: int = 120) -> str | None:
                 msg = p.get("message")
                 if isinstance(msg, str) and msg.strip():
                     return _truncate(msg, limit)
-            elif fallback is None and p.get("role") == "user":
+            elif fallback is None and o.get("type") == "response_item" and p.get("role") == "user":
                 content = p.get("content")
                 txt = None
                 if isinstance(content, str):
