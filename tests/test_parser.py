@@ -1,6 +1,7 @@
 import json
 
 from tokenomy.parser import UsageRecord, parse_file, parse_titles, parse_usage_line
+from tokenomy.parser import count_user_turns, _is_user_turn
 
 
 def _assistant_line(**over):
@@ -232,3 +233,50 @@ def test_parse_titles_skips_empty_title_and_missing_session(tmp_path):
     ]
     f.write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert parse_titles(str(f)) == {"s2": "유효"}
+
+
+def _user_line(content, **over):
+    obj = {
+        "type": over.get("type", "user"),
+        "message": {"role": "user", "content": content},
+        "sessionId": over.get("session_id", "sess-1"),
+        "timestamp": "2026-06-11T10:00:00Z",
+    }
+    if "is_sidechain" in over:
+        obj["isSidechain"] = over["is_sidechain"]
+    if "is_meta" in over:
+        obj["isMeta"] = over["is_meta"]
+    return obj
+
+
+def test_is_user_turn_plain_string():
+    assert _is_user_turn(_user_line("이거 고쳐줘")) is True
+
+
+def test_is_user_turn_excludes_tool_result():
+    assert _is_user_turn(_user_line([{"type": "tool_result", "content": "x"}])) is False
+
+
+def test_is_user_turn_counts_text_or_image_blocks():
+    assert _is_user_turn(_user_line([{"type": "text", "text": "hi"}])) is True
+    assert _is_user_turn(_user_line([{"type": "image"}, {"type": "text", "text": "hi"}])) is True
+
+
+def test_is_user_turn_excludes_meta_sidechain_commands():
+    assert _is_user_turn(_user_line("hi", is_meta=True)) is False
+    assert _is_user_turn(_user_line("hi", is_sidechain=True)) is False
+    assert _is_user_turn(_user_line("<command-name>/exit</command-name>")) is False
+    assert _is_user_turn(_user_line("<local-command-stdout>Bye!</local-command-stdout>")) is False
+
+
+def test_count_user_turns_groups_by_session(tmp_path):
+    f = tmp_path / "sess.jsonl"
+    lines = [
+        _user_line("첫 프롬프트"),
+        _user_line([{"type": "tool_result", "content": "r"}]),   # 제외
+        _user_line("둘째 프롬프트"),
+        _user_line("<command-name>/clear</command-name>"),        # 제외
+        {"type": "assistant", "message": {"role": "assistant", "content": "ok"}},  # 제외
+    ]
+    f.write_text("\n".join(json.dumps(x) for x in lines), encoding="utf-8")
+    assert count_user_turns(str(f)) == {"sess-1": 2}

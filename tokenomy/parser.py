@@ -37,6 +37,7 @@ class UsageRecord:
     attribution_skill: str | None = None
     git_branch: str | None = None
     summary: str | None = None  # 세션 식별용 첫 프롬프트 발췌(Codex). Claude는 None(aiTitle 별도 경로).
+    user_turns: int | None = None  # 세션 내 사용자 턴 수(Codex는 parse_rollout이 채움; Claude는 count_user_turns).
 
     @property
     def total_tokens(self) -> int:
@@ -141,6 +142,60 @@ def parse_file(
                 records.append(rec)
         end_offset = f.tell()
     return records, end_offset
+
+
+# 사용자 턴 판별에서 제외할 문자열 content 래퍼(슬래시 명령/로컬 명령 출력 등).
+_NON_TURN_PREFIXES = (
+    "<command-name>",
+    "<command-message>",
+    "<local-command-stdout>",
+    "<local-command-caveat>",
+)
+
+
+def _is_user_turn(obj: dict) -> bool:
+    """raw JSONL 객체가 '사람이 입력한 프롬프트'면 True.
+
+    툴 결과·메타·서브에이전트(sidechain)·슬래시 명령/명령 출력은 제외한다.
+    """
+    msg = obj.get("message")
+    if not isinstance(msg, dict):
+        return False
+    if obj.get("type") != "user" and msg.get("role") != "user":
+        return False
+    if obj.get("isSidechain") or obj.get("isMeta"):
+        return False
+    content = msg.get("content")
+    if isinstance(content, str):
+        s = content.lstrip()
+        return bool(s) and not s.startswith(_NON_TURN_PREFIXES)
+    if isinstance(content, list):
+        return any(
+            isinstance(b, dict) and b.get("type") in ("text", "image") for b in content
+        )
+    return False
+
+
+def count_user_turns(path: str) -> dict[str, int]:
+    """세션 파일 전체를 풀스캔해 {session_id: 사용자 턴 수}를 반환한다.
+
+    byte-offset 증분이 아닌 전체 스캔(parse_titles와 동일 이유 — 매번 정확한 총량).
+    'user' 바이트가 없는 라인은 사용자 턴일 수 없어 건너뛴다(json.loads 회피).
+    """
+    counts: dict[str, int] = {}
+    with open(path, "rb") as f:
+        for raw in f:
+            if b'"user"' not in raw:
+                continue
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(obj, dict) or not _is_user_turn(obj):
+                continue
+            sid = obj.get("sessionId") or Path(path).stem
+            counts[sid] = counts.get(sid, 0) + 1
+    return counts
 
 
 def parse_titles(path: str) -> dict[str, str]:
