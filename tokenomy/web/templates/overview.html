@@ -60,6 +60,20 @@
 </section>
 {% endif %}
 
+{% if has_data %}
+<section class="card">
+  <h2>토큰 구성 <span class="muted">(이번 달 · 토큰량 기준)</span></h2>
+  <span class="bar" style="display:flex">
+    <span class="fill" style="width: {{ token_comp.cache_read_pct }}%; background: var(--color-accent)"></span>
+    <span class="fill" style="width: {{ token_comp.cache_creation_pct }}%; background: var(--color-warn)"></span>
+    <span class="fill" style="width: {{ token_comp.output_pct }}%; background: var(--color-primary)"></span>
+    <span class="fill" style="width: {{ token_comp.input_pct }}%; background: var(--color-muted)"></span>
+  </span>
+  <p class="muted">캐시읽기 {{ token_comp.cache_read_pct }}% · 캐시생성 {{ token_comp.cache_creation_pct }}% · 출력 {{ token_comp.output_pct }}% · 입력 {{ token_comp.input_pct }}%</p>
+  <p class="disclaimer">ⓘ 토큰 수 기준 비중 — 비용 비중과 다름(캐시 읽기 단가 0.1×, 출력 단가 높음)</p>
+</section>
+{% endif %}
+
 <section class="card">
   <h2>통합 효율 코치</h2>
   <ul class="coach">
