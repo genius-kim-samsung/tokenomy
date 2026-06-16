@@ -99,7 +99,7 @@ KST = timezone(timedelta(hours=9))
 
 ```python
     def weekly_codex_limit(self) -> float:
-        """Codex 주간 한도 = 월 한도 ÷ 4 (예산 정책)."""
+        """Codex 주간 한도 = 월 한도 ÷ 4 (조직 정책)."""
         return self.codex / 4
 ```
 
