@@ -539,3 +539,17 @@ def test_analysis_all_provider_link_preserves_dim(tmp_path, monkeypatch):
     assert r.status_code == 200
     # 모든 네비 링크가 dim을 보존해야 함 — dim 없는 /analysis?anchor= 링크가 존재하면 안 됨
     assert "/analysis?anchor=" not in r.text
+
+
+def test_analysis_cache_wr_column(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages(dedup_key,provider,session_id,project,ts,model,"
+        "input_tokens,output_tokens,cache_creation,cache_read,cost_usd,priced) "
+        "VALUES('a','claude','s1','p','2026-06-10T10:00:00Z','claude-opus-4-8',10,20,30,40,1.0,1)"
+    )
+    conn.commit()
+    r = client.get("/analysis?dim=model")
+    assert r.status_code == 200
+    assert "cache_wr" in r.text
