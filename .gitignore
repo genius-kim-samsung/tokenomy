@@ -41,3 +41,6 @@ Thumbs.db
 
 # Tailwind standalone 바이너리 — dev 도구, 커밋 안 함(산출 app.css만 추적)
 tools/
+
+# 로컬 전용 디자인 분석 문서(공개 제외)
+/DESIGN.md
