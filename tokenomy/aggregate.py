@@ -691,6 +691,19 @@ def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None) -> l
         cards.append(Insight("warn", f"캐시 활용 {cache_ratio * 100:.0f}% — 컨텍스트 재구축 낭비 가능성"))
     if web_search > INSIGHT_WEB_SEARCH_MAX:
         cards.append(Insight("info", f"web_search {web_search}회 — 비용 영향 점검 권장"))
+    # 캐시 재구축: 이어지는 세션인데 캐시를 못 읽은(cache_miss) 고유 세션 수.
+    # by_day_session이 첫 등장일을 제외(is_continued)하므로 오해 없음. 달력 월 기준.
+    month_start, month_nxt = month_bounds(now_kst)
+    rebuild_sessions = {
+        r.session_id
+        for r in by_day_session(conn, provider, start=month_start, nxt=month_nxt)
+        if r.cache_miss
+    }
+    if rebuild_sessions:
+        cards.append(Insight(
+            "info",
+            f"캐시 재구축 {len(rebuild_sessions)}개 세션 — 이어지는 작업에서 컨텍스트 재빌드(세션 유지로 개선 여지)",
+        ))
     if bd.unpriced_count:
         cards.append(Insight("warn", f"단가 미식별 {bd.unpriced_count}건 — 비용 누락 가능"))
     if bd.limit > 0 and bd.projected_month > bd.limit:

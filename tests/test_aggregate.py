@@ -1358,3 +1358,26 @@ def test_token_composition_empty_zero():
     tc = token_composition(conn, None, start, nxt)
     assert tc.total == 0
     assert tc.input_pct == 0.0
+
+
+def test_insights_cache_rebuild_unique_sessions():
+    conn = connect(":memory:")
+    # 세션 s: 6/4 첫 등장(캐시 충분), 6/6·6/7 이어짐(캐시 빈약 → 재구축, 2일)
+    _insert(conn, "2026-06-04T00:00:00Z", 1.0, session="s", cache_read=1000, input_t=10)
+    _insert(conn, "2026-06-06T00:00:00Z", 1.0, session="s", cache_read=0, input_t=1000)
+    _insert(conn, "2026-06-07T00:00:00Z", 1.0, session="s", cache_read=0, input_t=1000)
+    bd = burndown(conn, Budget(claude=0, codex=0), NOW, "claude")
+    cards = insights(conn, bd, NOW, None)
+    # "캐시 재구축"으로 매칭(기존 캐시활용 경고는 "컨텍스트 재구축"이라 미충돌)
+    rebuild = [c for c in cards if "캐시 재구축" in c.text]
+    assert len(rebuild) == 1
+    assert "1개 세션" in rebuild[0].text   # 2일 miss여도 고유 세션 1
+
+
+def test_insights_no_rebuild_for_first_day_only():
+    conn = connect(":memory:")
+    # 첫 등장일만 — 캐시 빈약해도 is_continued=False라 제외
+    _insert(conn, "2026-06-06T00:00:00Z", 1.0, session="s", cache_read=0, input_t=1000)
+    bd = burndown(conn, Budget(claude=0, codex=0), NOW, "claude")
+    cards = insights(conn, bd, NOW, None)
+    assert not any("캐시 재구축" in c.text for c in cards)
