@@ -1,6 +1,6 @@
 # Tokenomy 로드맵 / 향후 계획
 
-- 최종 갱신: 2026-06-16 (v0.1.7 출시 — 토큰 구성비·캐시 재구축 신호)
+- 최종 갱신: 2026-06-17 (v0.2.0 스코프 그릴 확정 — 채택 6개·provider parity·증분 릴리스)
 - 상태: **초안** — 코드/spec의 "미해결·후속" 신호 + 사용자 비전을 종합.
 - 관련: [PRD.md](PRD.md) · [ARCHITECTURE.md](ARCHITECTURE.md) · [DATA-MODEL.md](DATA-MODEL.md)
 
@@ -24,40 +24,57 @@
 ## 다음 마일스톤 — v0.2.0: 수집된 raw 데이터를 빠짐없이 가공해 보여주기
 
 > 사용자 확정(2026-06-15): v0.2.0의 핵심은 **raw 데이터를 가공/계산/집계해, 사용자가 궁금해할
-> 유용한 정보를 빠짐없이 보여주는 것**. 효율 분석 등 Insight 추출(코칭·이상탐지·절감 제안·예측)은
-> 그 이후의 고도화 목표로 분리한다.
+> 유용한 정보를 빠짐없이 보여주는 것**. Insight 추출(코칭·이상탐지·절감 제안·예측)은 그 이후로 분리.
+> **스코프·원칙·채택 세트는 2026-06-17 그릴(grill-me)로 확정** — 아래.
 
-설계 원칙:
-- **새 수집 없이** — 파서·스키마는 거의 무변경. "이미 DB에 적재되는데 화면엔 안 보이는" 필드부터 메운다.
-- 가공/계산/집계는 `aggregate.py`(순수 함수), 화면 조립은 `views.py`, 라우트는 `app.py`(얇게) — 기존 계층 유지.
-- KST 월/주 경계·예산 도입일 clamp 등 기존 규칙 일관 적용.
+### 설계 원칙 (2026-06-17 확정)
 
-### A. 이미 수집 중이나 미노출인 필드 (최우선 — 순수 표현 작업, 데이터 이미 DB에 있음)
+1. **자격/강도 위계** — "사용자가 궁금해하고 해석 가능"하면 *표시 자격*. 추가로 "사용자가 개선 행동 가능 +
+   높/낮음이 오해 없이 좋/나쁨으로 읽힘"이면 *표현 강도*(경고·강조 허용). 강도 미달이면 경고 없는
+   **중립 투명성 수치**로만 표시. (cf. 1h 캐시 프리미엄 = 자격·강도 둘 다 미달 → 제외.)
+2. **raw 추출 허용** — 이미 ingest하는 로그(Claude `~/.claude` · Codex `~/.codex`)에서 유용하면
+   DB 컬럼이 없어도 파서·스키마를 바꿔 추출한다. **단 새 *소스*(Gemini 등)·사용자 *입력*(라벨)은 제외**
+   — 전자는 별도 축(후속), 후자는 raw 추출이 아닌 authoring. *(옛 "새 수집 없이" 원칙 폐기.)*
+3. **provider parity** — Claude·Codex **양쪽 다 의미 있는 값이 나와야** 채택(분해·정밀도 차이는 허용).
+   한쪽만 지원되면 왠만하면 제외.
+4. **cost/value 필터** — 위를 통과해도 작업량 대비 가치가 낮으면 뺀다.
+5. 구현 계층 — 가공/집계 `aggregate.py`(순수 함수) ↔ 화면 `views.py` ↔ 라우트 `app.py`(얇게).
+   KST 월/주 경계·예산 도입일 clamp 일관 적용.
 
-**귀속 3종 — v0.1.6 출시 완료** (spec/plan: `docs/superpowers/{specs,plans}/2026-06-15-attribution-dimension-views*`):
-- [x] **스킬별 귀속** (`attribution_skill`) — 차원별(`/analysis`) 뷰의 차원 선택기.
-- [x] **git 브랜치별 귀속** (`git_branch`) — 차원별 뷰.
-- [x] **서브에이전트(sidechain) 비용 분리** (`is_sidechain`) — 차원별 상단 비중 카드(부모 vs 서브에이전트).
+> 참고 — **귀속 3종(`attribution_skill`·`git_branch`·`is_sidechain`)은 v0.1.6 출시 완료**
+> (spec/plan: `docs/superpowers/{specs,plans}/2026-06-15-attribution-dimension-views*`). Claude 로그 기반이라
+> 차원별 뷰는 provider별 가용성 분기로 "Claude 로그 기준" 안내를 노출한다.
 
-남은 항목:
-- [ ] **server tool 사용량 집계·추이** (`web_search`/`web_fetch`)
-  *현재 세션 상세 + 효율 코치 임계값에만 노출 — 집계/추이 뷰 없음.* 결(횟수 메트릭)이 달라 별도 후속 spec.
+### 채택 세트 (6개) — 시퀀싱 순
 
-> 가용성 단서(출시 반영): `attribution_skill`·`git_branch`·`is_sidechain`은 Claude 로그 기반 —
-> Codex엔 없어 차원별 뷰는 provider별 가용성 분기로 "Claude 로그 기준" 안내를 노출한다.
+배치: nav 5개 = overview(`/`) / 차원별(`/analysis`) / **패턴(`/patterns`, 신규)** / 내역(`/history`) / settings.
+릴리스: **증분**(항목별 작은 패치/마이너), **v0.2.0은 세트 완성 시점의 완료 마커**.
 
-### B. 기존 필드에서 새로 계산 가능한 정보
-- [ ] **시간 패턴** — 시간대(hour-of-day)·요일별 지출/활동 히트맵 (`ts` KST 변환).
-- [ ] **세션 형태 분석** — 턴당 평균 비용, 세션 지속시간(`first_ts`~`last_ts`), 세션 길이(`user_turns`) 분포.
-- [ ] **캐시 효율 상세** — `cache_read`/`cache_creation`/`cache_creation_1h` 비율 + 캐시로 절감한 비용 추정(캐시 미사용 가정 대비).
-  *v0.1.7에서 `cache_read`·`cache_creation` 비율은 토큰 구성비·차원별 4분할로, 재구축 낭비는 효율 코치 카드로 일부 노출. 남음: `cache_creation_1h` 분리 비율 + 절감 비용 추정.*
-- [ ] **입력/출력 토큰 비율** — 세션·프로젝트·모델별 input vs output 구성.
-  *v0.1.7에서 전체(오버뷰 미니바)·차원별(모델/스킬/브랜치)은 토큰 4종 구성으로 노출. 남음: 세션·프로젝트 단위.*
-- [ ] **프로젝트/모델별 시간 추이** — 현재는 기간 합계만. 통합 추세 차트처럼 시계열로. (차원별 뷰에 시계열 추가로 자연 확장 가능)
-- [ ] **단가 미식별 가시화** (`priced=0`) — 모델별 미식별 비중(현재는 총 N건 경고만).
+- [ ] **1. 단가 미식별 가시화** (`priced=0`) — 모델별 미식별 비중. overview 경고 확장 + `/analysis?dim=model`.
+  싸고 actionable 최강(pricing.json 갱신 유도).
+- [ ] **2. 입출력 토큰 비율** — 세션·프로젝트 단위 토큰 구성. 기존 4분할 컴포넌트를 새 결로 확장
+  (Codex는 cache_wr=0 → 3분할). 세션 상세 + `/analysis`.
+- [ ] **3. 캐시 절감액 추정** — `순절감 = cache_read×(input−cache_read) − cache_creation×(cache_creation−input)`
+  = "캐시 안 썼다면(매 턴 컨텍스트 재전송)"의 반사실과 일치. **Claude는 3줄 분해**(읽기회수 / 생성프리미엄 /
+  순절감 — 음수면 캐시 재구축 낭비와 연동), **Codex는 프리미엄=0이라 1줄**. overview 카드.
+  *(1h/5m 분리 비율은 제외 — actionability 기각, cf. metric-selection-actionability 메모.)*
+- [ ] **4. 프로젝트/모델별 시계열** — `/analysis`에 시간축 추가(현재 dim 롤업을 추세로). 주/월 토글 답습.
+- [ ] **5. Codex 시간데이터 enabler** — Codex rollout의 per-event timestamp + 누적 token_count로 시간대별
+  토큰 델타 추출. **세션당 1레코드 구조 유지**, `session_day_turns` 선례를 따른 **가벼운 위성 테이블**로 적재
+  (1→N 레코드 재설계 안 함). 6번의 선행 조건.
+- [ ] **6. 시간 패턴 + 세션 형태** — **패턴 페이지**(신규):
+  - 시간 패턴 — 시간대(hour)·요일 히트맵(지출/활동 토글). **중립 투명성**(경고 없음).
+    요일축 양쪽 정확, hour축은 Codex 근사(각주).
+  - 세션 형태 — 지속시간·턴 분포·턴당 비용(패턴 페이지 + 내역/세션상세 칸). Codex 지속시간은 위성테이블 event ts로.
 
-### C. 라벨(업무 귀속) 집계 — 라벨 편집 UI(아래 후속 과제)와 연동
-- [ ] **세션 라벨별 집계** (`sessions.label`) — 업무 귀속 단위 비용 롤업. (차원별 뷰에 `dim="label"` 추가로 확장 가능)
+### 제외 (그릴에서 명시적 컷 — 근거)
+
+- **캐시 1h/5m 분리 비율** — TTL은 클라이언트 자동결정(통제 불가), 프리미엄=낭비 아닌 보험료.
+  자격·강도 둘 다 미달.
+- **server tool 집계** (`web_search`/`web_fetch`) — Codex엔 해당 도구 부재(function_call = `shell_command`/`apply_patch`뿐).
+  **provider parity 실패** → backlog(아래 후속 과제).
+- **Codex 도구활동 횟수** — parity는 가능하나 actionable하지 않고 도구집합 비대칭 → value 낮음.
+- **세션 라벨별 집계 + 라벨 편집 UI** — 라벨은 raw 추출이 아닌 **사용자 입력**(authoring) → backlog(아래 후속 과제).
 
 ## 후속 과제 (코드/spec에서 도출)
 
@@ -87,8 +104,10 @@
   v0.2.0의 신규 뷰가 늘면 enabler로 우선순위 상승. *(출처: `aggregate.py:4` 주석)*
 
 ### 기능
-- [ ] **세션 수동 라벨(업무 귀속) 편집 UI** — `sessions.label` 컬럼·표시는 있으나 편집 화면 미구현.
-  (v0.2.0 §C "라벨별 집계"의 입력 측.)
+- [ ] **세션 수동 라벨(업무 귀속) 편집 UI + 라벨별 집계** — `sessions.label` 컬럼·표시는 있으나 편집 화면 미구현.
+  라벨은 raw 추출이 아닌 사용자 입력이라 v0.2.0에서 제외(2026-06-17 그릴) — 입력 UI와 `dim="label"` 집계를 함께.
+- [ ] **server tool(web_search/web_fetch) 집계·추이** — Claude 로그엔 있으나 Codex 도구 부재로 parity 실패,
+  v0.2.0 제외(2026-06-17 그릴). provider 단일(Claude) 지표로 낼지 추후 판단.
 - [ ] **단가 최신화 워크플로** — 단가 변동 시 `pricing.json` 갱신을 쉽게(README 안내 + 가능하면 보조 도구).
 
 ## v0.2.0 이후 (고도화 — Insight 추출)
