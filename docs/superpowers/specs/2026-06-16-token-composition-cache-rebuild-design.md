@@ -42,22 +42,30 @@
 ### 3.1 집계 — `aggregate.py`
 
 - **전역 구성** — `token_composition(conn, provider, start, nxt) -> TokenComposition` 신설.
-  `_range_rows` 결과에서 `input_tokens`·`output_tokens`·`cache_creation`·`cache_read`를 합산, 총합 대비 비중(%) 산출.
-  반환 dataclass: 4개 합계 + 4개 비중 + `cost_usd` 총합(참고용). 순수 함수, pricing 비의존(계층 유지).
+  **자체 SELECT**(주의: `_range_rows`는 `output_tokens`를 select하지 않아 재사용 불가)로
+  `input_tokens`·`output_tokens`·`cache_creation`·`cache_read`·`ts`를 읽어 `[start,nxt)` 필터·합산.
+  비중은 **0~100 퍼센트값**(예: 94.2 = `round(x/total*100,1)` — 0.942 아님, 템플릿 바 width와 직결).
+  반환 dataclass: 4개 합계 + 4개 비중. **`cost_usd`는 담지 않는다**(토큰량 바 옆에 비용을 두면 비용%로 오해 — §5).
+  순수 함수, pricing 비의존(계층 유지).
 - **차원별** — `by_dimension`/`DimensionRow`는 `cache_creation`을 **이미 집계**(489·526·532)한다. 변경 없음 — views/템플릿에서 꺼내 쓰기만.
 - **캐시 재구축 수** — `by_day_session`(423)이 행마다 `cache_miss`(= `is_continued and cache_ratio < INSIGHT_CACHE_READ_MIN`)를
-  이미 매긴다. `insights` 또는 overview 조립부에서 이번 기간 `cache_miss=True` 행(=세션×날짜) 수를 센다.
-  별도 임계·신규 로직 없음 — 기존 신호 재사용.
+  이미 매긴다. `insights` 내부에서 `by_day_session(conn, provider, start=month_start, nxt=month_nxt)`를
+  **달력 월**(`month_bounds(now_kst)` — 기존 insights의 `_month_rows`와 동일 기준; budget_start 미적용은
+  "코치는 달력 월" 설계와 일치)로 호출하고, `cache_miss=True` 행의 **고유 `session_id` 수**를 센다
+  (세션×날짜 행 수 아님 — 같은 세션이 N일 miss해도 1). 오버뷰는 combined(provider=None)라 `first_day`가
+  전 provider MIN(ts) 기준이어도 무해. `insights` 시그니처 무변경. 비용: `by_day_session` full-scan 1회 추가
+  (PoC 규모 ~16k 체감 미미 · 규모 시 경량화 후보).
 
 ### 3.2 화면 — `views.py` + 템플릿
 
 - **`dimension_context`**(131): `table` dict는 **이미 `cache_creation`을 담고 있다**(147) → views 변경 불필요, 템플릿만 칸 추가.
 - **`analysis.html`**: 테이블 헤더 `cache_rd` 앞에 `cache_wr` 칸 추가(8→9칸), 행에 `{{ '{:,}'.format(m.cache_creation) }}`.
   colspan 빈 상태 문구 9로.
-- **`overview_context`**(35): `token_composition(conn, None, 이번 달)` 호출 → 컨텍스트에 4분할(합계+비중) 전달.
-  `by_day_session`(이번 달)으로 `cache_miss` 수를 세어 `insights`에 재구축 카드 추가(0이면 생략).
-- **`overview.html`**: 토큰 구성 **미니 스택바**(4색: input/output/cache_wr/cache_rd) + 비중 수치.
-  **헤더에 "토큰량 기준" 명시**, 바 아래 디스클레이머(§5). 기존 `.bar`/`.fill` 컴포넌트 재사용 → CSS 무빌드.
+- **`overview_context`**(35): `token_composition(conn, None, *month_bounds(now))` 호출 → 컨텍스트에 4분할(합계+비중) 전달.
+  재구축 카운트는 `insights` 내부에서 처리(§3.1) → overview_context는 별도 조립 불필요.
+- **`overview.html`**: 토큰 구성 **미니 스택바**(4색: input/output/cache_wr/cache_rd) + 비중 수치(퍼센트값).
+  **헤더에 "토큰량 기준" 명시**, 바 아래 디스클레이머(§5). **바에는 토큰량만 — `cost_usd`를 바에 붙이지 않는다**(오해 방지).
+  기존 `.bar`/`.fill` 컴포넌트 재사용 → CSS 무빌드.
 
 ## 4. 데이터 흐름
 
@@ -66,7 +74,7 @@ messages (input/output/cache_creation/cache_read, ts, cost_usd, session_id, proj
    │
    ├ token_composition ──→ 오버뷰: 전역 4분할 미니바(토큰량 기준 + 비용≠토큰 주석)
    ├ by_dimension ───────→ analysis: 차원별 4분할 테이블(cache_wr 칸 추가)
-   └ by_day_session.cache_miss ──→ insights: "캐시 재구축 N개 세션" 카드(첫 등장 제외)
+   └ by_day_session.cache_miss ──→ insights: "캐시 재구축 N개 세션" 카드(고유 session_id, 첫 등장 제외)
 ```
 
 ## 5. 엣지 케이스 & 에러 처리
@@ -78,14 +86,17 @@ messages (input/output/cache_creation/cache_read, ts, cost_usd, session_id, proj
 - **토큰 0 기간/세션**: 분모 0 → 비중 0.0, 미니바 빈 상태. 회귀 아님.
 - **캐시 재구축 오해 차단**: 첫 등장일 세션은 캐시 생성이 당연하므로 `cache_miss` 정의가 이미 제외(`is_continued`).
   카드는 `warn`이 아니라 정보/개선여지 톤(액션: 세션 유지·컨텍스트 안정화). 0건이면 카드 생략.
-- **provider 필터**: 전역 구성은 전 AI 합산(provider=None) 기본. 차원/재구축은 기존 필터 규칙 따름.
+- **재구축 카운트 단위**: `cache_miss` 행은 (날짜×세션)이므로 **고유 `session_id`로 집계**(같은 세션 N일 miss → 1세션). "N개 세션" 표기와 일치.
+- **비중 단위**: `TokenComposition` 비중은 **0~100 퍼센트값**(94.2). 템플릿은 그대로 출력(추가 ×100 금지) — 기존 `cache_ratio`(0~1, 템플릿서 ×100)와 단위가 달라 혼동 주의. 테스트로 고정(§6).
+- **provider 필터**: 전역 구성·오버뷰 재구축은 전 AI 합산(provider=None). `by_day_session.first_day`가 전 provider 기준이나 combined라 무해.
 - **Codex**: `cache_creation`=0(캐시 쓰기 구분 없음, codex_parser). 구성에서 자연히 0으로 표시 — 오류 아님.
 
 ## 6. 테스트
 
 - `tests/test_aggregate.py`:
-  - `token_composition` 4분할 합계·비중 정확(기간 필터 포함), 토큰 0 분기.
-  - `by_dimension`이 `cache_creation`을 차원별로 정확 합산(회귀 가드 — 이미 집계되나 노출 경로 확정).
+  - `token_composition` 4분할 합계·비중 정확(기간 `[start,nxt)` 필터), **비중이 퍼센트값(94.2)인지** 단위 고정, 토큰 0 분기.
+  - `by_dimension`이 `cache_creation`을 차원별로 정확 합산(회귀 가드).
+  - **캐시 재구축 카운트**: ① 첫 등장일 세션 제외(`is_continued=False`), ② 같은 세션 N일 miss → **1세션**(고유 session_id), ③ KST 월 경계(UTC ts→KST) 정확, ④ 달력 월 기준(budget_start 무관).
 - `tests/test_web.py`:
   - `/analysis` 테이블에 `cache_wr` 칸 렌더(헤더+값).
   - 오버뷰에 토큰 구성 미니바 + "토큰량 기준" 라벨 렌더.
