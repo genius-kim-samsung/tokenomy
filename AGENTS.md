@@ -44,7 +44,7 @@ UsageRecord -> db.py(SQLite) -> aggregate.py -> cli.py / web/
 
 - `tokenomy/parser.py`, `tokenomy/codex_parser.py`: 도구별 로그를 공통 `UsageRecord`로 정규화한다.
 - `tokenomy/db.py`: SQLite 적재, 중복 제거, 스키마 마이그레이션을 담당한다. 스키마 변경은 `_MIGRATE_COLS`에 추가한다.
-- `tokenomy/aggregate.py`: 번다운, 프로젝트별, 세션별 집계를 담당한다. 월 경계는 KST 기준이다.
+- `tokenomy/aggregate.py`: 번다운, 프로젝트/세션/차원(모델·스킬·브랜치)별 집계, 토큰 구성비를 담당한다. 월 경계는 KST 기준이다.
 - `tokenomy/pricing.py`, `config/pricing.json`: 모델명 매칭으로 토큰을 USD로 환산한다.
 - `tokenomy/web/app.py`: FastAPI 라우트. 얇게 유지하고 입력 검증과 라우팅만 둔다.
 - `tokenomy/web/views.py`: 화면 데이터 조립 로직을 둔다.

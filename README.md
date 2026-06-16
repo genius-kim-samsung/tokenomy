@@ -69,7 +69,7 @@ dashboard (`/settings`):
 - `pricing_overrides`: override per-model rates if your billing differs from
   public list prices, e.g. `{"opus": {"input": 9.0, "output": 36.0}}`.
 
-> The History and Models pages support a **week/month toggle** and a **custom date
+> The History and Analysis pages support a **week/month toggle** and a **custom date
 > range** for querying.
 
 ## Data sources
