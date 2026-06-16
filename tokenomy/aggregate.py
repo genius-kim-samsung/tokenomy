@@ -486,6 +486,52 @@ DIM_COLUMNS = {"model": "model", "skill": "attribution_skill", "branch": "git_br
 
 
 @dataclass
+class TokenComposition:
+    """기간 내 토큰 4종 합계 + 비중(토큰량 기준, 0~100 퍼센트값). 비용은 담지 않는다(바에 비용 오해 방지)."""
+    input_tokens: int
+    output_tokens: int
+    cache_creation: int
+    cache_read: int
+    total: int
+    input_pct: float
+    output_pct: float
+    cache_creation_pct: float
+    cache_read_pct: float
+
+
+def token_composition(conn, provider: str | None, start, nxt) -> TokenComposition:
+    """기간 [start, nxt) 내 input/output/cache_creation/cache_read 합계와 비중(%)을 반환.
+
+    _range_rows는 output_tokens를 select하지 않아 재사용하지 않고 자체 SELECT한다.
+    비중은 0~100 퍼센트값(round(x/total*100,1)) — cache_ratio(0~1)와 단위가 다르다.
+    """
+    sql = "SELECT ts, input_tokens, output_tokens, cache_creation, cache_read FROM messages"
+    if provider is None:
+        rows = conn.execute(sql).fetchall()
+    else:
+        rows = conn.execute(sql + " WHERE provider=?", (provider,)).fetchall()
+    it = ot = cc = cr = 0
+    for r in rows:
+        dt = parse_ts(r["ts"])
+        if not (dt and start <= dt < nxt):
+            continue
+        it += r["input_tokens"] or 0
+        ot += r["output_tokens"] or 0
+        cc += r["cache_creation"] or 0
+        cr += r["cache_read"] or 0
+    total = it + ot + cc + cr
+
+    def pct(x: int) -> float:
+        return round(x / total * 100, 1) if total else 0.0
+
+    return TokenComposition(
+        input_tokens=it, output_tokens=ot, cache_creation=cc, cache_read=cr,
+        total=total, input_pct=pct(it), output_pct=pct(ot),
+        cache_creation_pct=pct(cc), cache_read_pct=pct(cr),
+    )
+
+
+@dataclass
 class DimensionRow:
     key: str | None
     cost: float
@@ -645,6 +691,19 @@ def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None) -> l
         cards.append(Insight("warn", f"캐시 활용 {cache_ratio * 100:.0f}% — 컨텍스트 재구축 낭비 가능성"))
     if web_search > INSIGHT_WEB_SEARCH_MAX:
         cards.append(Insight("info", f"web_search {web_search}회 — 비용 영향 점검 권장"))
+    # 캐시 재구축: 이어지는 세션인데 캐시를 못 읽은(cache_miss) 고유 세션 수.
+    # by_day_session이 첫 등장일을 제외(is_continued)하므로 오해 없음. 달력 월 기준.
+    month_start, month_nxt = month_bounds(now_kst)
+    rebuild_sessions = {
+        r.session_id
+        for r in by_day_session(conn, provider, start=month_start, nxt=month_nxt)
+        if r.cache_miss
+    }
+    if rebuild_sessions:
+        cards.append(Insight(
+            "info",
+            f"캐시 재구축 {len(rebuild_sessions)}개 세션 — 이어지는 작업에서 컨텍스트 재빌드(세션 유지로 개선 여지)",
+        ))
     if bd.unpriced_count:
         cards.append(Insight("warn", f"단가 미식별 {bd.unpriced_count}건 — 비용 누락 가능"))
     if bd.limit > 0 and bd.projected_month > bd.limit:

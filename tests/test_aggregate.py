@@ -6,6 +6,7 @@ from tokenomy.aggregate import (
     DayPoint, KST, burndown, by_day_session, by_dimension, by_model, by_project, by_session,
     combined_burndown, daily_series, insights, month_bounds, normalize_project,
     parse_ts, period_bounds, session_detail, sidechain_split, SidechainSplit, stacked_trend,
+    token_composition,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
@@ -1330,3 +1331,53 @@ def test_overview_context_trend_series_stacks_providers(monkeypatch, tmp_path):
     # 미래(6/16~) None
     assert series[0]["cum"][-1] is None
     assert ctx["trend_totals"][-1] is None
+
+
+def test_token_composition_shares_are_percent():
+    conn = connect(":memory:")
+    conn.execute(
+        "INSERT INTO messages(dedup_key,provider,session_id,ts,model,"
+        "input_tokens,output_tokens,cache_creation,cache_read,cost_usd,priced) "
+        "VALUES('k','claude','s','2026-06-05T00:00:00Z','claude-opus-4-8',10,20,30,40,1.0,1)",
+    )
+    conn.commit()
+    start, nxt = month_bounds(NOW)
+    tc = token_composition(conn, None, start, nxt)
+    assert tc.input_tokens == 10
+    assert tc.output_tokens == 20
+    assert tc.cache_creation == 30
+    assert tc.cache_read == 40
+    assert tc.total == 100
+    assert tc.output_pct == 20.0       # 퍼센트값(0.2 아님)
+    assert tc.cache_read_pct == 40.0
+
+
+def test_token_composition_empty_zero():
+    conn = connect(":memory:")
+    start, nxt = month_bounds(NOW)
+    tc = token_composition(conn, None, start, nxt)
+    assert tc.total == 0
+    assert tc.input_pct == 0.0
+
+
+def test_insights_cache_rebuild_unique_sessions():
+    conn = connect(":memory:")
+    # 세션 s: 6/4 첫 등장(캐시 충분), 6/6·6/7 이어짐(캐시 빈약 → 재구축, 2일)
+    _insert(conn, "2026-06-04T00:00:00Z", 1.0, session="s", cache_read=1000, input_t=10)
+    _insert(conn, "2026-06-06T00:00:00Z", 1.0, session="s", cache_read=0, input_t=1000)
+    _insert(conn, "2026-06-07T00:00:00Z", 1.0, session="s", cache_read=0, input_t=1000)
+    bd = burndown(conn, Budget(claude=0, codex=0), NOW, "claude")
+    cards = insights(conn, bd, NOW, None)
+    # "캐시 재구축"으로 매칭(기존 캐시활용 경고는 "컨텍스트 재구축"이라 미충돌)
+    rebuild = [c for c in cards if "캐시 재구축" in c.text]
+    assert len(rebuild) == 1
+    assert "1개 세션" in rebuild[0].text   # 2일 miss여도 고유 세션 1
+
+
+def test_insights_no_rebuild_for_first_day_only():
+    conn = connect(":memory:")
+    # 첫 등장일만 — 캐시 빈약해도 is_continued=False라 제외
+    _insert(conn, "2026-06-06T00:00:00Z", 1.0, session="s", cache_read=0, input_t=1000)
+    bd = burndown(conn, Budget(claude=0, codex=0), NOW, "claude")
+    cards = insights(conn, bd, NOW, None)
+    assert not any("캐시 재구축" in c.text for c in cards)

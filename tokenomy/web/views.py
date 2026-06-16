@@ -6,8 +6,8 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, DateGroup, DaySessionRow, FolderGroup, burndown,
     by_day_session, by_dimension, by_project, by_session, codex_burndown,
-    daily_series, insights, period_bounds, session_detail, sidechain_split,
-    stacked_trend,
+    daily_series, insights, month_bounds, period_bounds, session_detail,
+    sidechain_split, stacked_trend, token_composition,
 )
 from tokenomy.budget import budget_from_config, budget_start_kst, load_config, user_label
 
@@ -67,6 +67,9 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     has_data = last is not None and last["t"] is not None
 
+    # 전역 토큰 구성(이번 달, 전 AI 합산). 토큰량 기준 비중 — 바엔 비용 미부착(오해 방지).
+    token_comp = token_composition(conn, None, *month_bounds(now))
+
     return {
         "active_nav": "dashboard", "sort": sort,
         "user_label": user_label(config),
@@ -86,6 +89,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
                        for i, _ in enumerate(daily)],
         "daily_budget": [budget.total if budget.total else 0.0 for _ in daily],
         "last_ts": last["t"] if has_data else None,
+        "token_comp": token_comp,
         "has_data": has_data,
     }
 
