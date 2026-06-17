@@ -4,7 +4,7 @@
 - 상태: **초안** — 코드/spec의 "미해결·후속" 신호 + 사용자 비전을 종합.
 - 관련: [PRD.md](PRD.md) · [ARCHITECTURE.md](ARCHITECTURE.md) · [DATA-MODEL.md](DATA-MODEL.md)
 
-## 현재 상태 (v0.1.7)
+## 현재 상태 (v0.1.8)
 
 - Claude Code + Codex CLI 증분 수집(byte-offset), SQLite 적재, raw archive(30일 휘발 대비)
 - provider별 예산 번다운(Claude 월간 / Codex 주간 누적·이월) + 예산 도입일(`budget_start`) + 소진 예상일, 효율 코치 카드
@@ -14,6 +14,7 @@
 - 통합 추세 차트: AI별 스택 영역(구성 비중) + 월 예산 가로선·예산 도입일 정합 + 끝점 라벨로 AI별 구성 상시 표시(금액·%)
 - **차원별 분석 뷰(`/analysis`)** — 모델·스킬·브랜치 귀속 비용 롤업(차원 선택기) + 서브에이전트(sidechain) 비중 카드 + 미귀속 버킷 명시. 기존 모델별(`/models`)을 일반화·흡수 (v0.1.6)
 - **토큰 구성비·캐시 재구축 신호 (v0.1.7)** — 오버뷰 토큰 구성 미니바(input/output/cache_wr/cache_rd 4종 비중, **토큰량 기준** — 비용≠토큰 주석) + 차원별 테이블 토큰 4분할(cache_wr 칸) + 효율 코치 "캐시 재구축" 카드(이어지는 세션인데 캐시를 못 읽은 고유 세션 수, 달력 월 기준)
+- **단가 커버리지 진단 + 단가 변경 자동 재계산 (v0.1.8)** — 모델별 단가 매칭 신뢰도(미식별·버전경계 의심·거친 매칭)를 settings 카드·overview 경고·CLI report로 노출 + `pricing_overrides`로 새 모델 단가 자가 추가(prepend). 단가(pricing.json/overrides) 변경 시 핑거프린트로 기존 비용 자동 재계산(`maybe_reprice` — `cache_creation_1h` 분리 저장으로 5m/1h도 정확). v0.2.0 채택 세트 #1 (아래)
 - 내역 화면: 날짜→폴더→세션 계위 트리(접기·펼치기) — 기존 5탭 대체
 - 내역·차원별 주/월 토글 + 사용자 지정 날짜 구간 조회(`period`/`start`/`end`)
 - 메시지 수를 사용자 턴(`user_turns`) 기준 집계 + 멀티데이 세션 날짜별 정확 카운트(`session_day_turns`)

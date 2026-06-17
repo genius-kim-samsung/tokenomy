@@ -1,6 +1,6 @@
 # Tokenomy 아키텍처
 
-- 최종 갱신: 2026-06-16 (v0.1.7 — 토큰 구성비·캐시 재구축 신호, 내역/차원별 뷰 통합)
+- 최종 갱신: 2026-06-17 (v0.1.8 — 단가 커버리지 진단 + 단가 변경 시 비용 자동 재계산)
 - 범위: 시스템 구조·데이터 흐름·핵심 설계 결정. 로컬 전용 설계 메모(커밋 제외).
 - 관련: [PRD.md](PRD.md) · [ROADMAP.md](ROADMAP.md) · [DATA-MODEL.md](DATA-MODEL.md)
 
@@ -37,9 +37,9 @@ CLI 리포트 또는 로컬 웹 대시보드로 노출한다. 전 과정 로컬,
 | 입력 정규화 | `parser.py` | Claude Code transcript → `UsageRecord`. usage 블록 유무로 "과금 라인" 판정. byte-offset 증분. |
 | | `codex_parser.py` | Codex rollout(세션 누적) → 세션당 1 `UsageRecord`. 마지막 `token_count`가 세션 총량. |
 | 적재 | `db.py` | SQLite. `messages`(메시지별, `dedup_key` UNIQUE) / `sessions`(메타+요약+턴수) / `session_day_turns`(세션×날짜 턴 수) / `scan_offsets`(증분) / `meta`. 스키마 ALTER 마이그레이션. |
-| 비용 | `pricing.py` + `config/pricing.json` | 모델명 `contains` 매칭 → 토큰×단가. 5m/1h 캐시 분리 과금. `pricing_overrides` 적용. |
+| 비용 | `pricing.py` + `config/pricing.json` | 모델명 `contains` 매칭 → 토큰×단가. 5m/1h 캐시 분리 과금. `pricing_overrides` 적용(없는 모델은 새 항목 prepend로 자가 추가). `cost_usd`는 캐시값이라 단가 변경 시 핑거프린트로 자동 재계산(`maybe_reprice`). |
 | 예산 | `budget.py` | provider별 월 예산 + 도입일(`budget_start`) 로드. Codex 주간 한도(월÷4) 헬퍼. config 없으면 0(추적 전용). |
-| 집계 | `aggregate.py` | 번다운(Claude 월간·Codex 주간 누적)·기간 경계(KST)·프로젝트/세션/차원(모델·스킬·브랜치)별 집계·토큰 구성비(`token_composition`)·서브에이전트 분리(`sidechain_split`)·효율 코치(insights)·일별 누적. `budget_start` clamp. |
+| 집계 | `aggregate.py` | 번다운(Claude 월간·Codex 주간 누적)·기간 경계(KST)·프로젝트/세션/차원(모델·스킬·브랜치)별 집계·토큰 구성비(`token_composition`)·서브에이전트 분리(`sidechain_split`)·효율 코치(insights)·단가 커버리지 진단(`pricing_coverage`)·일별 누적. `budget_start` clamp. |
 | 보존 | `archive.py` | raw JSONL 원문을 `data/archive/`로 byte 증분 복사(30일 휘발 대비). |
 | 신선도 | `freshness.py` | 마지막 ingest 경과 + 가장 오래된 raw 나이(vs 30일 cleanup) → 유실 위험 경고. |
 | 업데이트 | `update.py` | GitHub Releases 최신 태그 vs `__version__`. 1일 1회, 실패는 조용히 무시. |
@@ -78,10 +78,14 @@ CLI 리포트 또는 로컬 웹 대시보드로 노출한다. 전 과정 로컬,
    모듈 하나 추가. `codex_parser.py`가 레퍼런스 구현. provider 추가 시 `PROVIDERS` 튜플 +
    `Budget` 필드 + `pricing.json` 항목만 보강. (`aggregate.py:16`, [DATA-MODEL.md](DATA-MODEL.md))
 
-7. **단가 = contains 매칭 + override.** `pricing.json`의 `match[]`를 위에서부터 순회하며 모델
-   문자열에 부분일치하는 첫 단가를 쓴다. 미일치는 비용 미산정(`priced=False`)으로 두고 "단가
-   미식별 N건" 경고로 노출(조용한 누락 금지). 사용자 청구가 다르면 `pricing_overrides`로
-   코드 변경 없이 덮어쓴다. 1시간 캐시 생성은 input 단가×2로 과금. (`pricing.py:32`, `pricing.py:47`)
+7. **단가 = contains 매칭 + override + 자동 재계산.** `pricing.json`의 `match[]`를 위에서부터
+   순회하며 모델 문자열에 부분일치하는 첫 단가를 쓴다. 미일치는 비용 미산정(`priced=False`)으로
+   두고 "단가 미식별 N건" 경고로 노출(조용한 누락 금지). 사용자 청구가 다르면 `pricing_overrides`로
+   코드 변경 없이 덮어쓰고, 없는 모델은 새 항목으로 prepend해 자가 추가한다. 1시간 캐시 생성은
+   input 단가×2로 과금. `cost_usd`는 (토큰×단가)의 **캐시값**이라 단가 입력이 바뀌면 `maybe_reprice`가
+   단가 핑거프린트 변화를 감지해 raw 재적재 없이 전체 행을 자동 재계산한다(증분 적재·dedup 가드가
+   옛 행을 다시 안 건드리므로 이 경로가 필수). 매칭 신뢰도(미식별·버전 경계 의심·거친 매칭)는 **단가
+   커버리지 진단**으로 settings 카드·overview 경고·CLI에 노출한다. (`pricing.py`, `db.maybe_reprice`)
 
 8. **1머신 1사용자 + 127.0.0.1 전용.** 팀 집계는 비목표 — 각자 자기 머신에서 돌린다(프라이버시상
    자연스러움). 웹은 `127.0.0.1`만 바인딩하고 인증이 없다. 쿼리 파라미터는 화이트리스트

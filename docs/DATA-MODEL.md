@@ -1,6 +1,6 @@
 # Tokenomy 데이터 모델 & 파서 추가 가이드
 
-- 최종 갱신: 2026-06-16 (v0.1.7 기준)
+- 최종 갱신: 2026-06-17 (v0.1.8 기준)
 - 범위: DB 스키마 · 정규화 모델(`UsageRecord`) · 단가 매칭 · 새 도구 파서 추가법
 - 관련: [ARCHITECTURE.md](ARCHITECTURE.md)
 
@@ -33,8 +33,8 @@
 ### `messages` — 메시지별 토큰/비용 (핵심 사실 테이블)
 - `dedup_key TEXT UNIQUE` — 중복 제거 키(아래 §3).
 - `provider, session_id, project, ts, model`
-- `input_tokens, output_tokens, cache_creation, cache_read, web_search, web_fetch`
-- `cost_usd REAL, priced INTEGER` — 산정 비용 + 단가 식별 여부(미식별=0 → "단가 미식별 N건" 경고).
+- `input_tokens, output_tokens, cache_creation, cache_creation_1h, cache_read, web_search, web_fetch` — `cache_creation_1h`는 cache_creation 중 1h 캐시분(단가=input×2)을 별도 저장해 재계산 정확도를 보장.
+- `cost_usd REAL, priced INTEGER` — 산정 비용(토큰×단가의 캐시값) + 단가 식별 여부(미식별=0 → "단가 미식별 N건" 경고). 단가 변경 시 자동 재계산(§4).
 - `request_id, is_sidechain, attribution_skill, git_branch`
 - 인덱스: `(provider, ts)`, `(session_id)`.
 
@@ -52,7 +52,7 @@
   append-only 로그에서 신규 바이트만 읽기 위함.
 
 ### `meta` — 키/값 상태
-- `last_ingest_ts`(신선도), `last_update_check`(업데이트 1일 1회 캐시).
+- `last_ingest_ts`(신선도), `last_update_check`(업데이트 1일 1회 캐시), `pricing_fingerprint`(직전 적재 때 쓴 효과 단가 해시 — 변경 감지 시 전체 자동 재계산, §4).
 
 ### `users` — 현재 미사용
 - 멀티유저 확장용 발판. 현재 쓰지 않는다(PRD Non-goal: 1머신 1사용자).
@@ -80,8 +80,10 @@ message_id 있으면:  "{provider}:{message_id}:{request_id}"
 - `match[]`를 위에서부터 순회, `contains`가 모델 id의 부분문자열인 **첫 항목** 사용(`pricing.py:32`).
 - 미일치 → `priced=False`, 비용 0, 경고로 노출(조용한 누락 금지).
 - 비용 = `(input·input + output·output + cache_5m·cache_write + cache_1h·input·2 + cache_read·cache_read) / 1e6`.
-- `pricing_overrides`(config)로 항목별 `input/output/cache_write/cache_read`를 코드 변경 없이 덮어쓴다(`pricing.py:75`).
+- `pricing_overrides`(config)로 항목별 `input/output/cache_write/cache_read`를 코드 변경 없이 덮어쓴다(`pricing.py`). 기존에 없는 `contains` 키는 **새 항목으로 prepend**돼(더 구체적 키가 거친 키보다 우선) 사용자가 새 모델 단가를 자가 추가할 수 있다(`apply_pricing_overrides`).
 - **단가 항목 순서 주의**: 더 구체적인 `contains`를 위에 둔다(부분일치 첫 매칭이라 순서가 곧 우선순위).
+- **자동 재계산.** `cost_usd`는 (토큰×단가)의 캐시값이라 단가 입력(pricing.json/overrides)이 바뀌면 stale해진다. `db.maybe_reprice`가 단가 핑거프린트(`pricing_fingerprint`) 변화를 감지하면 저장된 토큰만으로 모든 행을 재계산한다(raw 재적재 불필요, `cache_creation_1h` 덕에 5m/1h 분리도 정확). 매 `ingest`에서 호출하며, 핑거프린트 미기록 구버전 DB는 첫 실행에 1회 정정된다.
+- **버전 경계 의심(`_is_version_boundary`)**: 매칭된 `contains` 토큰 직후 문자가 숫자나 `.`이면(예: `gpt-5` 항목이 `gpt-5.5`를 가로챔) 거친 매칭으로 의심해 단가 커버리지 진단에 노출한다.
 
 ## 5. 새 도구 파서 추가하는 법
 

@@ -1,6 +1,6 @@
 # Tokenomy PRD (제품 요구사항 정의)
 
-- 최종 갱신: 2026-06-16 (v0.1.7 — 차원별 귀속·토큰 구성비·캐시 재구축 신호 반영)
+- 최종 갱신: 2026-06-17 (v0.1.8 — 단가 커버리지 진단·단가 변경 자동 재계산 반영)
 - 상태: 내부 PoC → 공개(MIT) 범용화 진행 중. 로컬 전용 메모(커밋 제외).
 - 출처: 브레인스토밍 세션 종합 + [`specs/2026-06-12-tokenomy-public-generalization-design.md`](superpowers/specs/2026-06-12-tokenomy-public-generalization-design.md)
 - 관련: [ARCHITECTURE.md](ARCHITECTURE.md) · [ROADMAP.md](ROADMAP.md)
@@ -54,7 +54,7 @@ AI 코딩 토큰 지출용 **로컬 가계부**. 내 머신의 Claude Code / Cod
 | 번다운 | (Claude) 한도 대비 누적 지출·일평균·월말 예상·소진 예상일·on/over. (Codex) 주간 누적 한도(W×N) 대비 이번 주 가용액 |
 | 복기 | 프로젝트/세션/차원(모델·스킬·브랜치)별 비용·캐시율·토큰 구성비, 세션 작업요약, 주/월 토글 + 사용자 지정 날짜 구간 + 과거 탐색 |
 | 효율 코치 | 캐시 활용 낮음·캐시 재구축·web_search 과다·단가 미식별·월말 초과 예상 경고 카드 |
-| 단가 | 공개 API 단가 기본 제공 + `pricing_overrides`로 사용자 단가 덮어쓰기 |
+| 단가 | 공개 API 단가 기본 제공 + `pricing_overrides`로 사용자 단가 덮어쓰기·새 모델 자가 추가. 단가 변경 시 비용 자동 재계산. 단가 커버리지 진단(미식별·오매칭·거친매칭)을 settings·overview·CLI로 노출 |
 | 신선도 | 마지막 ingest 경과·가장 오래된 raw 나이 경고(유실 위험 노출) |
 | 배포 | Windows onefile exe(pywebview 네이티브 창), 인앱 업데이트 배너 |
 
@@ -67,7 +67,7 @@ AI 코딩 토큰 지출용 **로컬 가계부**. 내 머신의 Claude Code / Cod
 | 3 | 사용자 모델 | 1머신 1사용자(팀 집계 제외) |
 | 4 | 1차 타깃 | 종량제 중심, 구독은 추정치 추적만 |
 | 5 | 비용 표기 | USD 단일, *공개 API 단가 환산*임을 명시 |
-| 6 | 문서 언어 | README 영문 기본 + 한글 병기 |
+| 6 | 문서 언어 | README 한글 기본(`README.md`) + 영문 병기(`README.en.md`) |
 | 7 | 라이선스 | MIT |
 | 8 | provider 키 | 내부 키 `codex`로 통일(과거 `chatgpt` 제거) |
 
