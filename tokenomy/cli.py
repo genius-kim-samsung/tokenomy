@@ -10,7 +10,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from tokenomy.aggregate import KST, burndown, by_project, by_session, parse_ts
+from tokenomy.aggregate import KST, burndown, by_project, by_session, parse_ts, pricing_coverage
 from tokenomy.codex_parser import CODEX_ROOT, ingest_codex
 from tokenomy.archive import archive_tree
 from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns
@@ -91,6 +91,14 @@ def cmd_report(conn) -> None:
                     print(f"          ${s.cost:7.2f}  {title}")
 
     _print_recent_sessions(conn, now)
+
+    pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
+    cov = pricing_coverage(conn, pricing)
+    if cov.unpriced_count or cov.suspect_count:
+        print(f"\n단가 커버리지: 미식별 {cov.unpriced_count}종 · 확인 필요 {cov.suspect_count}종 "
+              f"(설정/pricing.json 확인)")
+    else:
+        print("\n단가 커버리지: 정상")
 
 
 def _print_recent_sessions(conn, now, top_n: int = 10) -> None:
