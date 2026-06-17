@@ -87,16 +87,27 @@ _OVERRIDABLE = ("input", "output", "cache_write", "cache_read")
 
 
 def apply_pricing_overrides(pricing: dict, overrides: dict | None) -> dict:
-    """pricing_overrides({contains: {input/output/...}})로 match[] 단가를 덮어쓴다.
+    """pricing_overrides({contains: {input/output/...[/provider]}})로 match[]를 보정한다.
 
-    contains 키가 일치하는 항목의 지정된 단가 필드만 교체한다(미지정 필드 보존).
+    기존 contains 항목은 지정 단가 필드만 교체(미지정 필드 보존). 기존에 없는
+    contains 키는 새 항목으로 만들어 match[] 앞에 prepend한다 — find_rate가
+    위에서부터 첫 부분일치를 쓰므로, 더 구체적인 사용자 항목이 기존 거친 항목보다
+    먼저 매칭된다(예: 'gpt-5.5'가 'gpt-5'를 앞선다). 누락 단가 필드는 0.0.
     """
     if not overrides:
         return pricing
+    existing = {e.get("contains") for e in pricing.get("match", [])}
     for entry in pricing.get("match", []):
         ov = overrides.get(entry.get("contains"))
         if ov:
             for k in _OVERRIDABLE:
                 if k in ov:
                     entry[k] = ov[k]
+    new = [
+        {"contains": contains, "provider": ov.get("provider"),
+         "input": ov.get("input", 0.0), "output": ov.get("output", 0.0),
+         "cache_write": ov.get("cache_write", 0.0), "cache_read": ov.get("cache_read", 0.0)}
+        for contains, ov in overrides.items() if contains not in existing
+    ]
+    pricing["match"] = new + pricing.get("match", [])
     return pricing

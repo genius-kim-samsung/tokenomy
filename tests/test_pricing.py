@@ -141,3 +141,33 @@ def test_version_boundary_safe_when_separator_or_end_follows():
     assert _is_version_boundary("claude-opus-4-8", "opus") is False  # 직후 '-'
     assert _is_version_boundary("gpt-5", "gpt-5") is False           # 직후 없음(끝)
     assert _is_version_boundary("anything", "missing") is False      # 토큰 부재
+
+
+def test_apply_overrides_adds_new_model_prepended():
+    # 기존에 없는 contains 키 → 새 항목으로 추가, 기존보다 앞(prepend)
+    pricing = {"match": [
+        {"contains": "gpt-5", "provider": "codex", "input": 1.25, "output": 10.0,
+         "cache_write": 0.0, "cache_read": 0.125},
+    ]}
+    out = apply_pricing_overrides(pricing, {
+        "gpt-5.5": {"provider": "codex", "input": 2.0, "output": 12.0, "cache_read": 0.2},
+    })
+    assert out["match"][0]["contains"] == "gpt-5.5"   # prepend
+    # 새 항목이 먼저 매칭되어 gpt-5.5가 정확 단가로 잡힌다
+    assert find_rate("gpt-5.5", out)["input"] == 2.0
+    # 누락 필드는 0.0
+    assert out["match"][0]["cache_write"] == 0.0
+
+
+def test_apply_overrides_new_model_priced_via_compute_cost():
+    pricing = {"match": [
+        {"contains": "opus", "provider": "claude", "input": 15.0, "output": 75.0,
+         "cache_write": 18.75, "cache_read": 1.50},
+    ]}
+    out = apply_pricing_overrides(pricing, {
+        "gpt-5.5": {"provider": "codex", "input": 2.0, "output": 12.0},
+    })
+    r = compute_cost(_rec("gpt-5.5", output_tokens=1_000_000), out)
+    assert r.priced is True
+    assert r.cost_usd == 12.0
+    assert r.provider == "codex"
