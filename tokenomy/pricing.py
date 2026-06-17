@@ -40,6 +40,20 @@ def find_rate(model: str | None, pricing: dict) -> dict | None:
     return None
 
 
+def _is_version_boundary(model: str, contains: str) -> bool:
+    """매칭된 contains 토큰 직후 문자가 숫자나 '.'이면 버전 경계 의심.
+
+    부분일치가 새 버전을 그럴듯하게 틀리게 잡는 경우를 추정한다
+    (예: 'gpt-5' 항목이 'gpt-5.5' 모델을 가로챔). 토큰 직후가 구분자('-')거나
+    문자열 끝이면 안전으로 본다(예: 'opus' → 'claude-opus-4-8').
+    """
+    idx = model.find(contains)
+    if idx < 0:
+        return False
+    nxt = model[idx + len(contains): idx + len(contains) + 1]
+    return nxt.isdigit() or nxt == "."
+
+
 # 1시간 캐시 생성은 input 단가의 2배로 과금된다(5분 캐시는 cache_write 단가).
 CACHE_CREATE_1H_INPUT_MULTIPLIER = 2.0
 

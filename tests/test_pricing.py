@@ -1,6 +1,7 @@
 from tokenomy.parser import UsageRecord
 from tokenomy.pricing import (
     CostResult,
+    _is_version_boundary,
     apply_pricing_overrides,
     compute_cost,
     find_rate,
@@ -127,3 +128,16 @@ def test_apply_overrides_none_is_noop():
     pricing = {"match": [{"contains": "opus", "input": 15.0}]}
     out = apply_pricing_overrides(pricing, None)
     assert out["match"][0]["input"] == 15.0
+
+
+def test_version_boundary_suspect_when_digit_or_dot_follows():
+    # contains 토큰 직후가 숫자/'.'이면 다음 버전 의심
+    assert _is_version_boundary("gpt-5.5", "gpt-5") is True
+    assert _is_version_boundary("gpt-4o", "gpt-4") is False   # 'o'는 숫자/'.' 아님
+    assert _is_version_boundary("gpt-4.1", "gpt-4") is True
+
+
+def test_version_boundary_safe_when_separator_or_end_follows():
+    assert _is_version_boundary("claude-opus-4-8", "opus") is False  # 직후 '-'
+    assert _is_version_boundary("gpt-5", "gpt-5") is False           # 직후 없음(끝)
+    assert _is_version_boundary("anything", "missing") is False      # 토큰 부재
