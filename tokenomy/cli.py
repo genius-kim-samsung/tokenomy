@@ -73,9 +73,6 @@ def cmd_report(conn) -> None:
             print(f"  [!] 이미 한도 초과 — 절감 필요 (한도 대비 {bd.pct * 100:.0f}%)")
         elif bd.exhaust_day:
             print(f"  [!] 이대로면 {bd.exhaust_day}일에 소진 (남은 {bd.days_left}일)")
-        if bd.unpriced_count:
-            print(f"  (단가 미식별 메시지 {bd.unpriced_count}건 — 비용 누락)")
-
         rows = by_project(conn, prov, now, 12)
         if rows:
             print("  Top 프로젝트:")
