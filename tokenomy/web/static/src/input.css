@@ -104,8 +104,10 @@
   .toggle a.on { @apply text-fg bg-elev; }
   .toggle.small a { @apply text-[13px]; }
 
-  /* 이번 달 총지출 히어로 — 총액은 크게, 계산식은 아래 줄로 분리 */
+  /* 이번 달 총지출 히어로 — 총액은 크게, 분모/사용률은 작게, 통합 진행바 아래 */
   .total-num { @apply text-[34px] leading-none font-semibold tabular-nums mt-1 mb-0; }
+  .total-denom { @apply text-[18px] font-normal text-muted; }
+  .total-bar { @apply block w-full h-3 my-2; }
   .total-breakdown { @apply mt-1.5 mb-0; }
 
   /* 번다운 바 */

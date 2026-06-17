@@ -11,8 +11,15 @@
   {% if not has_data %}
     <p class="muted">데이터 없음 · 사이드바 [↻ 새로고침]을 누르세요</p>
   {% else %}
-    <p class="total-num serif">${{ '%.2f'|format(month_total) }}</p>
-    <p class="total-breakdown muted">Claude ${{ '%.2f'|format(claude_bd.spent) }} · Codex ${{ '%.2f'|format(codex_bd.spent) }}</p>
+    {% if both_budgeted %}
+      <p class="total-num serif">${{ '{:,.2f}'.format(month_total) }}
+        <span class="total-denom">/ ${{ '{:,.0f}'.format(combined_bd.limit) }}</span></p>
+      <span class="bar total-bar"><span class="fill s-{{ 'exceeds' if combined_bd.spent >= combined_bd.limit else 'ok' }}" style="width: {{ [combined_bd.pct * 100, 100]|min }}%"></span></span>
+      <p class="total-breakdown muted">{{ '%.0f'|format(combined_bd.pct * 100) }}% 사용 · Claude ${{ '{:,.2f}'.format(claude_bd.spent) }} · Codex ${{ '{:,.2f}'.format(codex_bd.spent) }}</p>
+    {% else %}
+      <p class="total-num serif">${{ '{:,.2f}'.format(month_total) }}</p>
+      <p class="total-breakdown muted">Claude ${{ '{:,.2f}'.format(claude_bd.spent) }} · Codex ${{ '{:,.2f}'.format(codex_bd.spent) }}</p>
+    {% endif %}
     <p class="disclaimer">ⓘ 공개 API 단가 기준 추정 · 이 머신 데이터만</p>
   {% endif %}
 </section>

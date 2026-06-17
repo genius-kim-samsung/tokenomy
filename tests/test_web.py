@@ -216,6 +216,45 @@ def test_overview_aggregates_providers(tmp_path, monkeypatch):
     assert 'class="ai-cards"' in r.text
 
 
+def test_overview_shows_usage_ratio_when_both_budgeted(tmp_path, monkeypatch):
+    """두 provider 모두 월 예산이 있으면 히어로에 통합 사용률(분수+진행바)이 뜬다."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    (tmp_path / "cfg.json").write_text(
+        '{"budget": {"claude": 100, "codex": 40}}', encoding="utf-8")
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+        "VALUES ('a','claude','s1','proj','2026-06-10T10:00:00Z','claude-opus-4-8',35.0,1)"
+    )
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+        "VALUES ('b','codex','s2','proj','2026-06-10T11:00:00Z','gpt-5',35.0,1)"
+    )
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "/ $140" in r.text          # 통합 예산 분모(claude 100 + codex 40)
+    assert "% 사용" in r.text           # 사용률 표기
+    assert "total-bar" in r.text       # 통합 진행바
+
+
+def test_overview_hides_ratio_when_only_one_budgeted(tmp_path, monkeypatch):
+    """한쪽만 예산이면 통합 분모가 불완전 → 사용률/바 없이 금액만 표시."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    (tmp_path / "cfg.json").write_text(
+        '{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+        "VALUES ('a','claude','s1','proj','2026-06-10T10:00:00Z','claude-opus-4-8',35.0,1)"
+    )
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "total-bar" not in r.text   # 사용률 진행바 미노출
+    assert "% 사용" not in r.text
+
+
 def test_projects_redirects_to_history(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/projects", follow_redirects=False)

@@ -6,8 +6,9 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, DateGroup, DaySessionRow, FolderGroup, burndown,
     by_day_session, by_dimension, by_project, by_session, codex_burndown,
-    daily_series, insights, month_bounds, period_bounds, pricing_coverage,
-    session_detail, sidechain_split, stacked_trend, token_composition,
+    combined_burndown, daily_series, insights, month_bounds, period_bounds,
+    pricing_coverage, session_detail, sidechain_split, stacked_trend,
+    token_composition,
 )
 from tokenomy.budget import budget_from_config, budget_start_kst, load_config, user_label
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
@@ -42,6 +43,15 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     claude_bd = burndown(conn, budget, now, "claude", budget_start=bs)
     codex_bd = codex_burndown(conn, budget, now, budget_start=bs)
     month_total = round(claude_bd.spent + codex_bd.spent, 4)
+
+    # 히어로 통합 사용률(총지출/총예산). 두 provider 모두 월 예산이 설정된 경우만 노출한다
+    # (한쪽만이면 통합 분모가 불완전 → 금액만 표시). codex를 월간 Burndown으로 변환해
+    # claude와 합산한다. 주의: combined_burndown은 budget_start clamp를 모르므로
+    # spent/limit/pct만 쓰고 projected_month/status(예측 경고)는 쓰지 않는다 — 예측은
+    # 아래 'AI별 번다운' 섹션이 담당(역할 분리).
+    codex_monthly = burndown(conn, budget, now, "codex", budget_start=bs)
+    combined_bd = combined_burndown([claude_bd, codex_monthly], now)
+    both_budgeted = claude_bd.limit > 0 and codex_monthly.limit > 0
 
     projects = by_project(conn, None, now)
     projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
@@ -80,6 +90,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "budget_start": config.get("budget_start"),
         "month": now.strftime("%Y-%m"),
         "claude_bd": claude_bd, "codex_bd": codex_bd, "month_total": month_total,
+        "combined_bd": combined_bd, "both_budgeted": both_budgeted,
         "claude_has_data": _provider_has_data(conn, "claude"),
         "codex_has_data": _provider_has_data(conn, "codex"),
         "projects": projects, "sessions": sessions, "insights": coach,
