@@ -14,6 +14,7 @@ from tokenomy.budget import budget_from_config, load_config, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
 from tokenomy.paths import resource_path
+from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
 from tokenomy.web.views import (
     coverage_card_context, dimension_context, history_context, overview_context, session_context,
@@ -143,13 +144,14 @@ def settings_get(request: Request):
     budget = budget_from_config(config)
     conn = connect()
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
     return templates.TemplateResponse(
         request, "settings.html",
         {"claude": budget.claude, "codex": budget.codex,
          "budget_start": config.get("budget_start") or "",
          "active_nav": "settings", "update_tag": check_update(conn),
          "last_ts": last["t"] if last and last["t"] else None,
-         **coverage_card_context(conn)},
+         **coverage_card_context(conn, pricing)},
     )
 
 

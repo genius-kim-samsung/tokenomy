@@ -254,14 +254,13 @@ def _share_pct(x: float) -> str:
     return "<1%" if 0 < p < 1 else f"{p:.0f}%"
 
 
-def coverage_card_context(conn) -> dict:
+def coverage_card_context(conn, pricing: dict) -> dict:
     """settings 단가 커버리지 카드용 컨텍스트.
 
     pricing 항목(match[]) 기준 역방향 그룹핑(항목 → 매칭 모델들) + 미식별 별도 묶음.
     거친 매칭은 한 그룹에 모델이 여러 행으로 나타나 자연히 드러난다.
+    pricing은 호출부(settings_get)가 overrides 적용해 주입한다(테스트 격리 용이).
     """
-    config = load_config()
-    pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
     cov = pricing_coverage(conn, pricing)
 
     def _row(m):

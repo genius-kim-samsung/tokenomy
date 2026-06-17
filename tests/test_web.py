@@ -614,3 +614,20 @@ def test_settings_coverage_card_shows_suspect(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "확인 필요" in r.text   # suspect 상태 라벨
     assert "gpt-5.5" in r.text     # 의심 안내에 모델명
+
+
+def test_coverage_card_context_injected_pricing():
+    # 주입형 시그니처 — 실제 pricing.json이 아닌 테스트 dict를 주입해 격리 검증
+    from tokenomy.web.views import coverage_card_context
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,input_tokens,cost_usd,priced) "
+                 "VALUES ('a','codex','s1','p','2026-06-10T10:00:00Z','gpt-5.5',100,1.0,1)")
+    conn.commit()
+    pricing = {"match": [
+        {"contains": "gpt-5", "provider": "codex", "input": 1.25, "output": 10.0,
+         "cache_write": 0.0, "cache_read": 0.125},
+    ]}
+    ctx = coverage_card_context(conn, pricing)
+    # gpt-5.5가 주입 pricing의 'gpt-5'에 부분일치 → 버전경계 의심
+    assert ctx["coverage_status"][0] == "info"
+    assert "gpt-5.5" in ctx["coverage_suspects"]
