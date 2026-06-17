@@ -110,6 +110,15 @@
 - [ ] **server tool(web_search/web_fetch) 집계·추이** — Claude 로그엔 있으나 Codex 도구 부재로 parity 실패,
   v0.2.0 제외(2026-06-17 그릴). provider 단일(Claude) 지표로 낼지 추후 판단.
 - [ ] **단가 최신화 워크플로** — 단가 변동 시 `pricing.json` 갱신을 쉽게(README 안내 + 가능하면 보조 도구).
+- [ ] **단가 정밀도 — long-context tiered + cost-mode** *(2026-06-17 가격 검토 보류, 출처: ccusage 보고서 §3.3)*:
+  - **200K tiered 단가** — Sonnet 계열은 입력 200K 초과 시 long-context 프리미엄(input·output 단가 상향)이 있으나
+    현재 `pricing.json`은 단일 단가라 미표현. **실데이터 영향 0**(전체 max input 134,770 · `>200K` 0행 · sonnet max 10,174 —
+    Claude Code는 컨텍스트를 `cache_read`로 흘리고 fresh `input_tokens`만 남겨 200K를 거의 못 넘음).
+    1M 컨텍스트 상용화로 fresh input이 커지면 `pricing.json`에 `above`/threshold 필드 + `compute_cost` tiered 분기 추가.
+    *(opus·haiku는 long-context 차등 없음. 트리거가 "총 컨텍스트(cache 포함)>200K"인지 "fresh input>200K"인지는 공식 문서 재확인 필요.)*
+  - **cost-mode 분리(display 감사)** — 현재 항상 calculate(토큰×단가, `maybe_reprice`와 정합). 로그의 공식 `costUSD`와
+    자체 계산을 나란히 보여주는 display 모드는 감사용으로 유용하나, Claude Code가 `costUSD`를 잘 안 남겨 실익 낮음 → 보류.
+  - **Codex `speed=fast` 배수** — fast 모드 별도 과금 시 단가 배수 필요. 현재 codex 데이터 미미(6행)·GPT-5.x 적용 여부 불확실 → 인지만.
 
 ## v0.2.0 이후 (고도화 — Insight 추출)
 
