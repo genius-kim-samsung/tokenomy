@@ -43,9 +43,10 @@
 ### 비목표
 - 시점별 단가(`effective_date`) 본격 도입 — backlog. 진단 각주로 한계만 투명 표기.
 - 단가 자동 갱신/네트워크 조회 — 안 함. 수동 `pricing.json`/`overrides` 유지.
-- **단가 입력 GUI** — 안 함. 단가 추가·조정은 기존 `tokenomy.config.json`의 `pricing_overrides`(JSON 직접 편집)
-  경로를 **확장**해서 쓴다(새 폼/편집 화면 없음). 처음 그릴에서 컷한 "사용자 입력 authoring"은 *세션 라벨* 같은
-  새 의미 부여를 말하며, 단가 override는 raw 비용 계산의 보정이라 별개다.
+- **단가 편집 GUI** — *본 spec 범위 밖, 후속 spec으로 분해*(2026-06-17 결정). 본 spec은 진단 + overrides
+  백엔드(JSON 편집)까지 다룬다 — GUI는 이 백엔드 위에 얹는 별도 작업이다(§11 참조). 지금은
+  `tokenomy.config.json`의 `pricing_overrides`(JSON 직접 편집) 경로를 **확장**해서 쓴다. 처음 그릴에서 컷한
+  "사용자 입력 authoring"은 *세션 라벨* 같은 새 의미 부여를 말하며, 단가 override는 raw 비용 계산의 보정이라 별개다.
 
 ### 설계 원칙 적합성 (v0.2.0 4원칙)
 - **자격/강도**: 미식별=비용 누락(명백) → 경고 자격. 오매칭 의심=불확실 → 약한 주의(info).
@@ -262,8 +263,11 @@ if cov.unpriced_count:
   진단(§4·§7·§8)은 **읽기 전용 집계**다. overrides 확장(§6)은 ingest 시 **메모리상 pricing dict만** 바꾼다 —
   단가 계산식·DB 스키마는 그대로다.
 
-## 11. 스코프 밖 / backlog
+## 11. 후속 / backlog
 
+- **단가 편집 GUI (바로 다음 sub-project)** — 본 spec의 진단 테이블 + overrides 확장 백엔드 위에 얹는 별도 spec.
+  모델/단가를 settings에서 직접 **확인·추가·수정**(폼·검증·저장)하고, 단가 변경 시 **기존 적재 cost 재계산 UX**
+  (재ingest 트리거 또는 rebuild)를 설계한다. 본 spec 완료 후 별도 brainstorming → spec → plan으로 진행.
 - 시점별 단가(`effective_date`, `ts` 기반 단가 선택, 과거단가 히스토리) — 드문 "동명 단가변동" 대비. 후속.
 - `pricing.json` 갱신 보조 도구 — ROADMAP "단가 최신화 워크플로"와 통합 검토.
 - `provider="chatgpt"`의 `gpt-5.5` 1건(코덱스 아닌 출처) — 별개 파서 이슈, 본 spec 범위 밖.
