@@ -680,7 +680,8 @@ class Insight:
     text: str
 
 
-def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None) -> list[Insight]:
+def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None,
+             cov: "CoverageReport | None" = None) -> list[Insight]:
     rows = _month_rows(conn, provider, now_kst)
     cr = sum(r["cache_read"] or 0 for r in rows)
     den = sum((r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0) for r in rows)
@@ -705,7 +706,13 @@ def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None) -> l
             "info",
             f"캐시 재구축 {len(rebuild_sessions)}개 세션 — 이어지는 작업에서 컨텍스트 재빌드(세션 유지로 개선 여지)",
         ))
-    if bd.unpriced_count:
+    if cov is not None and cov.unpriced_count:
+        pct = cov.unpriced_token_share * 100
+        cards.append(Insight(
+            "warn",
+            f"단가 미식별 {cov.unpriced_count}종(토큰 {pct:.0f}%) — 비용 누락, 설정에서 확인",
+        ))
+    elif cov is None and bd.unpriced_count:   # cov 미전달 시 하위호환(메시지 건수)
         cards.append(Insight("warn", f"단가 미식별 {bd.unpriced_count}건 — 비용 누락 가능"))
     if bd.limit > 0 and bd.projected_month > bd.limit:
         cards.append(Insight("warn", f"현 추세 월말 ${bd.projected_month:.0f} 예상 — 한도 초과 가능"))

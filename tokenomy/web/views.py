@@ -6,10 +6,11 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, DateGroup, DaySessionRow, FolderGroup, burndown,
     by_day_session, by_dimension, by_project, by_session, codex_burndown,
-    daily_series, insights, month_bounds, period_bounds, session_detail,
-    sidechain_split, stacked_trend, token_composition,
+    daily_series, insights, month_bounds, period_bounds, pricing_coverage,
+    session_detail, sidechain_split, stacked_trend, token_composition,
 )
 from tokenomy.budget import budget_from_config, budget_start_kst, load_config, user_label
+from tokenomy.pricing import apply_pricing_overrides, load_pricing
 
 _SORT_KEYS = {
     "cost": lambda x: x.cost,
@@ -47,7 +48,9 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     projects = projects[:10]
     sessions = by_session(conn, None, now, limit_n=10)
     # 효율 코치/추세는 전 AI 합산·달력 월 기준 유지(설계). Burndown 인자는 claude 카드 재사용.
-    coach = insights(conn, claude_bd, now, None)
+    pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
+    cov = pricing_coverage(conn, pricing)
+    coach = insights(conn, claude_bd, now, None, cov=cov)
     daily = daily_series(conn, None, now, budget_start=bs)
 
     # 통합 추세: provider별 누적을 스택 밴드로. 데이터 있는 provider만 등록 순서대로.

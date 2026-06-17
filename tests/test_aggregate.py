@@ -1426,3 +1426,24 @@ def test_pricing_coverage_coarse_match():
     _insert(conn, TS, 1.0, model="claude-opus-4-8", input_t=10, session="b")
     cov = pricing_coverage(conn, COV_PRICING)
     assert cov.coarse_contains == ["opus"]   # 한 항목에 2개 distinct 모델
+
+
+def test_insights_unpriced_warning_uses_coverage_species_and_share():
+    conn = connect(":memory:")
+    _insert(conn, TS, 1.0, model="claude-opus-4-8", input_t=100)         # priced
+    _insert(conn, TS, 0.0, model="gpt-foo", input_t=100, priced=0)       # unpriced
+    cov = pricing_coverage(conn, COV_PRICING)
+    bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
+    cards = insights(conn, bd, NOW, None, cov=cov)
+    texts = [c.text for c in cards]
+    # 모델 "종" 수(1) + 토큰 비중(50%) 형태, "설정에서 확인" 포함
+    assert any("미식별 1종" in t and "50%" in t and "설정" in t for t in texts)
+
+
+def test_insights_no_unpriced_warning_when_coverage_clean():
+    conn = connect(":memory:")
+    _insert(conn, TS, 1.0, model="claude-opus-4-8", input_t=100)
+    cov = pricing_coverage(conn, COV_PRICING)
+    bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
+    cards = insights(conn, bd, NOW, None, cov=cov)
+    assert not any("미식별" in c.text for c in cards)
