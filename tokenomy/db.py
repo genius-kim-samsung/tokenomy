@@ -18,7 +18,7 @@ from tokenomy.parser import (
     parse_file,
     parse_titles,
 )
-from tokenomy.pricing import compute_cost
+from tokenomy.pricing import compute_cost, pricing_fingerprint
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS messages (
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
     cache_creation INTEGER DEFAULT 0,
+    cache_creation_1h INTEGER DEFAULT 0,
     cache_read INTEGER DEFAULT 0,
     web_search INTEGER DEFAULT 0,
     web_fetch INTEGER DEFAULT 0,
@@ -93,6 +94,7 @@ _MIGRATE_COLS = {
         "input_tokens": "INTEGER DEFAULT 0",
         "output_tokens": "INTEGER DEFAULT 0",
         "cache_creation": "INTEGER DEFAULT 0",
+        "cache_creation_1h": "INTEGER DEFAULT 0",
         "cache_read": "INTEGER DEFAULT 0",
         "web_search": "INTEGER DEFAULT 0",
         "web_fetch": "INTEGER DEFAULT 0",
@@ -180,15 +182,16 @@ def ingest_records(conn: sqlite3.Connection, records: list[UsageRecord], pricing
         conn.execute(
             f"""INSERT INTO messages
                (dedup_key, provider, session_id, project, ts, model,
-                input_tokens, output_tokens, cache_creation, cache_read,
+                input_tokens, output_tokens, cache_creation, cache_creation_1h, cache_read,
                 web_search, web_fetch, cost_usd, priced, request_id, is_sidechain,
                 attribution_skill, git_branch)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(dedup_key) DO UPDATE SET
                    provider=excluded.provider, session_id=excluded.session_id,
                    project=excluded.project, ts=excluded.ts, model=excluded.model,
                    input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
-                   cache_creation=excluded.cache_creation, cache_read=excluded.cache_read,
+                   cache_creation=excluded.cache_creation, cache_creation_1h=excluded.cache_creation_1h,
+                   cache_read=excluded.cache_read,
                    web_search=excluded.web_search, web_fetch=excluded.web_fetch,
                    cost_usd=excluded.cost_usd, priced=excluded.priced,
                    request_id=excluded.request_id, is_sidechain=excluded.is_sidechain,
@@ -196,7 +199,7 @@ def ingest_records(conn: sqlite3.Connection, records: list[UsageRecord], pricing
                WHERE {_REPLACE_WHEN}""",
             (
                 _dedup_key(r), r.provider, r.session_id, r.cwd, r.ts, r.model,
-                r.input_tokens, r.output_tokens, r.cache_creation, r.cache_read,
+                r.input_tokens, r.output_tokens, r.cache_creation, r.cache_creation_1h, r.cache_read,
                 r.web_search, r.web_fetch, cost.cost_usd, int(cost.priced),
                 r.request_id, int(r.is_sidechain),
                 r.attribution_skill, r.git_branch,
@@ -219,6 +222,56 @@ def ingest_records(conn: sqlite3.Connection, records: list[UsageRecord], pricing
             _write_day_turns(conn, r.session_id, r.user_turns_by_day)
     conn.commit()
     return len(records)
+
+
+# 직전 적재 때 사용한 효과 단가의 핑거프린트. 값이 바뀌면 기존 cost_usd가 stale.
+PRICING_FINGERPRINT_KEY = "pricing_fingerprint"
+
+
+def reprice_all(conn: sqlite3.Connection, pricing: dict) -> int:
+    """저장된 토큰 × 현행 pricing으로 모든 messages.cost_usd/priced를 재계산한다.
+
+    raw JSONL 재적재 없이 DB 내부 토큰만으로 비용을 다시 매긴다(cache_creation_1h 컬럼
+    덕에 5m/1h 분리도 정확). 비용·priced가 실제로 바뀐 행 수를 반환한다.
+    """
+    rows = conn.execute(
+        "SELECT id, provider, model, input_tokens, output_tokens, "
+        "cache_creation, cache_creation_1h, cache_read, cost_usd, priced FROM messages"
+    ).fetchall()
+    changed = 0
+    for r in rows:
+        rec = UsageRecord(
+            provider=r["provider"], session_id="", cwd="", ts="", model=r["model"],
+            input_tokens=r["input_tokens"] or 0, output_tokens=r["output_tokens"] or 0,
+            cache_creation=r["cache_creation"] or 0, cache_read=r["cache_read"] or 0,
+            cache_creation_1h=r["cache_creation_1h"] or 0,
+        )
+        res = compute_cost(rec, pricing)
+        if abs((r["cost_usd"] or 0.0) - res.cost_usd) > 1e-9 or (r["priced"] or 0) != int(res.priced):
+            conn.execute(
+                "UPDATE messages SET cost_usd=?, priced=? WHERE id=?",
+                (res.cost_usd, int(res.priced), r["id"]),
+            )
+            changed += 1
+    conn.commit()
+    return changed
+
+
+def maybe_reprice(conn: sqlite3.Connection, pricing: dict) -> int:
+    """단가 핑거프린트가 직전 적재 때와 다르면(또는 미기록) 전체 재계산.
+
+    cost_usd는 (토큰 × 단가)의 캐시값이라 단가 입력(pricing.json/overrides)이 바뀌면
+    기존 행이 stale해진다. 증분 적재는 옛 라인을 다시 안 읽고 dedup 가드도 동일 토큰
+    재적재를 막으므로, 여기서 핑거프린트 변화를 감지해 자동 재계산한다(매 ingest 호출).
+    구버전 DB(키 미기록)는 prev=None이라 첫 실행에 1회 재계산되어 기존 오단가도 자동 정정.
+    반환: 비용이 바뀐 행 수(0이면 변화 없음/스킵).
+    """
+    fp = pricing_fingerprint(pricing)
+    if get_meta(conn, PRICING_FINGERPRINT_KEY) == fp:
+        return 0
+    changed = reprice_all(conn, pricing)
+    set_meta(conn, PRICING_FINGERPRINT_KEY, fp)
+    return changed
 
 
 def get_offset(conn: sqlite3.Connection, path: str) -> int:

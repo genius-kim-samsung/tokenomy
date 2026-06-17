@@ -6,6 +6,7 @@ from tokenomy.pricing import (
     compute_cost,
     find_rate,
     load_pricing,
+    pricing_fingerprint,
 )
 
 PRICING = {
@@ -171,3 +172,44 @@ def test_apply_overrides_new_model_priced_via_compute_cost():
     assert r.priced is True
     assert r.cost_usd == 12.0
     assert r.provider == "codex"
+
+
+def test_fingerprint_stable_for_same_pricing():
+    assert pricing_fingerprint(PRICING) == pricing_fingerprint(PRICING)
+    # 동일 내용의 새 dict도 같은 해시
+    import copy
+    assert pricing_fingerprint(PRICING) == pricing_fingerprint(copy.deepcopy(PRICING))
+
+
+def test_fingerprint_changes_when_rate_changes():
+    import copy
+    a = pricing_fingerprint(PRICING)
+    p2 = copy.deepcopy(PRICING)
+    p2["match"][0]["input"] = 5.0          # opus 단가 변경
+    assert pricing_fingerprint(p2) != a
+
+
+def test_fingerprint_changes_when_order_changes():
+    # first-match 규칙상 순서가 바뀌면 매칭이 달라질 수 있으므로 해시도 달라야 한다
+    import copy
+    p2 = copy.deepcopy(PRICING)
+    p2["match"].reverse()
+    assert pricing_fingerprint(p2) != pricing_fingerprint(PRICING)
+
+
+def test_fingerprint_ignores_irrelevant_keys():
+    # 단가와 무관한 키(주석 등) 변화엔 둔감해야 한다
+    import copy
+    p2 = copy.deepcopy(PRICING)
+    p2["match"][0]["note"] = "주석 추가"
+    p2["_meta"] = {"note": "무관"}
+    assert pricing_fingerprint(p2) == pricing_fingerprint(PRICING)
+
+
+def test_fingerprint_reflects_applied_overrides():
+    # overrides 적용 결과가 단가를 바꾸면 핑거프린트도 달라진다
+    import copy
+    base = copy.deepcopy(PRICING)
+    a = pricing_fingerprint(base)
+    out = apply_pricing_overrides(copy.deepcopy(PRICING), {"opus": {"input": 5.0}})
+    assert pricing_fingerprint(out) != a

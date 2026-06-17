@@ -46,6 +46,9 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
   Claude는 월간, Codex는 **주간 누적(carryover)** 번다운(아래 게시). 예산 도입일(`budget_start`)로
   기간 시작을 clamp. `_compute_burndown`은 기간 `[start,end)`를 받는 순수 함수, `codex_burndown`은 별도.
 - **pricing.py + config/pricing.json** — 모델명 매칭으로 토큰→USD. `pricing_overrides`로 사용자 단가 override.
+  `cost_usd`는 (토큰×단가)의 **캐시값** — 단가(pricing.json/overrides)가 바뀌면 `ingest`가 단가
+  핑거프린트로 감지해 기존 행을 **자동 재계산**(`db.maybe_reprice`). 1h 캐시 분리는 `cache_creation_1h`
+  컬럼에 저장해 재계산도 정확. 증분 적재 + dedup 가드는 옛 행을 다시 안 건드리므로 이 경로가 필수.
 - **web/app.py** — FastAPI 라우트(얇게: 라우팅 + 입력검증만). 데이터 조립은 **web/views.py**.
 - **launcher.py** — exe 진입점. ingest 1회 → 빈 포트 탐색 → uvicorn(127.0.0.1) → pywebview 창(없으면 브라우저 fallback).
 - **paths.py** — 경로 중앙 해석. 데이터 위치가 실행 형태로 갈린다(아래 게시).

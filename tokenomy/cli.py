@@ -13,7 +13,7 @@ from pathlib import Path
 from tokenomy.aggregate import KST, burndown, by_project, by_session, parse_ts, pricing_coverage
 from tokenomy.codex_parser import CODEX_ROOT, ingest_codex
 from tokenomy.archive import archive_tree
-from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns
+from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns, maybe_reprice
 from tokenomy.freshness import CLEANUP_DAYS, freshness, record_ingest
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.budget import budget_from_config, load_config, user_label
@@ -30,11 +30,16 @@ def cmd_ingest(conn) -> None:
     # 세션 작업 요약(aiTitle)을 휘발 전 L1에 캐시. Codex엔 ai-title이 없어 claude만.
     n_titles = ingest_titles(conn, CLAUDE_ROOT)
     n_turns = ingest_user_turns(conn, CLAUDE_ROOT)
+    # 단가(pricing.json/overrides)가 바뀌었으면 기존 행 cost_usd를 자동 재계산.
+    repriced = maybe_reprice(conn, pricing)
     record_ingest(conn, datetime.now(KST))
-    print(
+    msg = (
         f"[ingest] claude={n_claude}  codex={n_codex}  "
         f"archived_files={n_arch}  titles={n_titles}  turns={n_turns}  new records"
     )
+    if repriced:
+        msg += f"\n[reprice] 단가 변경 감지 — 기존 {repriced}행 비용 재계산"
+    print(msg)
 
 
 def _bar(pct: float, width: int = 20) -> str:

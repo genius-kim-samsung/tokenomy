@@ -326,6 +326,96 @@ def test_codex_record_persists_day_turns():
     assert rows == {"2026-06-11": 2, "2026-06-12": 1}
 
 
+def test_messages_has_cache_creation_1h_column():
+    conn = connect(":memory:")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+    assert "cache_creation_1h" in cols
+
+
+def test_ingest_persists_cache_creation_1h():
+    conn = connect(":memory:")
+    rec = _rec("m1", session_id="s1")
+    rec.cache_creation = 1_000_000
+    rec.cache_creation_1h = 400_000
+    ingest_records(conn, [rec], PRICING)
+    row = conn.execute("SELECT cache_creation, cache_creation_1h FROM messages").fetchone()
+    assert row["cache_creation"] == 1_000_000
+    assert row["cache_creation_1h"] == 400_000
+
+
+def test_migration_adds_cache_creation_1h_to_legacy_db(tmp_path):
+    db = tmp_path / "legacy.db"
+    c = sqlite3.connect(str(db))
+    # 구 스키마: cache_creation은 있으나 1h 컬럼 없음
+    c.execute(
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "dedup_key TEXT UNIQUE, provider TEXT, cache_creation INTEGER DEFAULT 0)"
+    )
+    c.execute("INSERT INTO messages (dedup_key, provider, cache_creation) VALUES ('k','claude',5)")
+    c.commit(); c.close()
+    conn = connect(str(db))
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+    assert "cache_creation_1h" in cols
+    row = conn.execute("SELECT cache_creation, cache_creation_1h FROM messages WHERE dedup_key='k'").fetchone()
+    assert row["cache_creation"] == 5
+    assert row["cache_creation_1h"] == 0   # 기존 행은 기본값
+
+
+def test_reprice_all_recomputes_cost_from_tokens():
+    from tokenomy.db import reprice_all
+    conn = connect(":memory:")
+    ingest_records(conn, [_rec("m1", input_tokens=1_000_000)], PRICING)
+    assert conn.execute("SELECT cost_usd FROM messages").fetchone()["cost_usd"] == 15.0
+    # 단가를 절반으로 → 재계산하면 7.5
+    cheaper = {"match": [dict(PRICING["match"][0], input=7.5, output=37.5,
+                              cache_write=9.375, cache_read=0.75)]}
+    changed = reprice_all(conn, cheaper)
+    assert changed == 1
+    assert conn.execute("SELECT cost_usd FROM messages").fetchone()["cost_usd"] == 7.5
+
+
+def test_reprice_all_uses_1h_split():
+    from tokenomy.db import reprice_all
+    conn = connect(":memory:")
+    rec = _rec("m1", input_tokens=0)
+    rec.cache_creation = 1_000_000
+    rec.cache_creation_1h = 1_000_000    # 전량 1h → opus input×2 = $30
+    ingest_records(conn, [rec], PRICING)
+    assert conn.execute("SELECT cost_usd FROM messages").fetchone()["cost_usd"] == 30.0
+    # 재계산해도 1h 분리가 보존돼 $30 유지(5m로 뭉개지지 않음)
+    reprice_all(conn, PRICING)
+    assert conn.execute("SELECT cost_usd FROM messages").fetchone()["cost_usd"] == 30.0
+
+
+def test_maybe_reprice_fires_only_on_pricing_change():
+    from tokenomy.db import maybe_reprice
+    conn = connect(":memory:")
+    ingest_records(conn, [_rec("m1", input_tokens=1_000_000)], PRICING)
+    # 최초 호출: 핑거프린트 미기록 → 재계산(값 동일이라 변경 0) + 핑거프린트 저장
+    maybe_reprice(conn, PRICING)
+    # 같은 단가로 또 호출 → no-op
+    assert maybe_reprice(conn, PRICING) == 0
+    # 단가 변경 후 호출 → 재계산 발생
+    cheaper = {"match": [dict(PRICING["match"][0], input=7.5, output=37.5,
+                              cache_write=9.375, cache_read=0.75)]}
+    assert maybe_reprice(conn, cheaper) == 1
+    assert conn.execute("SELECT cost_usd FROM messages").fetchone()["cost_usd"] == 7.5
+    # 변경 단가로 재호출 → no-op
+    assert maybe_reprice(conn, cheaper) == 0
+
+
+def test_maybe_reprice_backfills_legacy_wrong_cost():
+    # 구버전에서 잘못 저장된 비용을, 핑거프린트 미기록 상태(prev=None) 첫 호출에 정정
+    from tokenomy.db import maybe_reprice
+    conn = connect(":memory:")
+    ingest_records(conn, [_rec("m1", input_tokens=1_000_000)], PRICING)
+    conn.execute("UPDATE messages SET cost_usd=999.0")   # 오염된 값 모사
+    conn.commit()
+    changed = maybe_reprice(conn, PRICING)   # prev=None → 1회 재계산
+    assert changed == 1
+    assert conn.execute("SELECT cost_usd FROM messages").fetchone()["cost_usd"] == 15.0
+
+
 def test_ingest_user_turns_writes_day_turns(tmp_path):
     conn = connect(":memory:")
     ingest_records(conn, [_rec("m1", session_id="sess-1")], PRICING)
