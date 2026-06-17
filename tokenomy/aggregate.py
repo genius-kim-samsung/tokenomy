@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from tokenomy.budget import Budget
+from tokenomy.pricing import find_rate, _is_version_boundary
 
 KST = timezone(timedelta(hours=9))
 
@@ -712,6 +713,68 @@ def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None) -> l
     if not cards:
         cards.append(Insight("info", "특이 신호 없음"))
     return cards
+
+
+@dataclass
+class CoverageModel:
+    provider: str
+    model: str | None
+    matched_contains: str | None   # 매칭된 pricing 항목의 contains. None이면 미식별
+    status: str                    # "ok" | "suspect" | "unpriced"
+    tokens: int
+    token_share: float
+
+
+@dataclass
+class CoverageReport:
+    models: list[CoverageModel]    # 토큰 내림차순
+    total_tokens: int
+    unpriced_count: int            # status=="unpriced" 모델 종 수(메시지 건수 아님)
+    unpriced_token_share: float
+    suspect_count: int
+    coarse_contains: list[str]     # 2개 이상 distinct 모델이 매칭된 contains
+
+
+def pricing_coverage(conn, pricing: dict) -> CoverageReport:
+    """distinct (provider, model)별 토큰 집계 + 단가 매칭 진단(읽기 전용).
+
+    - find_rate로 매칭, 매칭 항목의 contains 보존. rate None → unpriced.
+    - 버전경계 의심(_is_version_boundary) → suspect, 그 외 ok.
+    - coarse_contains: 같은 contains에 매칭된 distinct 모델이 2개 이상인 항목.
+    """
+    rows = conn.execute(
+        "SELECT provider, model, "
+        "SUM(input_tokens+output_tokens+cache_creation+cache_read) AS toks "
+        "FROM messages GROUP BY provider, model"
+    ).fetchall()
+    total = sum((r["toks"] or 0) for r in rows)
+    models: list[CoverageModel] = []
+    contains_models: dict[str, set] = {}
+    for r in rows:
+        model = r["model"]
+        toks = r["toks"] or 0
+        rate = find_rate(model, pricing)
+        if rate is None:
+            matched, status = None, "unpriced"
+        else:
+            matched = rate.get("contains")
+            status = "suspect" if _is_version_boundary(model or "", matched or "") else "ok"
+            contains_models.setdefault(matched, set()).add(model)
+        models.append(CoverageModel(
+            provider=r["provider"], model=model, matched_contains=matched,
+            status=status, tokens=toks,
+            token_share=(toks / total) if total else 0.0,
+        ))
+    models.sort(key=lambda m: m.tokens, reverse=True)
+    unpriced = [m for m in models if m.status == "unpriced"]
+    return CoverageReport(
+        models=models,
+        total_tokens=total,
+        unpriced_count=len(unpriced),
+        unpriced_token_share=(sum(m.tokens for m in unpriced) / total) if total else 0.0,
+        suspect_count=sum(1 for m in models if m.status == "suspect"),
+        coarse_contains=sorted(c for c, ms in contains_models.items() if len(ms) >= 2),
+    )
 
 
 @dataclass

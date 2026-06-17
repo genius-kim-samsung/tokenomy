@@ -6,7 +6,7 @@ from tokenomy.aggregate import (
     DayPoint, KST, burndown, by_day_session, by_dimension, by_model, by_project, by_session,
     combined_burndown, daily_series, insights, month_bounds, normalize_project,
     parse_ts, period_bounds, session_detail, sidechain_split, SidechainSplit, stacked_trend,
-    token_composition,
+    token_composition, pricing_coverage, CoverageReport,
 )
 from tokenomy.db import connect
 from tokenomy.budget import Budget
@@ -16,13 +16,14 @@ from tokenomy.web.views import history_context, dimension_context, overview_cont
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
 
 
-def _insert(conn, ts, cost, project="/p", session="s", cache_read=0, input_t=0, priced=1, provider="claude"):
+def _insert(conn, ts, cost, project="/p", session="s", cache_read=0, input_t=0,
+            priced=1, provider="claude", model="claude-opus-4-8"):
     conn.execute(
         "INSERT INTO messages(dedup_key,provider,session_id,project,ts,model,"
         "input_tokens,cache_creation,cache_read,cost_usd,priced) "
         "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        (f"{ts}-{cost}-{session}-{project}", provider, session, project, ts,
-         "claude-opus-4-8", input_t, 0, cache_read, cost, priced),
+        (f"{ts}-{cost}-{session}-{project}-{model}", provider, session, project, ts,
+         model, input_t, 0, cache_read, cost, priced),
     )
     conn.commit()
 
@@ -1381,3 +1382,47 @@ def test_insights_no_rebuild_for_first_day_only():
     bd = burndown(conn, Budget(claude=0, codex=0), NOW, "claude")
     cards = insights(conn, bd, NOW, None)
     assert not any("캐시 재구축" in c.text for c in cards)
+
+
+COV_PRICING = {"match": [
+    {"contains": "opus", "provider": "claude", "input": 15.0, "output": 75.0,
+     "cache_write": 18.75, "cache_read": 1.50},
+    {"contains": "gpt-5", "provider": "codex", "input": 1.25, "output": 10.0,
+     "cache_write": 0.0, "cache_read": 0.125},
+]}
+TS = "2026-06-05T00:00:00Z"
+
+
+def test_pricing_coverage_empty_db_safe():
+    conn = connect(":memory:")
+    cov = pricing_coverage(conn, COV_PRICING)
+    assert cov.total_tokens == 0
+    assert cov.unpriced_count == 0
+    assert cov.models == []
+
+
+def test_pricing_coverage_ok_unpriced_suspect():
+    conn = connect(":memory:")
+    _insert(conn, TS, 1.0, model="claude-opus-4-8", input_t=100)          # ok
+    _insert(conn, TS, 0.0, model="gpt-foo", input_t=50, priced=0)         # unpriced(매칭 없음)
+    _insert(conn, TS, 0.0, model="gpt-5.5", input_t=50, provider="codex") # suspect(gpt-5 부분일치)
+    cov = pricing_coverage(conn, COV_PRICING)
+    by_model = {m.model: m for m in cov.models}
+    assert by_model["claude-opus-4-8"].status == "ok"
+    assert by_model["claude-opus-4-8"].matched_contains == "opus"
+    assert by_model["gpt-foo"].status == "unpriced"
+    assert by_model["gpt-foo"].matched_contains is None
+    assert by_model["gpt-5.5"].status == "suspect"
+    assert cov.unpriced_count == 1
+    assert cov.suspect_count == 1
+    assert cov.total_tokens == 200
+    assert abs(cov.unpriced_token_share - 0.25) < 1e-9   # 50/200
+    assert abs(sum(m.token_share for m in cov.models) - 1.0) < 1e-9
+
+
+def test_pricing_coverage_coarse_match():
+    conn = connect(":memory:")
+    _insert(conn, TS, 1.0, model="claude-opus-4-7", input_t=10, session="a")
+    _insert(conn, TS, 1.0, model="claude-opus-4-8", input_t=10, session="b")
+    cov = pricing_coverage(conn, COV_PRICING)
+    assert cov.coarse_contains == ["opus"]   # 한 항목에 2개 distinct 모델
