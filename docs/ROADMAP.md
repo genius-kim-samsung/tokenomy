@@ -50,8 +50,9 @@
 배치: nav 5개 = overview(`/`) / 차원별(`/analysis`) / **패턴(`/patterns`, 신규)** / 내역(`/history`) / settings.
 릴리스: **증분**(항목별 작은 패치/마이너), **v0.2.0은 세트 완성 시점의 완료 마커**.
 
-- [ ] **1. 단가 미식별 가시화** (`priced=0`) — 모델별 미식별 비중. overview 경고 확장 + `/analysis?dim=model`.
-  싸고 actionable 최강(pricing.json 갱신 유도).
+- [x] **1. 단가 커버리지 신뢰성 진단** (`priced=0`+오매칭+거친매칭) — 모델별 매칭 상태를 settings 카드·
+  overview 경고·CLI report로 노출. `pricing_overrides` 확장으로 사용자가 새 모델 단가까지 자가 추가.
+  *(단가 편집 GUI는 후속 sub-project로 분해 — spec/plan: `2026-06-17-pricing-coverage-diagnostics*`.)*
 - [ ] **2. 입출력 토큰 비율** — 세션·프로젝트 단위 토큰 구성. 기존 4분할 컴포넌트를 새 결로 확장
   (Codex는 cache_wr=0 → 3분할). 세션 상세 + `/analysis`.
 - [ ] **3. 캐시 절감액 추정** — `순절감 = cache_read×(input−cache_read) − cache_creation×(cache_creation−input)`
