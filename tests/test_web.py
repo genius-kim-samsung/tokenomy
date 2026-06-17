@@ -72,7 +72,7 @@ def test_dashboard_renders_sections_with_data(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    for section in ("이번 달 총지출", "AI별 번다운", "통합 추세", "통합 효율 코치", "통합 프로젝트별", "복기"):
+    for section in ("이번 달 총지출", "AI별 사용 현황", "통합 추세", "통합 효율 코치", "통합 프로젝트별", "복기"):
         assert section in r.text
     assert "공개 API 단가 기준 추정" in r.text   # §5.2 비용 신뢰도 표기
     assert "proj" in r.text                       # 프로젝트별 행
@@ -189,7 +189,7 @@ def test_root_renders_overview(tmp_path, monkeypatch):
     r = client.get("/")
     assert r.status_code == 200
     assert "이번 달 총지출" in r.text
-    assert "AI별 번다운" in r.text
+    assert "AI별 사용 현황" in r.text
     assert 'class="sidebar"' in r.text
     assert 'href="/history"' in r.text
     assert 'href="/analysis"' in r.text   # 나브: 모델별→차원별
@@ -209,11 +209,36 @@ def test_overview_aggregates_providers(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    for section in ("이번 달 총지출", "AI별 번다운", "통합 추세", "통합 효율 코치",
+    for section in ("이번 달 총지출", "AI별 사용 현황", "통합 추세", "통합 효율 코치",
                     "통합 프로젝트별", "복기"):
         assert section in r.text
     assert "proj" in r.text
     assert 'class="ai-cards"' in r.text
+
+
+def test_ai_cards_use_text_status_and_labels(tmp_path, monkeypatch):
+    """AI별 카드: 상태는 이모지 대신 텍스트(안전/주의/초과), 비대칭 라벨 명확화."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    (tmp_path / "cfg.json").write_text(
+        '{"budget": {"claude": 100, "codex": 40}}', encoding="utf-8")
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+        "VALUES ('a','claude','s1','proj','2026-06-10T10:00:00Z','claude-opus-4-8',35.0,1)"
+    )
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+        "VALUES ('b','codex','s2','proj','2026-06-10T11:00:00Z','gpt-5',5.0,1)"
+    )
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "안전" in r.text                  # 텍스트 상태(B)
+    for emoji in ("✅", "⛔"):                # 카드 상태 이모지 제거(B)
+        assert emoji not in r.text
+    assert "예상 월말" in r.text             # Claude=예측 라벨(A)
+    assert "이번 주 잔여" in r.text          # Codex=잔여 라벨(A)
+    assert 'class="ai-denom' in r.text       # 분모 약화(C·시각 위계)
 
 
 def test_overview_shows_usage_ratio_when_both_budgeted(tmp_path, monkeypatch):
@@ -233,9 +258,9 @@ def test_overview_shows_usage_ratio_when_both_budgeted(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    assert "/ $140" in r.text          # 통합 예산 분모(claude 100 + codex 40)
-    assert "% 사용" in r.text           # 사용률 표기
-    assert "total-bar" in r.text       # 통합 진행바
+    assert "/ $140" in r.text                # 통합 예산 분모(claude 100 + codex 40)
+    assert "% 사용 · Claude" in r.text       # 히어로 통합 사용률 breakdown(카드의 '% 사용'과 구분)
+    assert "total-bar" in r.text             # 통합 진행바
 
 
 def test_overview_hides_ratio_when_only_one_budgeted(tmp_path, monkeypatch):
@@ -251,8 +276,8 @@ def test_overview_hides_ratio_when_only_one_budgeted(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    assert "total-bar" not in r.text   # 사용률 진행바 미노출
-    assert "% 사용" not in r.text
+    assert "total-bar" not in r.text     # 사용률 진행바 미노출
+    assert "total-denom" not in r.text   # 히어로 통합 분모(분수) 미노출(카드 ai-denom과 무관)
 
 
 def test_projects_redirects_to_history(tmp_path, monkeypatch):

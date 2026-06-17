@@ -25,24 +25,24 @@
 </section>
 
 <section class="card">
-  <h2>AI별 번다운</h2>
+  <h2>AI별 사용 현황</h2>
   <div class="ai-cards">
-    {# Claude — 월간 한도 #}
+    {# Claude — 월간 한도. 둘째 줄은 '예측'(예상 월말 지출) #}
     <a class="ai-card" href="/history?provider=claude">
       <div class="ai-name">Claude <span class="muted">· 월간</span></div>
       {% if not claude_has_data %}
         <div class="muted">(이 머신에 Claude 로그 없음)</div>
       {% elif claude_bd.limit == 0 %}
-        <div class="ai-num">${{ '%.2f'|format(claude_bd.spent) }} <span class="muted">사용량만</span></div>
+        <div class="ai-num">${{ '{:,.2f}'.format(claude_bd.spent) }} <span class="muted">사용량만</span></div>
       {% else %}
-        <div class="ai-num">${{ '%.2f'|format(claude_bd.spent) }} / ${{ '%.0f'|format(claude_bd.limit) }}</div>
+        <div class="ai-num">${{ '{:,.2f}'.format(claude_bd.spent) }} <span class="ai-denom">/ ${{ '{:,.0f}'.format(claude_bd.limit) }}</span></div>
         <span class="bar"><span class="fill s-{{ claude_bd.status }}" style="width: {{ [claude_bd.pct * 100, 100]|min }}%"></span></span>
-        <div class="muted">{{ '%.1f'|format(claude_bd.pct * 100) }}% · 예상월말 ${{ '%.0f'|format(claude_bd.projected_month) }}
-          <span class="status s-{{ claude_bd.status }}">{{ {'ok':'✅','warn':'⚠','exceeds':'⛔'}[claude_bd.status] }}</span>
+        <div class="muted">{{ '%.1f'|format(claude_bd.pct * 100) }}% 사용 · 예상 월말 ${{ '{:,.0f}'.format(claude_bd.projected_month) }}
+          <span class="status s-{{ claude_bd.status }}">{{ {'ok':'안전','warn':'주의','exceeds':'초과'}[claude_bd.status] }}</span>
         </div>
       {% endif %}
     </a>
-    {# Codex — 주간 누적(carryover) #}
+    {# Codex — 주간 누적(carryover). 둘째 줄은 '잔여'(이번 주 가용) #}
     <a class="ai-card" href="/history?provider=codex">
       <div class="ai-name">Codex <span class="muted">· 주간({{ codex_bd.weeks_elapsed }}주차)</span></div>
       {% if not codex_has_data %}
@@ -50,10 +50,11 @@
       {% elif codex_bd.weekly_limit == 0 %}
         <div class="ai-num">${{ '%.2f'|format(codex_bd.spent) }} <span class="muted">사용량만</span></div>
       {% else %}
-        <div class="ai-num">${{ '%.2f'|format(codex_bd.spent) }} / ${{ '%.2f'|format(codex_bd.limit_to_date) }}</div>
+        <div class="ai-num">${{ '%.2f'|format(codex_bd.spent) }}
+          <span class="ai-denom cont" title="{{ codex_bd.weeks_elapsed }}주차까지 누적 충전된 한도 · 주간 ${{ ('%.2f'|format(codex_bd.weekly_limit)).rstrip('0').rstrip('.') }} × {{ codex_bd.weeks_elapsed }}주">/ ${{ ('%.2f'|format(codex_bd.limit_to_date)).rstrip('0').rstrip('.') }}</span></div>
         <span class="bar"><span class="fill s-{{ codex_bd.status }}" style="width: {{ [codex_bd.pct * 100, 100]|min }}%"></span></span>
-        <div class="muted">이번 주 ${{ '%.2f'|format(codex_bd.remaining) }} 남음 <span class="muted">(주간 한도 ${{ '%.2f'|format(codex_bd.weekly_limit) }})</span>
-          <span class="status s-{{ codex_bd.status }}">{{ {'ok':'✅','exceeds':'⛔'}[codex_bd.status] }}</span>
+        <div class="muted">이번 주 잔여 ${{ '%.2f'|format(codex_bd.remaining) }} · 주간 한도 ${{ ('%.2f'|format(codex_bd.weekly_limit)).rstrip('0').rstrip('.') }}
+          <span class="status s-{{ codex_bd.status }}">{{ {'ok':'안전','exceeds':'초과'}[codex_bd.status] }}</span>
         </div>
       {% endif %}
     </a>
