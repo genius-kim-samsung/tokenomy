@@ -104,11 +104,11 @@
   .toggle a.on { @apply text-fg bg-elev; }
   .toggle.small a { @apply text-[13px]; }
 
+  /* 이번 달 총지출 히어로 — 총액은 크게, 계산식은 아래 줄로 분리 */
+  .total-num { @apply text-[34px] leading-none font-semibold tabular-nums mt-1 mb-0; }
+  .total-breakdown { @apply mt-1.5 mb-0; }
+
   /* 번다운 바 */
-  .bd-row { @apply flex items-center gap-2.5 my-1.5; }
-  .bd-label { @apply w-16; }
-  .bd-num { @apply w-[150px]; }
-  .bd-pct { @apply w-14 text-right tabular-nums; }
   .bar { @apply flex-1 h-3 bg-elev rounded-full overflow-hidden; }
   .fill { @apply block h-full transition-[width] duration-500; }
   .fill.s-ok { @apply bg-ok; }
