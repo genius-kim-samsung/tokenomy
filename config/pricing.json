@@ -14,8 +14,13 @@
     { "contains": "fable",     "provider": "claude", "input": 10.0, "output": 50.0, "cache_write": 12.50, "cache_read": 1.0 },
     { "contains": "synthetic", "provider": "claude", "input": 0.0,  "output": 0.0,  "cache_write": 0.0,   "cache_read": 0.0 },
 
-    { "contains": "gpt-5",     "provider": "codex",  "input": 1.25, "output": 10.0, "cache_write": 0.0,   "cache_read": 0.125 },
-    { "contains": "o4",        "provider": "codex",  "input": 1.10, "output": 4.40, "cache_write": 0.0,   "cache_read": 0.275 },
-    { "contains": "gpt-4",     "provider": "codex",  "input": 2.50, "output": 10.0, "cache_write": 0.0,   "cache_read": 1.25 }
+    { "contains": "gpt-5.5",       "provider": "codex", "input": 5.00, "output": 30.0, "cache_write": 0.0, "cache_read": 0.50  },
+    { "contains": "gpt-5.4-nano",  "provider": "codex", "input": 0.20, "output": 1.25, "cache_write": 0.0, "cache_read": 0.02  },
+    { "contains": "gpt-5.4-mini",  "provider": "codex", "input": 0.75, "output": 4.50, "cache_write": 0.0, "cache_read": 0.075 },
+    { "contains": "gpt-5.4",       "provider": "codex", "input": 2.50, "output": 15.0, "cache_write": 0.0, "cache_read": 0.25  },
+    { "contains": "gpt-5.3-codex", "provider": "codex", "input": 1.75, "output": 14.0, "cache_write": 0.0, "cache_read": 0.175 },
+    { "contains": "gpt-5",         "provider": "codex", "input": 1.25, "output": 10.0, "cache_write": 0.0, "cache_read": 0.125 },
+    { "contains": "o4",            "provider": "codex", "input": 1.10, "output": 4.40, "cache_write": 0.0, "cache_read": 0.275 },
+    { "contains": "gpt-4",         "provider": "codex", "input": 2.50, "output": 10.0, "cache_write": 0.0, "cache_read": 1.25  }
   ]
 }

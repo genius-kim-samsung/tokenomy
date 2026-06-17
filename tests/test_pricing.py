@@ -106,6 +106,19 @@ def test_load_pricing_real_config():
     assert find_rate("claude-opus-4-8", pricing) is not None
 
 
+def test_shipped_config_prices_current_models_correctly():
+    # 배포 config가 현행 모델을 공식 단가로 매기고, 전용 항목 덕에 suspect가 아님
+    p = load_pricing("config/pricing.json")
+    opus = find_rate("claude-opus-4-8", p)
+    assert (opus["input"], opus["output"]) == (5.0, 25.0)
+    fable = find_rate("claude-fable-5", p)
+    assert (fable["input"], fable["output"]) == (10.0, 50.0)
+    g55 = find_rate("gpt-5.5", p)
+    assert (g55["input"], g55["output"], g55["cache_read"]) == (5.0, 30.0, 0.5)
+    # gpt-5.5 전용 항목이 generic 'gpt-5'보다 먼저 매칭 → 버전경계 의심 아님
+    assert _is_version_boundary("gpt-5.5", g55["contains"]) is False
+
+
 def test_apply_overrides_replaces_rate_fields():
     pricing = {"match": [
         {"contains": "opus", "provider": "claude", "input": 15.0, "output": 75.0,

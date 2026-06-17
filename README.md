@@ -72,14 +72,14 @@ dashboard (`/settings`):
 
   ```json
   "pricing_overrides": {
-    "opus":    { "input": 9.0, "output": 36.0 },
-    "gpt-5.5": { "provider": "codex", "input": 1.25, "output": 10.0, "cache_read": 0.125 }
+    "opus":    { "input": 4.0, "output": 20.0 },
+    "gpt-5.6": { "provider": "codex", "input": 5.0, "output": 30.0, "cache_read": 0.5 }
   }
   ```
 
   Keys are partial-match tokens against the model id. A new key is added as a
   fresh pricing entry; a more specific key takes precedence over a broader one
-  (e.g. `gpt-5.5` beats `gpt-5`). Unrecognised or suspect models are surfaced
+  (e.g. `gpt-5.6` beats `gpt-5`). Unrecognised or suspect models are surfaced
   in the **Pricing Coverage** card on the Settings page.
 
 > The History and Analysis pages support a **week/month toggle** and a **custom date

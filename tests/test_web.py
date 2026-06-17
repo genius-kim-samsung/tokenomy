@@ -606,14 +606,15 @@ def test_settings_coverage_card_empty_db(tmp_path, monkeypatch):
 def test_settings_coverage_card_shows_suspect(tmp_path, monkeypatch):
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
-    # gpt-5.5는 실제 pricing.json의 'gpt-5' 항목에 부분일치 → 버전경계 의심(suspect)
+    # 미배포 모델 gpt-5.9는 전용 항목이 없어 실제 pricing.json의 'gpt-5'에 부분일치
+    # → 직후가 '.'이라 버전경계 의심(suspect). (gpt-5.5는 이제 전용 항목으로 정상 매칭)
     conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,input_tokens,cost_usd,priced) "
-                 "VALUES ('a','codex','s1','p','2026-06-10T10:00:00Z','gpt-5.5',100,1.0,1)")
+                 "VALUES ('a','codex','s1','p','2026-06-10T10:00:00Z','gpt-5.9',100,1.0,1)")
     conn.commit()
     r = client.get("/settings")
     assert r.status_code == 200
     assert "확인 필요" in r.text   # suspect 상태 라벨
-    assert "gpt-5.5" in r.text     # 의심 안내에 모델명
+    assert "gpt-5.9" in r.text     # 의심 안내에 모델명
 
 
 def test_coverage_card_context_injected_pricing():
