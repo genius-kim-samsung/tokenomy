@@ -567,3 +567,37 @@ def test_dashboard_token_composition(tmp_path, monkeypatch):
     r = client.get("/")
     assert r.status_code == 200
     assert "토큰 구성" in r.text
+
+
+def test_human_tokens_and_share_pct():
+    from tokenomy.web.views import _human_tokens, _share_pct
+    assert _human_tokens(0) == "0"
+    assert _human_tokens(950) == "950"
+    assert _human_tokens(12_000) == "12.0K"
+    assert _human_tokens(1_500_000) == "1.5M"
+    assert _human_tokens(2_300_000_000) == "2.3B"
+    assert _share_pct(0.0) == "0%"
+    assert _share_pct(0.004) == "<1%"
+    assert _share_pct(0.5) == "50%"
+
+
+def test_settings_coverage_card_renders(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,input_tokens,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','p','2026-06-10T10:00:00Z','claude-opus-4-8',100,5.0,1)")
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,input_tokens,cost_usd,priced) "
+                 "VALUES ('b','codex','s2','p','2026-06-10T10:00:00Z','gpt-unknown',100,0.0,0)")
+    conn.commit()
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert "단가 커버리지" in r.text
+    assert "(미식별)" in r.text
+    assert "gpt-unknown" in r.text
+
+
+def test_settings_coverage_card_empty_db(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert "단가 커버리지" in r.text

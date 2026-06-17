@@ -16,7 +16,7 @@ from tokenomy.db import connect
 from tokenomy.paths import resource_path
 from tokenomy.update import check_update
 from tokenomy.web.views import (
-    dimension_context, history_context, overview_context, session_context,
+    coverage_card_context, dimension_context, history_context, overview_context, session_context,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -148,7 +148,8 @@ def settings_get(request: Request):
         {"claude": budget.claude, "codex": budget.codex,
          "budget_start": config.get("budget_start") or "",
          "active_nav": "settings", "update_tag": check_update(conn),
-         "last_ts": last["t"] if last and last["t"] else None},
+         "last_ts": last["t"] if last and last["t"] else None,
+         **coverage_card_context(conn)},
     )
 
 

@@ -240,6 +240,69 @@ def build_date_tree(rows: list[DaySessionRow], sort: str) -> list[DateGroup]:
     return dgroups
 
 
+def _human_tokens(n: int) -> str:
+    """토큰 수를 K/M/B 단위 문자열로(예: 1_500_000 → '1.5M')."""
+    for unit, div in (("B", 1_000_000_000), ("M", 1_000_000), ("K", 1_000)):
+        if n >= div:
+            return f"{n / div:.1f}{unit}"
+    return str(n)
+
+
+def _share_pct(x: float) -> str:
+    """비중(0~1)을 퍼센트 문자열로. 0 초과 1% 미만은 '<1%'."""
+    p = x * 100
+    return "<1%" if 0 < p < 1 else f"{p:.0f}%"
+
+
+def coverage_card_context(conn) -> dict:
+    """settings 단가 커버리지 카드용 컨텍스트.
+
+    pricing 항목(match[]) 기준 역방향 그룹핑(항목 → 매칭 모델들) + 미식별 별도 묶음.
+    거친 매칭은 한 그룹에 모델이 여러 행으로 나타나 자연히 드러난다.
+    """
+    config = load_config()
+    pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
+    cov = pricing_coverage(conn, pricing)
+
+    def _row(m):
+        return {"model": m.model, "status": m.status,
+                "tokens_h": _human_tokens(m.tokens), "share": _share_pct(m.token_share)}
+
+    order = [e.get("contains") for e in pricing.get("match", [])]
+    grouped: dict[str, list] = {}
+    for m in cov.models:
+        if m.matched_contains is not None:
+            grouped.setdefault(m.matched_contains, []).append(m)
+    groups = []
+    for contains in order:
+        ms = grouped.get(contains)
+        if not ms:
+            continue
+        rate = next((e for e in pricing["match"] if e.get("contains") == contains), {})
+        groups.append({
+            "contains": contains,
+            "rate": f"${rate.get('input', 0):g}/${rate.get('output', 0):g}",
+            "rows": [_row(m) for m in ms],
+        })
+
+    unpriced_rows = [_row(m) for m in cov.models if m.status == "unpriced"]
+    suspects = [m.model for m in cov.models if m.status == "suspect"]
+
+    if cov.unpriced_count:
+        status = ("warn", f"미식별 {cov.unpriced_count}종")
+    elif cov.suspect_count:
+        status = ("info", f"확인 필요 {cov.suspect_count}종")
+    else:
+        status = ("ok", "모든 모델 단가 식별됨")
+
+    return {
+        "coverage_groups": groups,
+        "coverage_unpriced": unpriced_rows,
+        "coverage_suspects": suspects,
+        "coverage_status": status,   # (level, label)
+    }
+
+
 def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
                     now_kst: datetime | None = None, *,
                     period: str = "month", start: str | None = None,

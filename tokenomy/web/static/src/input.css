@@ -186,6 +186,13 @@
   .ai-claude { @apply bg-elev text-accent; }
   .ai-codex { @apply bg-elev text-body; }
   .ai-none { @apply text-muted; }
+
+  /* 단가 커버리지 테이블 */
+  .cov-table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .875rem; }
+  .cov-table th, .cov-table td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid var(--border, #eee); }
+  .cov-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .cov-table tr.unpriced { color: #b45309; }
+  .status-warn { color: #b45309; } .status-info { color: #2563eb; } .status-ok { color: #16a34a; }
 }
 
 /* ── 세션 표(.sess) 반응형: 기존 동작 그대로 이식(원시 CSS) ── */

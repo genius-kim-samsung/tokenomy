@@ -16,6 +16,41 @@
 </section>
 
 <section class="card">
+  <h2>단가 커버리지</h2>
+  <p class="muted">pricing.json이 사용 모델을 정확히 매칭하는지 진단합니다.
+    상태: <strong class="status-{{ coverage_status[0] }}">{{ coverage_status[1] }}</strong></p>
+  <table class="cov-table">
+    <thead><tr><th>단가 항목</th><th>매칭된 모델</th><th class="num">토큰</th><th class="num">비중</th></tr></thead>
+    <tbody>
+      {% for g in coverage_groups %}
+        {% for row in g.rows %}
+        <tr>
+          <td>{% if loop.first %}<code>{{ g.contains }}</code> <span class="muted">{{ g.rate }}</span>{% endif %}</td>
+          <td>{{ row.model }}{% if row.status == 'suspect' %} <span title="버전경계 의심">⚠</span>{% endif %}</td>
+          <td class="num">{{ row.tokens_h }}</td>
+          <td class="num">{{ row.share }}</td>
+        </tr>
+        {% endfor %}
+      {% endfor %}
+      {% for row in coverage_unpriced %}
+        <tr class="unpriced">
+          <td><span class="status-warn">(미식별)</span></td>
+          <td>{{ row.model }}</td>
+          <td class="num">{{ row.tokens_h }}</td>
+          <td class="num">{{ row.share }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% for s in coverage_suspects %}
+  <p class="muted">⚠ <code>{{ s }}</code> 가 거친 항목에 매칭됨 — 다른 모델일 수 있으니 단가를 확인하세요.</p>
+  {% endfor %}
+  <p class="disclaimer">ⓘ 단가 추가·조정: <code>tokenomy.config.json</code> &gt; <code>pricing_overrides</code>에
+    <code>{"모델키": {"provider": "...", "input": n, "output": n, "cache_read": n}}</code> 추가(새 모델도 가능). 재ingest로 반영됩니다.</p>
+  <p class="disclaimer">ⓘ 단가는 시점 무관·현재 단일 단가로 계산됩니다.</p>
+</section>
+
+<section class="card">
   <h2>데이터 · 프라이버시</h2>
   <p class="muted">모든 처리는 로컬에서 이뤄지며 토큰 사용 메타와 <strong>세션 식별용 첫 프롬프트 발췌</strong>만 저장합니다 — <strong>전체 대화 기록은 저장하지 않습니다</strong>.
     데이터는 소스 실행 시 repo의 <code>data/</code>, exe 실행 시 <code>~/.tokenomy/</code>에 쌓입니다.</p>
