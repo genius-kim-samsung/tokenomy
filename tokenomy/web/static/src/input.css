@@ -44,7 +44,8 @@
   .app { @apply flex min-h-screen; }
   .sidebar {
     @apply w-[220px] shrink-0 flex flex-col gap-1 px-4 py-5
-           bg-card border-r border-line;
+           bg-card border-r border-line
+           sticky top-0 self-start h-screen overflow-y-auto;
   }
   .content { @apply flex-1 min-w-0 px-6 py-5 max-w-[1100px]; }
 
@@ -66,7 +67,8 @@
   /* 모바일: 사이드바를 상단 가로 바로 */
   @media (max-width: 720px) {
     .app { @apply flex-col; }
-    .sidebar { @apply w-full flex-row flex-wrap items-center border-r-0 border-b border-line py-3; }
+    .sidebar { @apply w-full flex-row flex-wrap items-center border-r-0 border-b border-line py-3
+                      static h-auto overflow-visible; }
     .brand { @apply mb-0 mr-2; }
     .nav { @apply flex-row gap-1; }
     .nav-item { @apply border-l-0 border-b-2 py-1; }
