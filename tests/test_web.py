@@ -144,6 +144,61 @@ def test_settings_post_invalid_number_falls_back_zero(tmp_path, monkeypatch):
     assert saved["budget"]["codex"] == 0.0
 
 
+def test_official_post_saves_snapshot(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    r = client.post("/official", data={"official_claude": "123.5"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/")
+    conn = conn_factory()
+    row = conn.execute("SELECT cumulative_usd, provider FROM official_usage").fetchone()
+    assert row["cumulative_usd"] == 123.5
+    assert row["provider"] == "claude"
+
+
+def test_official_post_rejects_negative(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    r = client.post("/official", data={"official_claude": "-5"}, follow_redirects=False)
+    assert r.status_code == 303
+    conn = conn_factory()
+    assert conn.execute("SELECT COUNT(*) c FROM official_usage").fetchone()["c"] == 0
+
+
+def test_official_post_rejects_non_numeric(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    r = client.post("/official", data={"official_claude": "abc"}, follow_redirects=False)
+    assert r.status_code == 303
+    conn = conn_factory()
+    assert conn.execute("SELECT COUNT(*) c FROM official_usage").fetchone()["c"] == 0
+
+
+def test_dashboard_shows_dday_gauge_and_official_form(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
+    conn = connect(str(tmp_path / "t.db"))
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','2026-06-10T10:00:00Z',30.0,1)")
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'name="official_claude"' in r.text     # 공식 사용량 입력 폼
+    assert "공식 사용량" in r.text
+
+
+def test_official_input_then_gauge_reflects_merge(tmp_path, monkeypatch):
+    """critical path: 공식 입력 → max 병합 → 게이지가 병합값·누락분 표시."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"budget": {"claude": 1000, "codex": 0}}', encoding="utf-8")
+    conn = connect(str(tmp_path / "t.db"))
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','2026-06-10T10:00:00Z',100.0,1)")
+    conn.commit()
+    client.post("/official", data={"official_claude": "250"})   # 공식 누적 250 입력
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "250.00" in r.text       # 게이지 spent = max(250, 100)
+    assert "150.00" in r.text       # 누락분 = 250 - 100 (웹/앱 등 CLI 미포함)
+
+
 def test_dashboard_shows_onboarding_when_no_budget(tmp_path, monkeypatch):
     client, _ = _client_with_config(tmp_path, monkeypatch)  # config 없음 → 예산 0
     r = client.get("/")

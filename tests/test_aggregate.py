@@ -1,14 +1,15 @@
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 
 from tokenomy.aggregate import (
-    DayPoint, KST, burndown, by_day_session, by_dimension, by_model, by_project, by_session,
-    combined_burndown, daily_series, insights, month_bounds, normalize_project,
-    parse_ts, period_bounds, session_detail, sidechain_split, SidechainSplit, stacked_trend,
-    token_composition, pricing_coverage, CoverageReport,
+    DayPoint, KST, add_business_days, burndown, business_days_between, by_day_session,
+    by_dimension, by_model, by_project, by_session, combined_burndown, daily_series, insights,
+    month_bounds, normalize_project, official_merged_burndown, OfficialMergedBurndown,
+    parse_ts, period_bounds, session_detail, sidechain_split,
+    SidechainSplit, stacked_trend, token_composition, pricing_coverage, CoverageReport,
 )
-from tokenomy.db import connect
+from tokenomy.db import connect, insert_official_snapshot
 from tokenomy.budget import Budget
 from tokenomy.web.views import history_context, dimension_context, overview_context, session_context
 
@@ -48,20 +49,20 @@ def test_burndown_on_track():
     bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
     assert bd.spent == 30.0
     assert bd.pct == 0.3
-    assert bd.daily_avg == 3.0          # 30 / 10 days
-    assert bd.projected_month == 90.0   # 3 * 30
+    assert bd.daily_avg == 3.75         # 30 / 8 영업일(6/1~6/10, 주말 2일 제외)
+    assert bd.projected_month == 82.5   # 30 + 3.75 * 14 영업일
     assert bd.on_track is True
-    assert bd.exhaust_day is None       # 100/3 = 33.3 > 30
+    assert bd.exhaust_day is None       # 잔여 70/3.75≈19영업일 > 남은 14영업일
 
 
 def test_burndown_over_budget_predicts_exhaust():
     conn = connect(":memory:")
     _insert(conn, "2026-06-05T00:00:00Z", 50.0)
     bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
-    assert bd.daily_avg == 5.0          # 50 / 10
-    assert bd.projected_month == 150.0
+    assert bd.daily_avg == 6.25         # 50 / 8 영업일
+    assert bd.projected_month == 137.5  # 50 + 6.25 * 14 영업일
     assert bd.on_track is False
-    assert bd.exhaust_day == 20         # 100/5
+    assert bd.exhaust_day == 22         # 6/10 + 8영업일 = 6/22
 
 
 def test_burndown_excludes_other_months():
@@ -533,6 +534,55 @@ def test_overview_context_no_budget_unconfigured(monkeypatch, tmp_path):
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
     assert ctx["budget_configured"] is False
     assert ctx["claude_bd"].limit == 0
+
+
+def test_overview_context_gauge_merges_official(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=30.0)
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=45.0,
+        snapshot_ts="2026-06-14T09:00:00+09:00", created_at="2026-06-14T09:00:00+09:00",
+    )
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)   # 6/15
+    g = ctx["gauge"]
+    assert g["official_spent"] == 45.0
+    assert g["cli_spent"] == 30.0
+    assert g["spent"] == 45.0              # max(45, 30) 병합
+    assert g["missing_delta"] == 15.0
+    assert g["stale_days"] == 1            # 6/14 입력 → 6/15
+    assert ctx["claude_bd"].spent == 45.0  # 병합값이 번다운에도 반영
+    # staleness 경고 노트(웹/앱 미반영) 노출
+    assert any("미반영" in n["text"] for n in ctx["official_notes"])
+
+
+def test_overview_context_no_official_shows_input_prompt(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=30.0)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["gauge"]["official_spent"] is None
+    assert any("미입력" in n["text"] for n in ctx["official_notes"])
+
+
+def test_overview_context_official_lower_than_cli_warns(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=60.0)
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=40.0,
+        snapshot_ts="2026-06-15T09:00:00+09:00", created_at="2026-06-15T09:00:00+09:00",
+    )
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["gauge"]["spent"] == 60.0           # max → CLI 유지
+    assert ctx["gauge"]["official_lt_cli"] is True
+    assert any("확인" in n["text"] for n in ctx["official_notes"])
 
 
 # ─── period_bounds: 일/주/월 경계 + 라벨 ──────────────────────────────────────
@@ -1053,11 +1103,13 @@ def test_burndown_clamps_to_budget_start():
     bs = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
     bd = burndown(conn, Budget(claude=100, codex=0), now, "claude", budget_start=bs)
     assert bd.spent == 10.0                       # 6/5 제외, 6/13만
-    # 기간 6/12~6/30(19일), 경과 6/12~6/15 = 4일
+    # 기간 6/12~6/30(19일), 경과 6/12~6/15 = 달력 4일
     assert bd.days_in_month == 19
     assert bd.day_of_month == 4
-    assert bd.daily_avg == 2.5                    # 10 / 4
-    assert bd.projected_month == round(2.5 * 19, 4)
+    # 경과 영업일 2(6/12 금·6/15 월, 주말 6/13·6/14 제외), 남은 영업일 11
+    assert bd.business_days_elapsed == 2
+    assert bd.daily_avg == 5.0                     # 10 / 2 영업일
+    assert bd.projected_month == round(10 + 5.0 * 11, 4)
 
 
 def test_burndown_no_budget_start_is_unchanged():
@@ -1068,8 +1120,8 @@ def test_burndown_no_budget_start_is_unchanged():
     bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
     assert bd.spent == 30.0
     assert bd.days_in_month == 30
-    assert bd.day_of_month == 10                  # NOW = 6/10
-    assert bd.daily_avg == 3.0
+    assert bd.day_of_month == 10                  # NOW = 6/10 (달력 경계는 그대로)
+    assert bd.daily_avg == 3.75                   # 30 / 8 영업일
 
 
 # ─── codex_burndown: 주간 누적(carryover) 모델 ────────────────────────────────
@@ -1447,3 +1499,152 @@ def test_insights_no_unpriced_warning_when_coverage_clean():
     bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
     cards = insights(conn, bd, NOW, None, cov=cov)
     assert not any("미식별" in c.text for c in cards)
+
+
+# --- 영업일 헬퍼 business_days_between (주말 제외, 반열린 구간 [start, end)) -----
+
+
+def test_business_days_between_full_week():
+    # 6/15(월) ~ 6/22(월) [start, end) → 월~금 5영업일(다음 월요일 제외)
+    assert business_days_between(date(2026, 6, 15), date(2026, 6, 22)) == 5
+
+
+def test_business_days_between_single_weekday():
+    # 6/15(월) ~ 6/16(화) → 월요일 1영업일
+    assert business_days_between(date(2026, 6, 15), date(2026, 6, 16)) == 1
+
+
+def test_business_days_between_skips_weekend():
+    # 6/19(금) ~ 6/22(월) → 금요일만 1(토·일 제외)
+    assert business_days_between(date(2026, 6, 19), date(2026, 6, 22)) == 1
+
+
+def test_business_days_between_same_day_zero():
+    assert business_days_between(date(2026, 6, 15), date(2026, 6, 15)) == 0
+
+
+def test_business_days_between_weekend_only_zero():
+    # 6/20(토) ~ 6/22(월) → 토·일만, 0영업일
+    assert business_days_between(date(2026, 6, 20), date(2026, 6, 22)) == 0
+
+
+def test_business_days_between_negative_range_zero():
+    # end < start → 음수 누적 없이 0
+    assert business_days_between(date(2026, 6, 22), date(2026, 6, 15)) == 0
+
+
+def test_add_business_days_within_week():
+    # 6/15(월) + 3영업일 = 화·수·목 → 6/18(목)
+    assert add_business_days(date(2026, 6, 15), 3) == date(2026, 6, 18)
+
+
+def test_add_business_days_skips_weekend():
+    # 6/19(금) + 1영업일 = 토·일 건너뛴 6/22(월)
+    assert add_business_days(date(2026, 6, 19), 1) == date(2026, 6, 22)
+
+
+def test_add_business_days_zero_returns_same():
+    assert add_business_days(date(2026, 6, 15), 0) == date(2026, 6, 15)
+
+
+# --- _compute_burndown 영업일 전환 + D-day 신규 필드 -----------------------
+
+
+def test_burndown_business_day_fields_on_track():
+    conn = connect(":memory:")
+    for _ in range(3):
+        _insert(conn, "2026-06-05T00:00:00Z", 10.0, session=str(_))
+    bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")   # NOW=6/10
+    assert bd.business_days_elapsed == 8       # 6/1~6/10, 주말 6/6·6/7 제외
+    assert bd.business_days_left == 14         # 6/11~6/30 영업일
+    assert bd.daily_avg == 3.75                # 30 / 8 영업일
+    assert bd.exhaust_date is None             # remaining 70 / 3.75 ≈ 19영업일 > 14 남음
+    assert bd.dday_warning is False
+
+
+def test_burndown_predicts_exhaust_date_in_business_days():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 50.0)
+    bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
+    assert bd.daily_avg == 6.25                # 50 / 8
+    assert bd.exhaust_date == date(2026, 6, 22)  # 6/10 + 8영업일
+    assert bd.exhaust_day == 22                # exhaust_date.day(cli 호환)
+    assert bd.idle_business_days == 7          # 6/22~6/30 영업일(월말 공백)
+    assert bd.dday_warning is True             # 공백 7영업일 ≥ 3
+
+
+def test_burndown_dday_warning_on_low_remaining():
+    # 추세는 느려 이번 달 소진은 안 하지만 잔량 ≤20% → 경고
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-02T00:00:00Z", 85.0)
+    now = datetime(2026, 6, 29, 12, 0, tzinfo=KST)
+    bd = burndown(conn, Budget(claude=100, codex=0), now, "claude")
+    assert bd.exhaust_date is None
+    assert bd.idle_business_days == 0
+    assert bd.dday_warning is True             # 잔량 15% ≤ 20%
+
+
+def test_burndown_calendar_fallback_when_no_business_days_elapsed():
+    # 월초 주말(8/1 토·8/2 일)에만 사용 → 경과 영업일 0 → 달력 fallback(거짓 안전 방지)
+    conn = connect(":memory:")
+    _insert(conn, "2026-08-01T03:00:00Z", 10.0)   # KST 8/1 12:00
+    now = datetime(2026, 8, 2, 12, 0, tzinfo=KST)
+    bd = burndown(conn, Budget(claude=100, codex=0), now, "claude")
+    assert bd.business_days_elapsed == 0
+    assert bd.daily_avg == 5.0                 # fallback: 10 / 2 달력일
+    assert bd.projected_month == 155.0         # 5 × 31
+
+
+# --- 공식(회사) 사용량 병합 official_merged_burndown -------------------------
+
+
+def test_official_merge_no_snapshot_uses_cli():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 30.0)
+    m = official_merged_burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
+    assert isinstance(m, OfficialMergedBurndown)
+    assert m.official_spent is None
+    assert m.cli_spent == 30.0
+    assert m.burndown.spent == 30.0            # 공식 없음 → CLI 그대로
+    assert m.missing_delta == 0.0
+    assert m.stale_days is None
+
+
+def test_official_merge_official_higher_shows_missing_delta():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 30.0)
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=45.0,
+        snapshot_ts="2026-06-09T09:00:00+09:00", created_at="2026-06-09T09:00:00+09:00",
+    )
+    m = official_merged_burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
+    assert m.official_spent == 45.0
+    assert m.cli_spent == 30.0
+    assert m.burndown.spent == 45.0            # max(45, 30) = 공식
+    assert m.missing_delta == 15.0             # 45 - 30 (웹/앱 등 CLI 미포함분)
+    assert m.official_lt_cli is False
+    assert m.burndown.pct == 0.45              # 병합 spent로 재계산
+
+
+def test_official_merge_official_lower_keeps_cli():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 60.0)
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=40.0,
+        snapshot_ts="2026-06-09T09:00:00+09:00", created_at="2026-06-09T09:00:00+09:00",
+    )
+    m = official_merged_burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
+    assert m.burndown.spent == 60.0            # max(40, 60) = CLI(공식 과소 → 차단)
+    assert m.missing_delta == 0.0
+    assert m.official_lt_cli is True           # 공식 < CLI → 주의 신호
+
+
+def test_official_merge_stale_days():
+    conn = connect(":memory:")
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=20.0,
+        snapshot_ts="2026-06-07T09:00:00+09:00", created_at="2026-06-07T09:00:00+09:00",
+    )
+    m = official_merged_burndown(conn, Budget(claude=100, codex=0), NOW, "claude")  # NOW 6/10
+    assert m.official_spent == 20.0
+    assert m.stale_days == 3                    # 6/7 입력 → 6/10 현재, 3일치 미반영

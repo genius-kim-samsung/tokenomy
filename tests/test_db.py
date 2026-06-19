@@ -1,6 +1,15 @@
 import json
 
-from tokenomy.db import connect, ingest_records, ingest_root, ingest_titles, set_user
+from tokenomy.db import (
+    connect,
+    ingest_records,
+    ingest_root,
+    ingest_titles,
+    insert_official_snapshot,
+    latest_official,
+    official_series,
+    set_user,
+)
 from tokenomy.parser import UsageRecord
 
 PRICING = {
@@ -430,3 +439,85 @@ def test_ingest_user_turns_writes_day_turns(tmp_path):
     assert total == 2
     rows = dict(conn.execute("SELECT day, turns FROM session_day_turns WHERE session_id='sess-1'").fetchall())
     assert rows == {"2026-06-11": 1, "2026-06-12": 1}
+
+
+# --- 공식(회사) 사용량 스냅샷 official_usage --------------------------------
+
+
+def test_insert_and_latest_official_snapshot():
+    conn = connect(":memory:")
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=1200.0,
+        snapshot_ts="2026-06-19T10:00:00+09:00", created_at="2026-06-19T10:00:00+09:00",
+    )
+    row = latest_official(conn, "claude", "2026-06")
+    assert row is not None
+    assert row["cumulative_usd"] == 1200.0
+    assert row["snapshot_ts"] == "2026-06-19T10:00:00+09:00"
+
+
+def test_latest_official_returns_most_recent_snapshot():
+    conn = connect(":memory:")
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=800.0,
+        snapshot_ts="2026-06-10T09:00:00+09:00", created_at="2026-06-10T09:00:00+09:00",
+    )
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=1500.0,
+        snapshot_ts="2026-06-18T09:00:00+09:00", created_at="2026-06-18T09:00:00+09:00",
+    )
+    row = latest_official(conn, "claude", "2026-06")
+    assert row["cumulative_usd"] == 1500.0   # 최신 snapshot_ts
+
+
+def test_latest_official_none_when_empty():
+    conn = connect(":memory:")
+    assert latest_official(conn, "claude", "2026-06") is None
+
+
+def test_latest_official_scoped_by_month_and_provider():
+    conn = connect(":memory:")
+    # 지난달 스냅샷 → 이번 달 조회엔 안 잡힘(월 리셋)
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-05", cumulative_usd=999.0,
+        snapshot_ts="2026-05-30T09:00:00+09:00", created_at="2026-05-30T09:00:00+09:00",
+    )
+    assert latest_official(conn, "claude", "2026-06") is None
+    # 다른 provider(codex) → claude 조회엔 안 잡힘
+    insert_official_snapshot(
+        conn, provider="codex", target_month="2026-06", cumulative_usd=50.0,
+        snapshot_ts="2026-06-19T09:00:00+09:00", created_at="2026-06-19T09:00:00+09:00",
+    )
+    assert latest_official(conn, "claude", "2026-06") is None
+
+
+def test_official_series_ordered_by_snapshot_ts():
+    conn = connect(":memory:")
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=1500.0,
+        snapshot_ts="2026-06-18T09:00:00+09:00", created_at="2026-06-18T09:00:00+09:00",
+    )
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=800.0,
+        snapshot_ts="2026-06-10T09:00:00+09:00", created_at="2026-06-10T09:00:00+09:00",
+    )
+    series = official_series(conn, "claude", "2026-06")
+    assert [r["cumulative_usd"] for r in series] == [800.0, 1500.0]   # snapshot_ts 오름차순
+
+
+def test_official_usage_table_created_on_legacy_db(tmp_path):
+    # official_usage가 없던 구버전 DB도 connect 후 사용 가능해야 한다
+    path = str(tmp_path / "legacy.db")
+    raw = sqlite3.connect(path)
+    # 구버전: official_usage가 없고 messages만 있는 DB(provider 컬럼은 구버전에도 존재)
+    raw.execute(
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "dedup_key TEXT UNIQUE, provider TEXT)"
+    )
+    raw.commit(); raw.close()
+    conn = connect(path)
+    insert_official_snapshot(
+        conn, provider="claude", target_month="2026-06", cumulative_usd=10.0,
+        snapshot_ts="2026-06-19T09:00:00+09:00", created_at="2026-06-19T09:00:00+09:00",
+    )
+    assert latest_official(conn, "claude", "2026-06")["cumulative_usd"] == 10.0
