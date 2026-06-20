@@ -103,3 +103,20 @@ def test_load_config_keeps_budget_start(tmp_path):
 def test_load_config_missing_budget_start_is_none(tmp_path):
     cfg = load_config(tmp_path / "nope.json")
     assert cfg.get("budget_start") is None
+
+
+from tokenomy.budget import credit_to_usd
+
+
+def test_credit_to_usd_default_when_missing():
+    assert credit_to_usd({}) == 0.04
+
+
+def test_credit_to_usd_reads_config():
+    assert credit_to_usd({"credit_to_usd": 0.05}) == 0.05
+
+
+def test_credit_to_usd_rejects_bad_values():
+    assert credit_to_usd({"credit_to_usd": -1}) == 0.04
+    assert credit_to_usd({"credit_to_usd": "x"}) == 0.04
+    assert credit_to_usd({"credit_to_usd": None}) == 0.04

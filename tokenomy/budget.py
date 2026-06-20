@@ -52,6 +52,7 @@ def load_config(path: str | Path | None = None) -> dict:
     base = {"user_label": _default_label(),
             "budget": {"claude": 0.0, "codex": 0.0},
             "budget_start": None,
+            "credit_to_usd": 0.04,
             "pricing_overrides": {}}
     p = _config_path(path)
     if not p.exists():
@@ -91,3 +92,17 @@ def budget_start_kst(config: dict) -> datetime | None:
         return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=KST)
     except (ValueError, TypeError):
         return None
+
+
+def credit_to_usd(config: dict) -> float:
+    """크레딧→USD 환산 단가(크레딧 단위가격, 고정 청구 상수). 모델 무관 단일 상수.
+
+    빈값·음수·비숫자는 모두 기본 0.04로 폴백한다(오설정으로 환산이 깨지지 않게).
+    토큰 cost 경로(pricing.json)와 분리 — 여기서만 official 버킷 크레딧 환산에 쓴다.
+    """
+    raw = config.get("credit_to_usd")
+    try:
+        f = float(raw)
+    except (TypeError, ValueError):
+        return 0.04
+    return f if f > 0 else 0.04
