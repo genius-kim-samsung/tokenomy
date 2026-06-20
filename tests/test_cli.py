@@ -6,7 +6,7 @@ import tokenomy.cli as cli_module
 from datetime import datetime
 
 from tokenomy.aggregate import KST
-from tokenomy.cli import cmd_official_import
+from tokenomy.cli import cmd_official_import, cmd_report
 from tokenomy.db import connect, latest_official_snapshot
 
 
@@ -77,3 +77,25 @@ def test_official_import_codex(tmp_path):
     assert n == 1
     rows = latest_official_snapshot(conn, "codex")
     assert rows[0]["used_usd"] == 20.0   # 500 * 0.04
+
+
+# ── cmd_report 번다운 제거 테스트 ─────────────────────────────────────────────
+
+
+def test_report_runs_without_budget(capsys, monkeypatch):
+    """cmd_report가 budget/burndown 없이 동작하고 provider별 총지출을 출력한다."""
+    import tokenomy.budget as b
+    # tracked_providers가 ["claude"]만 반환하도록 패치(크레덴셜 파일 불필요)
+    monkeypatch.setattr(b, "creds_present", lambda p: p == "claude")
+    # load_config가 빈 dict 반환(budget 설정 없음)
+    monkeypatch.setattr(b, "load_config", lambda path=None: {"tracked_providers": ["claude"]})
+
+    conn = connect(":memory:")
+    # cmd_report에 주입된 conn이 메모리 DB를 사용하도록 패치
+    monkeypatch.setattr(cli_module, "connect", lambda: conn)
+
+    # freshness가 db를 조회하므로 ingest 기록 없이도 동작해야 함
+    cmd_report(conn)
+    out = capsys.readouterr().out
+    assert "claude" in out.lower()
+    assert "이번 달" in out or "총지출" in out

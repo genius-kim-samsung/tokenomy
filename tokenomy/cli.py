@@ -13,13 +13,13 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from tokenomy.aggregate import KST, burndown, by_project, by_session, parse_ts, pricing_coverage
+from tokenomy.aggregate import KST, by_project, by_session, month_spend, official_view, parse_ts, pricing_coverage
 from tokenomy.codex_parser import CODEX_ROOT, ingest_codex
 from tokenomy.archive import archive_tree
 from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns, maybe_reprice, insert_official_buckets
 from tokenomy.freshness import CLEANUP_DAYS, freshness, record_ingest
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
-from tokenomy.budget import budget_from_config, load_config, user_label, credit_to_usd, tracked_providers
+from tokenomy.budget import load_config, user_label, credit_to_usd, tracked_providers
 from tokenomy.official_fetch import fetch_provider
 from tokenomy.official_parser import parse_claude, parse_codex
 
@@ -94,7 +94,7 @@ def _bar(pct: float, width: int = 20) -> str:
 
 def cmd_report(conn) -> None:
     config = load_config()
-    budget = budget_from_config(config)
+    ctu = credit_to_usd(config)
     now = datetime.now(KST)
 
     print(f"=== Tokenomy — {now:%Y-%m} (KST, 이 머신 데이터만) ===")
@@ -108,21 +108,13 @@ def cmd_report(conn) -> None:
     elif fr.hours_since_ingest is not None:
         print(f"  수집 최신: {fr.hours_since_ingest:.0f}h 전")
 
-    for prov in ("claude", "codex"):  # codex = Codex CLI
-        bd = burndown(conn, budget, now, prov)
-        status = "OK" if bd.on_track else "[!] OVER"
-        print(
-            f"\n[{prov}] limit ${bd.limit:.0f}  spent ${bd.spent:.2f}  "
-            f"({bd.pct * 100:.1f}%) {_bar(bd.pct)} {status}"
-        )
-        print(
-            f"  {bd.day_of_month}/{bd.days_in_month} days  "
-            f"daily-avg ${bd.daily_avg:.2f}  projected ${bd.projected_month:.2f}"
-        )
-        if bd.pct >= 1.0:
-            print(f"  [!] 이미 한도 초과 — 절감 필요 (한도 대비 {bd.pct * 100:.0f}%)")
-        elif bd.exhaust_day:
-            print(f"  [!] 이대로면 {bd.exhaust_day}일에 소진 (남은 {bd.days_left}일)")
+    for prov in tracked_providers(config):
+        spent = month_spend(conn, prov, now)
+        ov = official_view(conn, prov, now, ctu)
+        line = f"\n[{prov}] 이번 달 총지출 ${spent:,.2f}"
+        if ov.period_limit_usd:
+            line += f" · 공식 ${ov.period_used_usd:,.2f}/${ov.period_limit_usd:,.0f}"
+        print(line)
         rows = by_project(conn, prov, now, 12)
         if rows:
             print("  Top 프로젝트:")
