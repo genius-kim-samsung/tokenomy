@@ -1,211 +1,198 @@
 # 공식 사용량 자동 취득 (멀티버킷 + 예측 렌즈) — 설계
 
 - 작성일: 2026-06-20
-- 상태: **codex 리뷰 반영(2026-06-20) · 재확인 대기**
+- 상태: **codex 리뷰 + 단가/리셋 정책 반영(2026-06-20) · 재확인 대기**
 - 마일스톤: v0.2.0 채택 — "공식 사용량 수동 입력"(commit d29cdc9)을 **자동 취득 + 멀티버킷 정확화**로 대체
 - 관련: [TODOS.md](../../../TODOS.md) ① · `tokenomy/db.py` · `tokenomy/aggregate.py` · `tokenomy/budget.py` ·
-  `tokenomy/web/` · `tokenomy/cli.py` · `tokenomy/launcher.py`
-- 근거 데이터: 실측 응답 원문은 **로컬 전용**(`docs/enterprise-usage-api-response.md`, 미추적 — 사내 할당액 노출 방지).
-  커밋되는 정본은 **sanitize fixture**(§10, 모양 보존·금액 가짜).
+  `tokenomy/pricing.py` · `config/pricing.json` · `tokenomy/web/` · `tokenomy/cli.py` · `tokenomy/launcher.py`
+- **수치 주의**: 본 문서의 한도 금액·크레딧 수치는 전부 **예시(가짜)** 다. 실제 한도/사용량은 런타임에 공식 API에서
+  읽는다. 변환/주기 기본값(`credit_to_usd`, 주간=월÷4, 리셋 시각 등)은 **config 기본값**으로 두어 환경별 조정 가능.
+  실측 응답 원문은 로컬 전용(미커밋), 커밋 정본은 sanitize fixture(§10).
 
-## 0. codex 리뷰 반영 요약 (2026-06-20)
+## 0. 주요 개정 요약 (2026-06-20)
 
-독립 리뷰(codex, 83k tok)에서 나온 유효 지적을 본 개정에 반영했다. 핵심 2건은 경식님 결정:
-- **결정 A — 합산 표면 제거**: Codex 헤드라인이 credits가 되면 기존 "Claude+Codex 합산 월총액·결합 번다운·스택
-  추세·total pace"(USD+credits 혼합)는 범주 오류. → **provider별 네이티브 표면만** 유지(§9). "합산 금지" 충실.
-- **결정 B — fixture sanitize**: public repo이므로 실측 금액($243/$1000/크레딧)을 커밋하지 않는다. **모양만 보존한
-  가짜 수치 fixture를 커밋**, 실수치는 로컬 gitignore(§10).
+독립 리뷰(codex) + 단가/리셋 정책 입수로 핵심 전제가 바뀌어 대폭 개정.
 
-그 외 반영: 리셋 인스턴트 기준 주기 그룹핑(§5/§8), 스냅샷 트랜잭션·UNIQUE(§5), urllib 타임아웃·백오프 제거·
-비차단 ingest(§7), throttle 효력 격하(§7), Claude 크레덴셜 만료/스키마 드리프트(§7), 활성버킷·예측렌즈 엣지
-명세(§8), fallback 단위 혼동 방지(§9), Phase 1 `import-fixture` 검증 경로(§11).
+**(가장 큰 변화) USD 통일.** 크레딧↔토큰↔USD 변환이 전부 정의됐다: Claude 토큰→USD(`pricing.json`),
+Codex 토큰→USD(`pricing.json`에 이미 존재) **및** 크레딧→USD(`credit_to_usd` 기본 **0.04**). 토크노미는 **가계부**이므로
+**USD를 1차 기준 단위**로 삼는다.
+- **합산 표면 복원**: Claude+Codex 결합 월총액·추세를 USD로(범주 오류 해소). 이전 개정의 "합산 제거"는 철회.
+- **Codex 패널 = USD 1차 + 크레딧/버킷 보조**(공식 앱이 크레딧 표기라 미러로 크레딧도 병기).
+- **틀린 전제 삭제**: "pricing.json에 Codex 단가 없음"·"Codex USD 환산 불가"·"공식이 Codex 유일 신뢰 신호"는
+  사실이 아님(§1). `pricing.json`은 이미 USD로 정합(Codex 포함).
+
+**리셋 주기 provider별 상이(신규 반영).** Claude=**월별**, Codex=**주별(월 한도÷4, 첫 사용 앵커)**. §8에 정식 모델.
+
+**codex 리뷰 반영(유지):** 리셋 인스턴트 그룹핑, 스냅샷 트랜잭션·UNIQUE, urllib 타임아웃·백오프 제거·비차단 ingest,
+throttle 효력 격하, 크레덴셜 만료/드리프트, 활성버킷 견고화·예측렌즈 차분 위생, fallback 단위 라벨, Phase1 import-fixture.
+
+**수동 입력 완전 제거**(자동만, 데이터 없으면 CLI 추정 fallback) — 유지.
 
 ## 1. 배경 / 문제
 
-commit d29cdc9가 "회사 월 할당" 게이지를 위해 **공식 사용량 수동 입력**을 도입했다
-(`official_usage.cumulative_usd` 단일값/월, `POST /official`, `official_merged_burndown`의 `max(공식,CLI)` 병합).
-TODOS ①은 후속으로 "회사 포털/사내 API에서 공식 사용량을 **자동 취득**"을 예고했다.
+commit d29cdc9가 "월 할당" 게이지를 위해 **공식 사용량 수동 입력**을 도입했다(`official_usage.cumulative_usd`
+단일값/월, `POST /official`, `max(공식,CLI)` 병합). TODOS ①은 후속으로 공식 사용량 **자동 취득**을 예고했다.
 
-2026-06-20 사내망 실측으로 각 CLI가 보관한 OAuth 토큰으로 **공식 사용량 API를 읽기 전용 단발 호출**하면
-실데이터가 온다는 것이 확인됐다(원문은 로컬 전용 문서에 보존):
+2026-06-20 실측으로 각 CLI가 보관한 OAuth 토큰으로 **공식 사용량 API를 읽기 전용 단발 호출**하면 실데이터가
+온다는 것이 확인됐다(원문은 로컬 전용 보존):
 
 - **Claude**: `GET https://api.anthropic.com/api/oauth/usage` (Bearer + `anthropic-beta: oauth-2025-04-20`)
 - **Codex**: `GET https://chatgpt.com/backend-api/wham/usage` (Bearer JWT + `ChatGPT-Account-Id`)
 
-enterprise 응답이 단일 `cumulative_usd` 모델로는 못 담는 구조를 드러냈다(공식 앱 화면과 1:1):
+enterprise 티어 응답이 단일 `cumulative_usd` 모델로는 못 담는 구조를 드러냈다(공식 앱 화면과 1:1, 수치는 예시):
 
-**Claude (enterprise, 공식 앱 = 막대 3개):**
+**Claude (공식 앱 = 막대 3개):**
 
-| 공식 앱 표기 | API 필드(모양) | 실측 의미 | 리셋/만료 |
+| 공식 앱 표기 | API 필드(모양) | 의미 | 리셋/만료 |
 |---|---|---|---|
-| 사용 한도 Enterprise | `extra_usage`(monthly_limit) + `spend`(used/limit amount_minor) | 월 한도 used/limit | **월 1일 09:00 KST** |
-| Claude Code·Cowork / 포함된 크레딧 | 코드네임 키(`used_dollars`+`limit_dollars`+`resets_at`) | 일회성 이벤트 크레딧 | **만료일**(분기성) |
-| Claude Design / 기본 제공 한도 | 코드네임 키(`utilization`만, 달러 null) | 별도 프로모션 | 초기화 안 됨 |
+| 사용 한도 | `extra_usage`(monthly_limit) + `spend`(used/limit amount_minor) | 월 한도 used/limit(USD) | **월별** |
+| 포함된 크레딧 | 코드네임 키(`used_dollars`+`limit_dollars`+`resets_at`) | 일회성 이벤트 크레딧(USD) | 자체 **만료일** |
+| 별도/프로모션 | 코드네임 키(`utilization`만, 달러 null) | 별도 프로모션 | 초기화 안 됨 |
 
-공식 문구: *"일회성 크레딧으로, **사용 한도 전에 적용**됩니다. 크레딧을 모두 소진하면 **일반 사용량**에서 차감"*
-→ **차감 순서: 포함된 크레딧(이벤트) → 월 사용 한도 → 일반 사용량(org 레벨, 미러 범위 밖 §13).**
+차감 순서: **포함된 크레딧(이벤트) → 월 사용 한도 → 일반 사용량(org 레벨, 미러 범위 밖 §13).**
 
-**Codex (enterprise, 공식 앱 = 막대 1개):** `spend_control.individual_limit` = 월 사용 한도, **단위 credits**
-(used/limit/remaining/used_percent + `reset_at` unix, 월간).
+**Codex (공식 앱 = 막대 1개):** `spend_control.individual_limit` = **월간** 크레딧 한도(used/limit/remaining/used_percent
++ `reset_at` unix). 단위 credits. **단, 실효 제약은 주간**(월 한도÷4) — §8.
 
-**핵심 함정:**
-1. **버킷 다중성** — Claude는 동시에 살아있는 3버킷 + 차감 순서.
-2. **단위 이질성** — Claude=USD, Codex=**credits**. USD 합산은 범주 오류 → 합산 표면 제거(결정 A).
-3. **코드네임 회전** — 이벤트/프로모션 키는 Anthropic 내부 회전 코드네임. 키 이름 하드코딩 금지(모양으로 분류).
-4. **모양 분기** — 개발(집/원격) 머신은 **개인 구독**이라 같은 엔드포인트가 달러 버킷 대신 `five_hour`/`seven_day`
-   **이용률(%) 창**을 반환(달러 필드 null). enterprise 달러 버킷은 사내망에서만 라이브로 나온다.
+**전제 정정(과거 spec/조사 결론의 오류):**
+- `pricing.json`에는 **Codex 단가가 이미 존재**하고(공개 단가), USD로 정합한다. → Codex USD 추정은 가능.
+- 크레딧↔USD는 `credit_to_usd`(기본 0.04)로 정확 환산 → 공식 크레딧(예 1,000cr=$40)도 USD로 표기 가능.
+- 따라서 단위는 **USD로 통일**(가계부 기준). 크레딧/버킷은 보조 표시.
+
+**핵심 함정(유지):**
+1. **버킷 다중성** — Claude 3버킷 + 차감 순서.
+2. **코드네임 회전** — 이벤트/프로모션 키는 회전 코드네임. 키 이름 하드코딩 금지(모양으로 분류).
+3. **모양 분기** — 개발(집/원격) 머신은 개인 구독이라 달러 버킷 대신 `five_hour`/`seven_day` **% 창** 반환.
+4. **리셋 주기 상이** — Claude 월별 / Codex 주별(월÷4). §8.
 
 ## 2. 목표 / 비목표
 
 ### 목표
-- 공식 사용량을 **자동 취득**해 수동 입력을 **완전히 대체**한다(사람 개입 0).
-- **공식 앱이 보여주는 버킷과 숫자가 일치하는 미러**를 보여준다(신뢰). 단 "일반 사용량"(org 레벨)은 개인
-  엔드포인트에 안 나오므로 미러 범위 밖임을 명시(§13) — "100% 미러"가 아니라 "공식 앱이 노출하는 버킷의 미러".
-- 그 위에 공식 앱에 없는 **예측 렌즈**(소비 속도·소진 예상일·D-day)를 얹는다 — 토크노미 고유 부가가치.
-- Claude(USD 멀티버킷)와 Codex(credits 단일버킷)를 **네이티브 단위·별도 패널**로 정확히 표시.
-- 개발 머신(개인 구독)에서도 **코드 경로 전체를 라이브로 검증**할 수 있게 한다(§10).
+- 공식 사용량을 **자동 취득**해 수동 입력을 **완전 대체**한다(사람 개입 0).
+- **USD를 1차 단위**로 통일(가계부). 공식 앱 버킷과 숫자 일치하는 미러 + 합산 USD 표면.
+- 공식 앱에 없는 **예측 렌즈**(소비속도·소진예상·D-day)를 얹는다.
+- provider별 **리셋 주기**(Claude 월 / Codex 주=월÷4)를 정확히 반영.
+- 개발 머신(개인 구독)에서도 **코드 경로 전체를 라이브로 검증**(§10).
 
 ### 비목표
-- **수동 입력 유지** — 안 함. `POST /official`·입력 폼·`cumulative_usd` 모델 제거(2026-06-20).
-- **USD+credits 합산 표면 유지** — 안 함(결정 A). 결합 월총액·결합 번다운·스택 추세·total pace 제거(§9).
-- **백그라운드 폴링** — 안 함. `ingest` 1회 + 수동 새로고침만.
-- **토큰 직접 refresh** — 안 함. 크레덴셜 파일 읽기 전용. 만료 → 마지막 값 유지 + 안내(CLI가 갱신).
-- **Codex의 USD 환산** — 안 함(pricing.json에 Codex 단가 없음). credits 네이티브 유지.
-- **CLI quota 충돌 방지** — 못 함. throttle은 우리 호출 빈도만 제어(§7). 공유 버킷을 CLI와 조율할 수단 없음.
-- **이벤트 "남기면 아까움" 경고 / 일반 사용량 가시화** — backlog(§13).
+- **수동 입력 유지** — 안 함(`POST /official`·폼·`cumulative_usd` 제거).
+- **백그라운드 폴링** — 안 함(`ingest` 1회 + 새로고침).
+- **토큰 직접 refresh** — 안 함(읽기 전용, 만료 시 마지막 값 + 안내).
+- **일반 사용량(org) 가시화 / 이벤트 "남기면 아까움"** — backlog(§13).
+- **CLI quota 충돌 방지** — 못 함(throttle은 우리 호출 빈도만, §7).
+- **`pricing.json` 모델 정합 전반(예 `gpt-5.2` 오매칭)** — 별도 "단가 커버리지" 영역. 본 spec은 `credit_to_usd`만 추가.
 
 ### 설계 원칙 적합성 (v0.2.0 4원칙)
-- **자격/강도**: 공식 used는 ground truth → 게이지 본체 자격. 소진 임박만 warn.
-- **raw 추출**: 토큰 usage 수치만 추출·저장. **PII(email/user_id/account_id) 저장 금지**.
-- **provider parity**: 양쪽 모두 공식 실데이터 존재 → 충족(단위·버킷 수 차이는 표현으로 흡수).
+- **자격/강도**: 공식 used=ground truth → 게이지 본체. 소진 임박만 warn.
+- **raw 추출**: 사용량 수치만 저장. **PII 저장 금지**.
+- **provider parity**: 양쪽 공식 실데이터 존재 + USD 통일로 동등 비교 가능.
 - **cost/value**: 순수 파서 + 작은 네트워크 모듈 + 게이지. 옵트인이라 비활성 시 비용 0.
 
 ## 3. 설계 결정 요약 (2026-06-20)
 
 | # | 결정 | 선택 |
 |---|------|------|
-| 1 | 게이지 의미 | 공식 미러(멀티버킷, 숫자 일치) + 예측 렌즈(소비속도/소진예상) |
+| 1 | 기준 단위 | **USD 통일**(가계부). 크레딧/버킷은 보조. `credit_to_usd` 기본 0.04 |
 | 2 | 데이터 진실원 | 공식 `used`/`limit`을 ground truth로 직접 사용 — `max(공식,CLI)` 병합 폐기 |
-| 3 | 수동 입력 | **완전 제거**. 자동만. 데이터 없을 때만 CLI 추정으로 fallback(단위 라벨 명시 §9) |
-| 4 | 단위 표시 | provider별 네이티브(Claude USD / Codex credits), **합산 금지**, 별도 패널 |
-| 5 | % 표기 | provider 불문 **"사용됨"** 으로 통일(Codex는 `used_percent`/`100−남음` 환산) |
-| 6 | Codex 헤드라인 | 공식 월간 크레딧으로 **교체**. 주간-USD-carryover 은퇴(파급: budget.py/settings/combined — §9/§12) |
-| 7 | **합산 표면(결정 A)** | 결합 월총액·결합 번다운·스택 추세·total pace **제거**. provider 네이티브만 |
-| 8 | **fixture(결정 B)** | sanitize(모양 보존·가짜 수치) 커밋, 실측 원문은 로컬 gitignore |
-| 9 | 네트워크 경계 | **옵트인**(config `official_fetch.enabled` 기본 false) + provider별 토글 |
-| 10 | 취득 시점 | `ingest` 1회(비차단) + 웹 "새로고침" 버튼. 폴링 없음 |
-| 11 | 주기 그룹핑 | 달력월이 아니라 **`resets_at` 인스턴트** 기준(09:00 KST 리셋 정합) |
-| 12 | 코드네임 | shape 휴리스틱 분류, 라벨 서술형. raw 코드네임은 보조 식별자로만 보존(다중 충돌 방지 §6) |
-| 13 | 파서 범위 | 모양 불문 — enterprise 달러 버킷 + 개인 구독 % 창 둘 다(테스트 자산화) |
+| 3 | 수동 입력 | **완전 제거**. 자동만. 데이터 없으면 CLI 추정 fallback(단위 라벨 명시 §9) |
+| 4 | 합산 표면 | **복원**(USD). 결합 월총액·추세. 단 게이지는 provider별 자기 리셋 주기 유지 |
+| 5 | % 표기 | provider 불문 **"사용됨"** 통일 |
+| 6 | Codex 주기/단위 | **주간(월 한도÷4) USD**. 첫 사용 앵커(§8). 기존 주간 모델 폐기 아님 — 앵커·단위 교정 |
+| 7 | Claude 주기 | 월별 + 이벤트 버킷 자체 만료 |
+| 8 | 네트워크 경계 | **옵트인**(`official_fetch.enabled` 기본 false) + provider별 토글 |
+| 9 | 취득 시점 | `ingest` 1회(비차단·타임아웃) + 웹 "새로고침". 폴링 없음 |
+| 10 | 주기 그룹핑 | 달력월 아님 — **`resets_at` 인스턴트**(provider별 리셋 시각 정합) |
+| 11 | 코드네임 | shape 휴리스틱 분류, 라벨 서술형. raw 코드네임은 보조 식별자로 보존(§6) |
+| 12 | 파서 범위 | 모양 불문 — enterprise 버킷 + 개인 구독 % 창 둘 다 |
+| 13 | fixture | sanitize(모양 보존·가짜 수치) 커밋, 실측 원문 로컬 gitignore |
 
 ## 4. 아키텍처 / 데이터 흐름
 
 ```
 크레덴셜(읽기전용) ─ official_fetch.py(네트워크, 옵트인, 타임아웃) ─ raw JSON ─┐
                                                                           │
-raw JSON ─ official_parser.py(순수, shape 휴리스틱) ─ [OfficialBucket] ─ db.py(스냅샷 트랜잭션 적재)
+raw JSON ─ official_parser.py(순수, shape 휴리스틱, USD 환산) ─ [OfficialBucket] ─ db.py(스냅샷 트랜잭션)
                                                                             │
-                                            aggregate.official_view ─ web/views.py ─ overview 게이지
+                                            aggregate.official_view ─ web/views.py ─ overview 게이지/합산
 ```
 
-신규 모듈 2개(계층 분리 유지):
-- **`tokenomy/official_fetch.py`** — 유일한 아웃바운드. 토큰 읽기·헤더·GET(타임아웃)·throttle·인증/HTTP 에러 처리. 네트워크만.
-- **`tokenomy/official_parser.py`** — 순수 함수(`raw dict → list[OfficialBucket]`). 네트워크/DB 없음 → fixture로 완결 테스트.
+신규 모듈 2개(계층 분리):
+- **`tokenomy/official_fetch.py`** — 유일한 아웃바운드. 토큰 읽기·헤더·GET(타임아웃)·throttle·에러 처리.
+- **`tokenomy/official_parser.py`** — 순수(`raw dict → [OfficialBucket]`). USD 환산 포함(`credit_to_usd` 주입). fixture로 완결 테스트.
 
-제거 대상(마이그레이션 §5):
-- `aggregate.official_merged_burndown`, `OfficialMergedBurndown`, `max 병합` 경로
-- `web/app.py`의 `POST /official`, `web/views.py`의 `_official_notes`/`_gauge`(병합 버전), `overview.html` 입력 폼
-- `db.insert_official_snapshot`/`latest_official`/`official_series`(단일값) + 테이블 `official_usage`
-- **합산 표면(결정 A)**: views의 결합 월총액·결합 번다운·`combined_burndown`·스택 추세 total·`budget.total` 기반 total pace
+제거 대상(마이그레이션 §5): `official_merged_burndown`·`max 병합`, `POST /official`·입력 폼·`_official_notes`/`_gauge`(병합 버전),
+`db`의 단일값 official 함수 + 테이블 `official_usage`. (합산 표면은 **유지/복원** — 제거 안 함.)
 
 ## 5. 데이터 모델 — `db.py`
 
-신규 **버킷 단위** 테이블 + 취득 상태를 additive로 추가. 구 `official_usage`는 **사용 중단 후 마이그레이션에서 DROP**.
+신규 버킷 단위 테이블 + 취득 상태를 additive로 추가. 구 `official_usage`는 **사용 경로 제거 후 마이그레이션에서 DROP**.
 
-### 마이그레이션(단순 obsolete 처리 아님 — 코드 경로부터 제거)
-DROP 전에 `official_usage`를 쓰는 모든 경로를 먼저 제거해야 한다: `db.SCHEMA`의 CREATE,
-`insert_official_snapshot`/`latest_official`/`official_series`(구버전), `aggregate.official_merged_burndown`,
-`app.POST /official`. 그 후 마이그레이션 step에서 `DROP TABLE IF EXISTS official_usage`(로컬 단일 사용자, 수동 데이터 obsolete).
+### 마이그레이션
+DROP 전 `official_usage` 사용 경로를 먼저 제거(`db.SCHEMA` CREATE, 구 insert/latest/series,
+`aggregate.official_merged_burndown`, `app.POST /official`). 이후 `DROP TABLE IF EXISTS official_usage`(로컬 단일 사용자).
 
 ```sql
 CREATE TABLE IF NOT EXISTS official_buckets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT,          -- 'claude' | 'codex'
     fetched_at TEXT,        -- 스냅샷 as-of (KST ISO). 같은 값 = 한 스냅샷
-    bucket_key TEXT,        -- 안정 논리 id('event'|'monthly'|'promo'|'five_hour'|'seven_day'|...)
+    bucket_key TEXT,        -- 안정 논리 id('event'|'monthly'|'promo'|'five_hour'|...)
     raw_key TEXT,           -- 원 API 키(코드네임). 표시 비사용 — 다중 충돌 시 series 보조 분리키
     bucket_kind TEXT,       -- 'event_credit'|'monthly_limit'|'promo'|'rate_window'|'codex_monthly'
-    label TEXT,             -- 서술형 표시 라벨(코드네임 비의존)
-    unit TEXT,              -- 'usd' | 'credit' | 'percent'
-    used REAL,              -- 없으면 NULL(rate_window)
-    limit_amount REAL,      -- 'limit'은 예약어 → limit_amount. 없으면 NULL
-    remaining REAL,
+    label TEXT,             -- 서술형 라벨(코드네임 비의존)
+    native_unit TEXT,       -- 'usd' | 'credit' | 'percent' (공식 앱 표기 단위)
+    used_native REAL, limit_native REAL, remaining_native REAL,  -- 네이티브 값(없으면 NULL)
+    used_usd REAL, limit_usd REAL, remaining_usd REAL,           -- USD 환산(percent 창은 NULL)
     utilization REAL,       -- % (0~100)
     resets_at TEXT,         -- ISO 인스턴트(타임존 포함) 또는 NULL
     created_at TEXT,
-    UNIQUE(provider, fetched_at, bucket_key)   -- 중복 refresh가 버킷 복제하지 않도록
+    UNIQUE(provider, fetched_at, bucket_key)
 );
 
 CREATE TABLE IF NOT EXISTS official_fetch_state (
     provider TEXT PRIMARY KEY,
-    last_attempt_at TEXT,
-    last_success_at TEXT,
+    last_attempt_at TEXT, last_success_at TEXT,
     last_status TEXT,       -- 'ok'|'throttled'|'auth_error'|'http_error'|'disabled'
-    last_error TEXT         -- 짧은 사유(스택/토큰 미포함)
+    last_error TEXT
 );
 ```
 
-- **스냅샷 트랜잭션**: 한 fetch의 버킷 전부를 **단일 트랜잭션**으로 insert(부분 스냅샷 방지). 같은 `fetched_at` 재시도는
-  UNIQUE로 멱등(중복 무시 또는 교체). `fetched_at`은 **응답의 as-of**(없으면 호출 시각)로, 초 정밀도 충돌 시 UNIQUE가 가드.
-- **bucket_key는 안정 논리 id** — 코드네임이 아니라 모양에서 도출(`'event'` 등). 코드네임 회전에도 예측 차분이 안 끊김.
-  같은 `bucket_kind`가 **동시에 2개 이상**이면(드묾) `raw_key`로 분리해 series 모호성 제거.
-- DB 함수: `insert_official_snapshot(conn, provider, fetched_at, buckets)`(트랜잭션),
-  `latest_official_snapshot(conn, provider)`, `official_bucket_series(conn, provider, bucket_key)`(`(fetched_at, used)` 오름차순),
-  `get_fetch_state`/`upsert_fetch_state`.
-- PII 컬럼 없음. 응답의 email/user_id/account_id는 파서가 **추출조차 안 한다**.
+- **USD 컬럼 병행 저장**: 네이티브(크레딧/USD) + USD 환산을 같이 적재 → 표시·합산 시 재계산 불필요, 환산율 변경 이력도 스냅샷에 고정.
+- **스냅샷 트랜잭션**: 한 fetch의 버킷 전부를 단일 트랜잭션 insert(부분 스냅샷 방지). UNIQUE로 중복 refresh 멱등.
+- **bucket_key는 안정 논리 id**(코드네임 회전 내성). 같은 kind 동시 다중이면 `raw_key`로 분리.
+- DB 함수: `insert_official_snapshot`(트랜잭션), `latest_official_snapshot`, `official_bucket_series(provider, bucket_key)`(`(fetched_at, used_usd, used_native)` 오름차순), `get/upsert_fetch_state`.
+- PII 컬럼 없음.
 
-## 6. 파서 — `official_parser.py` (순수, 모양 불문)
+## 6. 파서 — `official_parser.py` (순수, 모양 불문, USD 환산)
 
 ```python
 @dataclass
 class OfficialBucket:
-    bucket_key: str
-    raw_key: str              # 원 API 키
-    bucket_kind: str
-    label: str
-    unit: str                 # 'usd'|'credit'|'percent'
-    used: float | None
-    limit: float | None
-    remaining: float | None
-    utilization: float        # %
-    resets_at: datetime | None
+    bucket_key: str; raw_key: str; bucket_kind: str; label: str
+    native_unit: str                      # 'usd'|'credit'|'percent'
+    used_native: float | None; limit_native: float | None; remaining_native: float | None
+    used_usd: float | None; limit_usd: float | None; remaining_usd: float | None
+    utilization: float; resets_at: datetime | None
 
-def parse_claude(raw: dict) -> list[OfficialBucket]: ...
-def parse_codex(raw: dict) -> list[OfficialBucket]: ...
+def parse_claude(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]: ...
+def parse_codex(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]: ...
 ```
 
-**정확한 필드 경로·null·exponent 타입·malformed 처리는 구현 계획에서 커밋된 sanitize fixture로 핀다운**한다
-(본 spec은 분류 규칙 수준; 실측 모양은 §10 fixture가 정본).
+정확한 필드 경로·null·exponent·malformed 처리는 구현 계획에서 커밋된 sanitize fixture로 핀다운(본 spec은 분류 규칙).
 
-### Claude 휴리스틱 (코드네임 비의존)
-최상위 키를 순회하며 **모양으로 분류**(키 이름 매칭 금지). 누락/null 필드는 안전 스킵:
+### Claude 휴리스틱 (코드네임 비의존, native_unit='usd')
+1. **`extra_usage`+`spend`** → `monthly_limit`. used/limit = `spend.{used,limit}.amount_minor / 10**exponent`(USD).
+   `resets_at` 없음 → **다음 리셋 인스턴트 계산**(§8 Claude 월별). `bucket_key='monthly'`, `raw_key='spend'`.
+2. **dict이고 `used_dollars`+`limit_dollars`+`resets_at`** → `event_credit`. `*_dollars`(USD), `resets_at` 그대로.
+   `bucket_key='event'`, `raw_key`=코드네임, label="포함된 크레딧 · {만료일} 만료".
+3. **dict이고 `utilization`만(달러 null)** → `promo`. native_unit='percent', USD 컬럼 NULL. utilization 0이면 생략 가능.
+4. **`five_hour`/`seven_day`/`seven_day_*` dict(개인)** → `rate_window`. native_unit='percent', USD NULL, `resets_at` 그대로.
+- USD 컬럼 = 네이티브 USD 그대로(Claude는 이미 USD).
 
-1. **`extra_usage` + `spend`** → `monthly_limit`. `limit/used = spend.{limit,used}.amount_minor / 10**exponent`,
-   `unit='usd'`. 응답에 `resets_at` 없음 → **다음 1일 09:00 KST 인스턴트로 계산**(공식 앱 리셋과 정합).
-   `bucket_key='monthly'`, `raw_key='spend'`, label="월 사용 한도".
-2. **dict이고 `used_dollars`+`limit_dollars`+`resets_at` 채워진** 키 → `event_credit`. `used/limit/remaining=*_dollars`,
-   `unit='usd'`, `resets_at` 그대로(타임존 포함). `bucket_key='event'`, `raw_key`=코드네임, label=f"포함된 크레딧 · {만료일} 만료".
-3. **dict이고 `utilization`만(달러 null, `resets_at` null)** → `promo`. `unit='percent'`. `bucket_key='promo'`,
-   label="별도 사용량(프로모션)". utilization 0이면 생략 가능.
-4. **`five_hour`/`seven_day`/`seven_day_*` dict(개인 구독)** → `rate_window`. `utilization`만, `unit='percent'`,
-   `resets_at` 그대로. `bucket_key`=원 키, label="5시간 창"/"7일 창"/"7일·Opus" 등.
-- 같은 모양이 여럿이면 모두 방출하되 `bucket_key` 충돌 시 `raw_key`로 접미(예측은 활성 1개만 선택).
-
-### Codex 휴리스틱
-1. **`spend_control.individual_limit` dict** → `codex_monthly`. `used/limit/remaining`(문자열→float),
-   `utilization=used_percent`, `unit='credit'`, `resets_at=reset_at`(unix→KST 인스턴트). `bucket_key='monthly'`.
-2. **`rate_limit.primary_window`/`secondary_window` dict(개인)** → `rate_window`. `utilization=used_percent`,
-   `unit='percent'`(used/limit 없음), `resets_at=reset_at`. `bucket_key='primary_window'`/'secondary_window'.
+### Codex 휴리스틱 (native_unit='credit' → USD 환산)
+1. **`spend_control.individual_limit` dict** → `codex_monthly`. native used/limit/remaining(크레딧, 문자열→float),
+   **USD = 크레딧 × credit_to_usd**, `utilization=used_percent`, `resets_at=reset_at`(unix→KST 인스턴트). `bucket_key='monthly'`.
+2. **`rate_limit.primary/secondary_window` dict(개인)** → `rate_window`. native_unit='percent', USD NULL, `resets_at=reset_at`.
 
 ## 7. 취득 — `official_fetch.py` (옵트인, 비차단, 유일한 아웃바운드)
 
@@ -213,140 +200,122 @@ def parse_codex(raw: dict) -> list[OfficialBucket]: ...
 def fetch_provider(provider: str, *, now_kst, config, conn) -> FetchResult: ...
 ```
 
-- **옵트인**: `config.official_fetch.enabled` false면 즉시 `disabled`(네트워크 없음). provider별 토글도 검사.
-  `TOKENOMY_SKIP_OFFICIAL_FETCH` 설정 시 enabled여도 강제 skip(오프라인/CI/테스트).
-- **throttle**: `official_fetch_state.last_attempt_at` + `min_interval_minutes`(기본 5) 미달이면 `throttled`(마지막 스냅샷 유지).
-  **효력 한계 명시**: 이는 *우리 호출 빈도*만 제어한다. 엔드포인트 quota는 CLI와 공유라 **CLI와의 충돌은 못 막는다**
-  (그래서 간격을 보수적으로). Claude는 `/api/oauth/usage`가 ~3회 후 429.
-- **HTTP 타임아웃 필수**: `urllib.request`에 **명시적 timeout**(connect+read ≤ 8s). 무한 대기로 `cmd_ingest`/launcher가
-  멈추지 않게. **백오프 없음**: 단발 시도, 실패면 즉시 포기(마지막 스냅샷 유지) — UI/startup 블록 회피. 재시도는 다음 throttle 주기에.
-- **비차단 보장**: `cmd_ingest`/`launcher` 경로에서 fetch 실패(타임아웃·네트워크·인증)는 **절대 ingest/起動를 막지 않는다**
-  (예외 삼킴 → state 기록 → 진행). 옵트인 off가 기본이라 일반 사용자 startup엔 영향 0.
-- **토큰 소스(읽기 전용)**:
-  - Claude: `~/.claude/.credentials.json` → `claudeAiOauth.accessToken`. 헤더 Bearer + `anthropic-beta: oauth-2025-04-20`
-    + `User-Agent: claude-code/<ver>`. **파일 없음/스키마 드리프트/`expiresAt` 만료** → `auth_error`(마지막 값 유지 + "Claude 재로그인" 안내), 호출 안 함.
-  - Codex: `~/.codex/auth.json` → `tokens.access_token`, `tokens.account_id`. 헤더 Bearer + `ChatGPT-Account-Id`
-    + `User-Agent: codex_cli_rs`. **account_id 누락/스키마 변경** → `auth_error`. 다중 계정은 auth.json의 단일 active만 사용(범위 밖).
-- **에러 분류(공통: 마지막 스냅샷 보존)**: 401 → `auth_error`(Codex note="Codex CLI 1회 실행"). 429/5xx/네트워크/사내
-  TLS 인터셉트 실패 → `http_error`. 파싱 실패 → `http_error`(원문 미저장).
-- **성공 시**: 파서 → `insert_official_snapshot`(트랜잭션) → `upsert_fetch_state(ok)`.
-- 호출 지점: `cli.cmd_ingest`(→ launcher) + 웹 `POST /official/refresh`(throttle 가드 안). 표준 라이브러리만.
+- **옵트인**: `config.official_fetch.enabled` false면 즉시 `disabled`(네트워크 없음). provider 토글도 검사.
+  `TOKENOMY_SKIP_OFFICIAL_FETCH`로 강제 skip(오프라인/CI/테스트).
+- **throttle**: `last_attempt_at` + `min_interval_minutes`(기본 5) 미달이면 `throttled`(마지막 스냅샷 유지).
+  **효력 한계**: 우리 호출 빈도만 제어한다. 엔드포인트 quota는 CLI와 공유라 **CLI와의 충돌은 못 막음**.
+- **HTTP 타임아웃 필수**: `urllib.request` timeout(connect+read ≤ 8s). **백오프 없음**(단발 시도, 실패 즉시 포기, 마지막 스냅샷 유지).
+- **비차단 보장**: `cmd_ingest`/`launcher`에서 fetch 실패(타임아웃·네트워크·인증)는 **절대 ingest/起動를 막지 않음**(예외 삼킴→state 기록→진행). 옵트인 off 기본이라 일반 startup 영향 0.
+- **토큰 소스(읽기 전용)**: Claude `~/.claude/.credentials.json`→`claudeAiOauth.accessToken`(만료/스키마 드리프트→`auth_error`+재로그인 안내, 호출 안 함). Codex `~/.codex/auth.json`→`tokens.access_token`/`account_id`(account_id 누락/스키마 변경→`auth_error`).
+- **에러 분류(마지막 스냅샷 보존)**: 401→`auth_error`(Codex note "Codex CLI 1회 실행"). 429/5xx/네트워크/TLS 인터셉트→`http_error`. 파싱 실패→`http_error`.
+- **성공 시**: 파서(`credit_to_usd` 주입) → `insert_official_snapshot`(트랜잭션) → `upsert_fetch_state(ok)`.
+- 호출 지점: `cli.cmd_ingest`(→ launcher) + 웹 `POST /official/refresh`. 표준 라이브러리만.
 
-## 8. 집계 — `aggregate.py` (순수)
+## 8. 집계 + 리셋 주기 — `aggregate.py` (순수)
 
+### 리셋 주기 모델 (provider별, config 기본값)
+```
+reset_cycle.claude = "monthly"   # 월별: 월말까지, 다음 달 초기화. 이벤트 버킷은 자체 resets_at 만료.
+reset_cycle.codex  = "weekly"    # 주별: 주간 한도 = 월 한도 ÷ 4
+```
+- **Claude(월별)**: 주기 = `resets_at` 인스턴트 기준 월 경계(KST). 기존 month/period 머신 재사용.
+- **Codex(주별, 첫 사용 앵커)**: 실효 제약은 **주간**이다.
+  - **주간 한도 = 공식 월간 한도 ÷ 4**(USD·크레딧 동일 비율).
+  - **윈도우 앵커 = 첫 크레딧 사용 시점부터 7일**. 윈도우 만료 후 다음 사용 호출 시점부터 새 윈도우(유휴 기간은 윈도우를 소비하지 않음 — 7일 무사용이면 다음 사용일에 재앵커).
+  - **주간 used = 공식 스냅샷 시계열의 (현재 누적 used − 현재 주간 윈도우 시작 시점 used)**. 시작 시점 스냅샷이 없으면
+    로컬 CLI 주간 윈도우(첫 사용 추적)로 fallback. 월간 누적(공식)은 컨텍스트로 함께 표시.
+
+### dataclass
 ```python
 @dataclass
-class OfficialLens:                 # 예측 렌즈 (한도 있는 활성 버킷에만)
+class OfficialLens:                 # 예측 렌즈
     bucket_key: str
-    daily_rate: float | None        # 단위/영업일. 유효 차분 1개 미만이면 None("추세 수집 중")
+    daily_rate_usd: float | None    # USD/영업일. 유효 차분 1개 미만이면 None
     exhaust_date: date | None
-    days_left_to_reset: int | None  # resets_at 인스턴트까지 영업일
+    days_left_to_reset: int | None  # 현재 주기 리셋까지 영업일(Codex=주간 윈도우 만료, Claude=월말/이벤트 만료)
     dday_warning: bool
 
 @dataclass
 class OfficialView:
-    provider: str
-    buckets: list[OfficialBucket]   # 공식 앱 표시 순서
-    active_key: str | None
-    lens: OfficialLens | None
-    fetched_at: datetime | None
-    stale_minutes: int | None
-    status: str                     # 'ok'|'no_data'|'disabled'|'auth_error'|'throttled'|'http_error'
-    note: str | None
+    provider: str; buckets: list[OfficialBucket]
+    active_key: str | None; lens: OfficialLens | None
+    period_used_usd: float | None; period_limit_usd: float | None  # 현재 주기(Codex 주/Claude 월) USD
+    fetched_at: datetime | None; stale_minutes: int | None
+    status: str; note: str | None
 
-def official_view(conn, provider, now_kst) -> OfficialView: ...   # budget_start 안 받음(공식은 자체 리셋 §11)
+def official_view(conn, provider, now_kst) -> OfficialView: ...
 ```
 
-- **표시 순서(공식 앱 미러)**: Claude = `monthly_limit` → `event_credit` → `promo` → `rate_window`. Codex = `codex_monthly` → `rate_window`.
-- **활성 버킷 선택(견고화)**: 단순 차감순서 가정에 의존하지 않는다.
-  1차: 최근 스냅샷 구간에서 **`used` 증가(양의 차분)가 가장 최근/가장 큰 버킷** = 실제 차감 중. 2차(시계열 부족 시):
-  차감 순서 `[event, monthly]` 중 `remaining>0`인 첫 버킷. API가 모순(이벤트 remaining>0인데 monthly used 증가)이면 **실측 차분 우선**.
-  Codex=`monthly`. `rate_window`/`promo`는 렌즈 없음(현재값만).
-- **예측 렌즈 — 차분 위생**: `official_bucket_series`를 `fetched_at` **정렬·중복 제거** 후 사용. 규칙:
-  음수 차분(리셋/만료/버킷 전환)은 **버린다**(직전까지의 단조 구간만), 동일 시각/너무 짧은 간격(예 < 30분)은 스킵,
-  활성 버킷이 바뀌면 **이전 버킷 series는 예측에서 제외**. 속도는 영업일 환산(`business_days_between` 재사용,
-  date 단위라 sub-day는 소실 — 일 단위 추세엔 충분). 유효 차분이 없으면 `daily_rate=None`.
-  `exhaust_date = today + remaining/daily_rate`(영업일). `days_left_to_reset` = `resets_at` **인스턴트**까지 영업일.
-- **데이터 없음/비활성**: `latest_official_snapshot` 비면 `status`는 fetch_state 따라(`no_data`/`disabled`/`auth_error`) →
-  상위(views)가 CLI 추정으로 fallback(§9, 단위 라벨 명시).
+- **표시 순서(공식 앱 미러)**: Claude = `monthly_limit`→`event_credit`→`promo`→`rate_window`. Codex = `codex_monthly`→`rate_window`.
+- **활성 버킷(견고화)**: 1차 = 최근 스냅샷에서 `used` 양의 차분이 가장 최근/큰 버킷(실제 차감 중). 2차(시계열 부족) =
+  차감 순서 `[event, monthly]` 중 remaining>0 첫 버킷. API 모순 시 실측 차분 우선. Codex=`codex_monthly`(주간 윈도우 기준). promo/rate_window는 렌즈 없음.
+- **예측 렌즈 — 차분 위생**: series를 `fetched_at` 정렬·중복 제거. 음수 차분(리셋/만료/버킷·윈도우 전환)은 버림(직전 단조 구간만),
+  너무 짧은 간격(<30분) 스킵, 활성 버킷/주간 윈도우 바뀌면 이전 series 제외. 속도는 영업일 환산(`business_days_between`). 유효 차분 없으면 `daily_rate_usd=None`.
+- **데이터 없음/비활성**: `latest_official_snapshot` 비면 status(fetch_state 기반) → 상위가 CLI 추정 fallback(§9, 단위 라벨 명시).
 
-## 9. 표시 — `web/views.py` + 템플릿 (결정 A 반영)
+## 9. 표시 — `web/views.py` + 템플릿 (USD 통일)
 
 `overview` 컨텍스트:
-- `official_view(conn, "claude", now)` / `official_view(conn, "codex", now)`를 **별도 패널**로. **결합/합산 표면 없음.**
-- **제거(결정 A)**: 결합 월총액, 결합 번다운(`combined_burndown`), 스택 추세의 total 라인, `budget.total` 기반 total pace.
-  추세는 **provider별 네이티브 라인**으로만(USD 라인·credits 라인 분리, 합산 라인 없음).
-- 공식 데이터 있으면 **공식 미러 패널**(헤드라인). 버킷 막대: 라벨 + `used/limit`(네이티브) + `NN% 사용됨` + 리셋/만료.
-  promo·rate_window는 `utilization%` + 리셋. 예측 렌즈(활성 버킷): 소비속도·소진예상·D-day(`daily_rate=None`→"추세 수집 중").
-- **% 표기 "사용됨" 통일**(Codex `used_percent`/`100−remaining_percent`).
-- **fallback 단위 혼동 방지**: 공식 없으면 CLI 추정으로 떨어지되, **단위를 절대 조용히 바꾸지 않는다.**
-  Claude는 "공식 없음 — 로컬 USD **추정**" 라벨. Codex는 공식이 credits, CLI fallback은 USD이므로 **"공식 크레딧 미취득 —
-  로컬 USD 추정"** 을 명시(credits↔USD 무언 전환 금지). "공식 동기화를 켜면 실측" 힌트 + status별 note(예 "Codex 1회 실행").
-- **새로고침 버튼**: `POST /official/refresh` → throttle 가드 후 fetch → redirect. "마지막 업데이트 N분 전"(`stale_minutes`).
+- **합산 표면(USD)**: Claude+Codex 결합 월총액·추세를 USD로(`credit_to_usd` 환산으로 정당). 합산은 단순 USD 합.
+  단, **게이지는 provider별 자기 주기**(Claude 월 / Codex 주) 유지 — 합산 게이지(혼합 주기)는 안 만듦.
+- **공식 미러 패널(provider별)**: 버킷 막대 = 라벨 + **USD(1차)** + 네이티브(크레딧/버킷, 괄호) + `NN% 사용됨` + 리셋/만료.
+  Codex 예: "월 한도 $XX / $YY (= 1,000 / 1,250 크레딧) · 18% 사용됨 · 이번 주 $A/$B". promo/rate_window는 `utilization%`+리셋.
+- **예측 렌즈(활성 버킷)**: 소비속도(USD/영업일)·소진예상·D-day. Codex는 **주간 윈도우** 기준. `daily_rate_usd=None`→"추세 수집 중".
+- **% 표기 "사용됨" 통일**(Codex `used_percent`).
+- **fallback 단위 혼동 방지**: 공식 없으면 CLI 추정으로 떨어지되 "공식 미취득 — 로컬 **추정**(USD)" 라벨 명시(공식/추정 구분).
+- **새로고침 버튼**: `POST /official/refresh` → throttle 가드 후 fetch → redirect. "마지막 업데이트 N분 전".
 
 `web/app.py`: `POST /official` 제거. `POST /official/refresh` 추가(결과 무관 redirect, 백오프 없음).
 
-설정(`settings`): `official_fetch.enabled` + provider 토글 + `min_interval_minutes` 노출/편집. 마지막 취득 상태 표시.
-Codex 라벨이 USD→credits로 바뀌므로 settings의 Codex 예산 단위 표기도 갱신(§12).
+설정(`settings`): `official_fetch.enabled` + provider 토글 + `min_interval_minutes` + `credit_to_usd` + `reset_cycle`(provider별) 노출/편집. 마지막 취득 상태 표시.
 
-## 10. 테스트 — 3중 + fixture 정책(결정 B)
+## 10. 테스트 — 3중 + fixture 정책
 
-문제: enterprise 달러 버킷은 사내망에서만 라이브. 해법: 파서 모양 불문(§6) → 3중으로 닫힌다.
+문제: enterprise 버킷은 enterprise 계정에서만 라이브(개발 머신은 개인 구독). 해법: 파서 모양 불문(§6) → 3중으로 닫힌다.
 
-### fixture 정책(결정 B — public repo 안전)
-- **커밋되는 정본 = sanitize fixture** `tests/fixtures/official/`: 모양·키·중첩·null·exponent·unix 타임스탬프는
-  실측과 동일, **금액/크레딧 수치만 가짜**(예 $243→$100, 5875cr→1000cr). 파서 분류·환산 로직 검증에 충분.
-  - `claude_enterprise.json`, `codex_enterprise.json`, `claude_personal.json`, `codex_personal.json`
-  - 코드네임 회전 변형: 이벤트 키 이름을 임의 문자열로 바꾼 `claude_enterprise_rotated.json`.
-- **실측 원문은 로컬 전용**: `docs/enterprise-usage-api-response.md` 및 `tests/fixtures/official/local/`는 **gitignore**.
-  필요 시 로컬에서 실수치로 추가 검증.
+### fixture 정책 (public repo 안전 — 모양만 보존, 수치 가짜)
+- 커밋 정본 `tests/fixtures/official/`: 키·중첩·null·exponent·unix 타임스탬프는 실측과 동일, **금액/크레딧만 가짜**.
+  `claude_enterprise.json`·`codex_enterprise.json`·`claude_personal.json`·`codex_personal.json` + 코드네임 회전 변형 `claude_enterprise_rotated.json`.
+- 실측 원문·로컬 fixture(`tests/fixtures/official/local/`)는 **gitignore**.
 
 ### (1) Fixture 단위테스트 — 어디서든
-- `test_official_parser.py`: Claude enterprise→`event_credit`+`monthly_limit`+`promo`, Codex enterprise→`codex_monthly`,
-  개인→`rate_window`. 회전 변형도 동일 분류. null 스킵·exponent·unix→KST. (금액은 sanitize 값으로 단정.)
-- `test_aggregate.py`(official_view): 활성버킷(차분 기반 + remaining fallback + 모순 케이스), 예측 렌즈 차분 위생
-  (음수차분/중복시각/버킷전환/유효차분 0), `days_left` 인스턴트 기준, 데이터 없음→status.
-- `test_db.py`: 트랜잭션 insert·UNIQUE 멱등·series 정렬·fetch_state 라운드트립·부분 스냅샷 없음.
-- `test_web.py`: 공식 패널(enterprise/personal/no_data), "사용됨" 표기, 합산 표면 제거 확인, fallback 단위 라벨, 새로고침 라우트.
+- `test_official_parser.py`: Claude→`event_credit`+`monthly_limit`+`promo`(USD), Codex→`codex_monthly`(크레딧 + USD=크레딧×`credit_to_usd`), 개인→`rate_window`. 회전 변형 동일 분류. null 스킵·exponent·unix→KST. **USD 환산 단정**.
+- `test_aggregate.py`: 활성버킷(차분 기반+remaining fallback+모순), 예측 렌즈 차분 위생, **Codex 주간 윈도우**(월÷4, 첫 사용 앵커, 주간 used = 스냅샷 차분), Claude 월 경계, `days_left` 인스턴트, 데이터 없음→status.
+- `test_db.py`: 트랜잭션 insert·UNIQUE 멱등·series 정렬·USD/네이티브 병행·fetch_state.
+- `test_web.py`: 공식 패널(enterprise/personal/no_data), USD 1차+네이티브 병기, "사용됨", **합산 USD 표면**, fallback 라벨, 새로고침.
 
 ### (2) 개인계정 라이브 스모크 — 집/원격에서 코드 경로 검증
-파서가 개인 모양도 처리하므로 **fetch→인증→타임아웃/throttle→파싱→트랜잭션 적재→표시** 전 구간을 라이브로 밟는다.
-% 창만 나올 뿐 네트워크·에러처리·비차단·throttle 코드가 실제로 도는지 검증. **단, enterprise 달러버킷/exponent/
-event·monthly 차감/Codex 크레딧 모양은 검증 못 함**(그건 fixture + (3) 사내망 전용).
+파서가 개인 모양도 처리하므로 fetch→인증→타임아웃/throttle→파싱→트랜잭션 적재→표시 전 구간을 라이브로 밟음.
+% 창만 나올 뿐 네트워크·에러처리·비차단·throttle 검증. **단, enterprise 버킷/USD 환산/Codex 주간 윈도우/event·monthly 차감은 검증 못 함**(fixture + (3)).
 
-### (3) enterprise 라이브 스모크 — 사내망에서만
-사내망에서 enabled 1회 fetch → 달러 버킷 실값 적재/표시 최종 확인(분기 1회 수준).
+### (3) enterprise 라이브 스모크 — enterprise 계정에서만
+enabled 1회 fetch → 버킷 실값 + USD 환산 + 주간 윈도우 적재/표시 최종 확인(분기 1회 수준).
 
 ## 11. 단계 (phase)
 
-증분 릴리스. 각 Phase 독립 검증.
-
-- **Phase 1 — 모델 + 파서 + 표시(네트워크 없이 완결)**: 스키마 교체·마이그레이션, `official_parser`,
-  `aggregate.official_view`, views/템플릿 공식 패널 + 예측 렌즈, **수동 입력 + 합산 표면 제거**(결정 A).
-  **사용자 검증 경로**: `cli.py`에 `official import-fixture <path>` dev 명령 추가 → fixture를 DB에 주입해 **앱에서
-  공식 패널을 눈으로 확인** 가능(라이브 fetch 없이도 Phase 1이 user-verifiable).
-- **Phase 2 — 라이브 취득**: `official_fetch`(옵트인·타임아웃·비차단·throttle·인증/HTTP 에러), `ingest` 훅,
-  `POST /official/refresh`, settings 토글/상태. 개인계정(집) + enterprise(사내망) 라이브 스모크.
+- **Phase 1 — 모델 + 파서 + 표시(네트워크 없이 완결)**: 스키마 교체·마이그레이션, `official_parser`(USD 환산),
+  `aggregate.official_view`(리셋 주기·주간 윈도우·예측), views/템플릿 공식 패널 + **합산 USD 표면** + 예측 렌즈, 수동 입력 제거.
+  **검증 경로**: `cli.py`에 `official import-fixture <path>` dev 명령 → fixture 주입해 앱에서 패널/합산 눈으로 확인(라이브 없이 user-verifiable).
+- **Phase 2 — 라이브 취득**: `official_fetch`(옵트인·타임아웃·비차단·throttle·에러), `ingest` 훅, `POST /official/refresh`, settings 토글/상태/`credit_to_usd`/`reset_cycle`. 개인계정(집) + enterprise 계정 라이브 스모크.
 
 ## 12. 영향 범위 / 비변경
 
-- **변경**: `db.py`(스키마 교체·마이그레이션 DROP·신규 함수), `aggregate.py`(official_view 신규, official_merged_burndown
-  제거, **combined_burndown/total pace 제거**), `budget.py`(Codex USD 주간 의미 은퇴 — `Budget.codex` 단위/역할 재정의),
-  `web/views.py`(공식 패널, **합산 표면 제거**), `web/app.py`(POST /official 제거, /official/refresh 추가),
-  `web/templates/overview.html`·`settings.html`(Codex 단위 표기·합산 카드 제거), `cli.py`(ingest 훅 + `import-fixture`),
-  `config`(official_fetch), 신규 `official_fetch.py`·`official_parser.py`, `.gitignore`(로컬 fixture·실측 문서),
-  테스트·fixtures, `CLAUDE.md`(아키텍처/게시/Codex 주기 갱신), README.
-- **`launcher.py`**: 코드 변경은 없으나 **ingest 경유 fetch가 비차단·타임아웃(§7)이어야** 起動 영향 0 — 이 보장이 전제.
+- **변경**: `db.py`(스키마 교체·마이그레이션·신규 함수), `aggregate.py`(official_view 신규·리셋 주기·주간 윈도우, official_merged_burndown 제거),
+  `pricing.py`/`config/pricing.json`(`credit_to_usd` 기본값 추가 — 크레딧→USD 변환 상수. **Codex 토큰 단가는 이미 존재해 변경 최소**),
+  `budget.py`(Codex 주간=월÷4 USD 정합 확인 — 단위/주기 의미 갱신), `web/views.py`(공식 패널 + 합산 USD), `web/app.py`(POST /official 제거, /official/refresh 추가),
+  `web/templates/overview.html`·`settings.html`, `cli.py`(ingest 훅 + import-fixture), `config`(official_fetch·reset_cycle·credit_to_usd),
+  `.gitignore`(로컬 fixture·실측), 신규 `official_fetch.py`·`official_parser.py`, 테스트·fixtures, `CLAUDE.md`(아키텍처/게시/주기 갱신), README.
+- **`launcher.py`**: 코드 변경 없으나 ingest 경유 fetch가 **비차단·타임아웃(§7)**이어야 起動 영향 0 — 전제.
 - **신규 런타임 의존성 없음** — `urllib.request`(stdlib).
-- **비변경**: parser.py/codex_parser.py(로컬 로그), pricing 경로, dedup, 증분 offset 스캔. 공식 취득은 로컬 파이프라인과 독립.
-- **프라이버시 경계**: 사용량 수치만 저장, PII 미저장. 네트워크 옵트인(기본 off). 실측 금액은 미커밋(결정 B).
+- **비변경**: parser.py/codex_parser.py(로컬 로그), dedup, 증분 offset 스캔, **`pricing.json` Codex 토큰 단가(이미 USD 정합)**.
+- **프라이버시 경계**: 사용량 수치만 저장, PII 미저장. 네트워크 옵트인(기본 off). 실측 금액 미커밋(예시는 가짜).
 
 ## 13. 후속 / backlog
 
-- **일반 사용량(general) 가시화**: 크레딧·월할당 소진 후 차감되는 org 레벨. 개인 엔드포인트 미노출 → 미러 범위 밖.
-  "100% 미러"가 아닌 이유. 추후 org/admin 경로 검토.
-- **이벤트 "남기면 아까움"**: 이벤트 크레딧(만료성)을 천천히 쓰면 소멸 → 양방향(소진 위험 + 잔여 권장 페이스). 본 spec은 소진 예측만.
-- **코드네임 동시 다중 버킷**: 현재 실측은 event 1개뿐(가설적). `raw_key` 분리로 대비는 해두되, 실제 다중 출현 시 표시/렌즈 정책 재검토.
-- **CLI quota 충돌**: throttle로 못 막음(§7). 공유 버킷 조율 수단 생기면 재검토.
-- **Codex 라벨 매핑 불일치**: API `plan_type:business` ↔ CLI `/status` "Enterprise". 표시 정책 후속.
-- **Claude 5h/7d 창(개인) 예측**: 롤링 창이라 D-day 의미 약함 → 현재값만.
+- **일반 사용량(general) 가시화**: 크레딧·월할당 소진 후 차감되는 org 레벨. 개인 엔드포인트 미노출 → 미러 범위 밖("100% 미러" 아님).
+- **이벤트 "남기면 아까움"**: 이벤트 크레딧(만료성) 천천히 쓰면 소멸 → 양방향(소진 위험 + 잔여 권장 페이스). 본 spec은 소진 예측만.
+- **`pricing.json` 모델 정합**: `gpt-5.2`가 generic `gpt-5`로 오매칭 등 — 별도 "단가 커버리지" spec.
+- **주간 윈도우 앵커 정밀화**: 첫 사용 시점/유휴 재앵커를 공식 데이터만으로 못 잡으면 로컬 CLI 첫 사용 추적 보강.
+- **코드네임 동시 다중 버킷**: 현재 event 1개(가설적). `raw_key` 분리 대비만, 실제 출현 시 표시/렌즈 정책 재검토.
+- **CLI quota 충돌**: throttle로 못 막음. 공유 버킷 조율 수단 생기면 재검토.
+- **Gemini**: 일별 리셋 정액제, tokenomy 미지원. 추후 도입 시 별도.
