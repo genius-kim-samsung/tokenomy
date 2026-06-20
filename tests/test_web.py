@@ -657,8 +657,7 @@ def test_settings_shows_credit_to_usd(tmp_path, monkeypatch):
 def test_settings_post_persists_credit_to_usd(tmp_path, monkeypatch):
     """POST /settings에서 credit_to_usd를 저장하고 GET /settings에서 조회할 수 있어야 한다."""
     client, cfg = _client_with_config(tmp_path, monkeypatch)
-    r = client.post("/settings", data={"claude": "100", "codex": "50",
-                                        "budget_start": "", "credit_to_usd": "0.05"},
+    r = client.post("/settings", data={"credit_to_usd": "0.05"},
                     follow_redirects=False)
     assert r.status_code == 303
     g = client.get("/settings")
@@ -668,7 +667,9 @@ def test_settings_post_persists_credit_to_usd(tmp_path, monkeypatch):
 # ── Task 4 TDD: official_refresh ──────────────────────────────────────────────────
 
 def test_official_refresh_calls_fetch_and_redirects(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
+    # tracked_providers를 명시 설정해 크레덴셜 파일 유무와 무관하게 결정론적으로 동작
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    cfg_path.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
     calls = []
     monkeypatch.setattr(app_module, "fetch_provider",
                         lambda p, **k: calls.append(p))
@@ -745,8 +746,10 @@ def test_overview_shows_auth_error_note(tmp_path, monkeypatch):
 
 def test_settings_post_writes_tracked_providers(tmp_path, monkeypatch):
     client, cfg_path = _client_with_config(tmp_path, monkeypatch)
-    client.post("/settings", data={"track_claude": "on", "min_interval": "7",
-                                   "credit_to_usd": "0.05"})
+    r = client.post("/settings", data={"track_claude": "on", "min_interval": "7",
+                                       "credit_to_usd": "0.05"},
+                    follow_redirects=False)
+    assert r.status_code == 303
     saved = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert saved["tracked_providers"] == ["claude"]
     assert saved["official_fetch"]["min_interval_minutes"] == 7

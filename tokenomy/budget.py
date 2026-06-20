@@ -135,4 +135,6 @@ def tracked_providers(config: dict) -> list[str]:
         sel = [p for p in PROVIDERS if p in raw]
         if sel:
             return sel
+    # 빈 리스트·None → 크레덴셜 파일 존재 기반 시드(UI에서 전체 체크 해제 시 자동 복구).
+    # 공식 취득 완전 비활성화는 TOKENOMY_SKIP_OFFICIAL_FETCH 환경변수 사용.
     return [p for p in PROVIDERS if creds_present(p)]
