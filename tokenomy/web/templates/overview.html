@@ -2,24 +2,12 @@
 {% block body %}
 <h1 class="page-title">대시보드 <span class="muted">· {{ month }} (KST){% if user_label %} · {{ user_label }}{% endif %}</span></h1>
 
-{% if not budget_configured %}
-<div class="banner">예산을 설정하세요 → <a href="/settings">설정</a> (지금은 사용량 추적만)</div>
-{% endif %}
-
 <section class="card">
-  <h2>이번 달 총지출 <span class="muted">(전 AI 합산{% if budget_start %} · 도입 {{ budget_start }}{% endif %})</span></h2>
+  <h2>이번 달 총지출 <span class="muted">(전 AI 합산)</span></h2>
   {% if not has_data %}
     <p class="muted">데이터 없음 · 사이드바 [↻ 새로고침]을 누르세요</p>
   {% else %}
-    {% if both_budgeted %}
-      <p class="total-num serif">${{ '{:,.2f}'.format(month_total) }}
-        <span class="total-denom">/ ${{ '{:,.0f}'.format(combined_bd.limit) }}</span></p>
-      <span class="bar total-bar"><span class="fill s-{{ 'exceeds' if combined_bd.spent >= combined_bd.limit else 'ok' }}" style="width: {{ [combined_bd.pct * 100, 100]|min }}%"></span></span>
-      <p class="total-breakdown muted">{{ '%.0f'|format(combined_bd.pct * 100) }}% 사용 · Claude ${{ '{:,.2f}'.format(claude_bd.spent) }} · Codex ${{ '{:,.2f}'.format(codex_bd.spent) }}</p>
-    {% else %}
-      <p class="total-num serif">${{ '{:,.2f}'.format(month_total) }}</p>
-      <p class="total-breakdown muted">Claude ${{ '{:,.2f}'.format(claude_bd.spent) }} · Codex ${{ '{:,.2f}'.format(codex_bd.spent) }}</p>
-    {% endif %}
+    <p class="total-num serif">${{ '{:,.2f}'.format(month_total) }}</p>
     <p class="disclaimer">ⓘ 공개 API 단가 기준 추정 · 이 머신 데이터만</p>
   {% endif %}
 </section>
@@ -32,10 +20,10 @@
       <button class="btn-sm" type="submit">↻ 공식 새로고침</button>
     </form>
   </div>
-  {% if not (official_fetch["claude"].tracked or official_fetch["codex"].tracked) %}
+  {% if not tracked %}
   <p class="muted">추적 중인 provider가 없습니다 — config의 <code>tracked_providers</code>에 추가하면 공식 사용량을 자동으로 가져옵니다.</p>
   {% endif %}
-  {% for p in ["claude", "codex"] %}
+  {% for p in tracked %}
     {% if official_fetch[p].note %}
     <p class="muted">⚠ {{ p }}: {{ official_fetch[p].note }}{% if official_fetch[p].last_attempt_at %} <span class="muted">({{ official_fetch[p].last_attempt_at[:16] }})</span>{% endif %}</p>
     {% endif %}
@@ -61,7 +49,7 @@
     {% endif %}
   </div>
   {% else %}
-  <p class="muted">Claude 공식 미취득 — 로컬 추정 ${{ '{:,.2f}'.format(claude_bd.spent) }} <span class="src-est">추정</span></p>
+  <p class="muted">Claude 공식 미취득 — 로컬 추정 ${{ '{:,.2f}'.format(month_total) }} <span class="src-est">추정</span></p>
   {% endif %}
 
   {# Codex — 월간(공식) + 주간(예측) 2게이지 #}
@@ -90,42 +78,6 @@
   <p class="disclaimer">ⓘ <span class="src-official">공식</span>=API ground truth · <span class="src-est">추정</span>=로컬 CLI 토큰단가</p>
 </section>
 
-<section class="card">
-  <h2>AI별 사용 현황</h2>
-  <div class="ai-cards">
-    {# Claude — 월간 한도. 둘째 줄은 '예측'(예상 월말 지출) #}
-    <a class="ai-card" href="/history?provider=claude">
-      <div class="ai-name">Claude <span class="muted">· 월간</span></div>
-      {% if not claude_has_data %}
-        <div class="muted">(이 머신에 Claude 로그 없음)</div>
-      {% elif claude_bd.limit == 0 %}
-        <div class="ai-num">${{ '{:,.2f}'.format(claude_bd.spent) }} <span class="muted">사용량만</span></div>
-      {% else %}
-        <div class="ai-num">${{ '{:,.2f}'.format(claude_bd.spent) }} <span class="ai-denom">/ ${{ '{:,.0f}'.format(claude_bd.limit) }}</span></div>
-        <span class="bar"><span class="fill s-{{ claude_bd.status }}" style="width: {{ [claude_bd.pct * 100, 100]|min }}%"></span></span>
-        <div class="muted">{{ '%.1f'|format(claude_bd.pct * 100) }}% 사용 · 예상 월말 ${{ '{:,.0f}'.format(claude_bd.projected_month) }}
-          <span class="status s-{{ claude_bd.status }}">{{ {'ok':'안전','warn':'주의','exceeds':'초과'}[claude_bd.status] }}</span>
-        </div>
-      {% endif %}
-    </a>
-    {# Codex — 주간 누적(carryover). 둘째 줄은 '잔여'(이번 주 가용) #}
-    <a class="ai-card" href="/history?provider=codex">
-      <div class="ai-name">Codex <span class="muted">· 주간({{ codex_bd.weeks_elapsed }}주차)</span></div>
-      {% if not codex_has_data %}
-        <div class="muted">(이 머신에 Codex 로그 없음)</div>
-      {% elif codex_bd.weekly_limit == 0 %}
-        <div class="ai-num">${{ '%.2f'|format(codex_bd.spent) }} <span class="muted">사용량만</span></div>
-      {% else %}
-        <div class="ai-num">${{ '%.2f'|format(codex_bd.spent) }}
-          <span class="ai-denom cont" title="{{ codex_bd.weeks_elapsed }}주차까지 누적 충전된 한도 · 주간 ${{ ('%.2f'|format(codex_bd.weekly_limit)).rstrip('0').rstrip('.') }} × {{ codex_bd.weeks_elapsed }}주">/ ${{ ('%.2f'|format(codex_bd.limit_to_date)).rstrip('0').rstrip('.') }}</span></div>
-        <span class="bar"><span class="fill s-{{ codex_bd.status }}" style="width: {{ [codex_bd.pct * 100, 100]|min }}%"></span></span>
-        <div class="muted">이번 주 잔여 ${{ '%.2f'|format(codex_bd.remaining) }} · 주간 한도 ${{ ('%.2f'|format(codex_bd.weekly_limit)).rstrip('0').rstrip('.') }}
-          <span class="status s-{{ codex_bd.status }}">{{ {'ok':'안전','exceeds':'초과'}[codex_bd.status] }}</span>
-        </div>
-      {% endif %}
-    </a>
-  </div>
-</section>
 
 {% if has_data %}
 <section class="card chart-card">

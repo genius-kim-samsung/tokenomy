@@ -4,16 +4,14 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
-    KST, DIM_COLUMNS, DateGroup, DaySessionRow, FolderGroup, burndown,
-    by_day_session, by_dimension, by_project, by_session, codex_burndown,
-    combined_burndown, daily_series, insights, month_bounds,
-    official_view, period_bounds,
+    KST, DIM_COLUMNS, DateGroup, DaySessionRow, FolderGroup,
+    by_day_session, by_dimension, by_project, by_session, daily_series,
+    insights, month_bounds, month_spend, official_view, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
 )
 from tokenomy.budget import (
-    budget_from_config, budget_start_kst, credit_to_usd, load_config,
-    tracked_providers, user_label,
+    credit_to_usd, load_config, official_fetch_settings, tracked_providers, user_label,
 )
 from tokenomy.db import get_fetch_state
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
@@ -43,14 +41,12 @@ def _remediation(provider: str, status: str | None) -> str | None:
 
 
 def official_fetch_status(conn, config: dict) -> dict:
-    """provider별 마지막 fetch 상태/안내(표시용). tracked_providers 게이트 기반."""
-    tracked = tracked_providers(config)
+    """provider별 마지막 fetch 상태/안내(표시용). tracked provider만 순회."""
     out: dict = {}
-    for p in ("claude", "codex"):
+    for p in tracked_providers(config):
         st = get_fetch_state(conn, p)
         status = st["last_status"] if st else None
         out[p] = {
-            "tracked": p in tracked,
             "last_status": status,
             "last_attempt_at": st["last_attempt_at"] if st else None,
             "last_error": st["last_error"] if st else None,
@@ -69,39 +65,25 @@ def _provider_has_data(conn, provider: str) -> bool:
 def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     now = now_kst or datetime.now(KST)
     config = load_config()
-    budget = budget_from_config(config)
-    bs = budget_start_kst(config)
+    tracked = tracked_providers(config)
 
-    # 카드 번다운(로컬 추정). 공식 ground truth는 아래 공식 미러 패널이 별도로 보여준다.
-    claude_bd = burndown(conn, budget, now, "claude", budget_start=bs)
-    codex_bd = codex_burndown(conn, budget, now, budget_start=bs)
-    month_total = round(claude_bd.spent + codex_bd.spent, 4)
-
-    # 공식 미러 패널(provider별) — USD 1차. Claude=버킷, Codex=월간+주간 2게이지.
+    # 공식 미러 패널(provider별) — USD 1차. 한도/잔여의 정본.
     ctu = credit_to_usd(config)
     claude_official = official_view(conn, "claude", now, ctu)
     codex_official = official_view(conn, "codex", now, ctu)
 
-    # 히어로 통합 사용률(총지출/총예산). 두 provider 모두 월 예산이 설정된 경우만 노출한다
-    # (한쪽만이면 통합 분모가 불완전 → 금액만 표시). codex를 월간 Burndown으로 변환해
-    # claude와 합산한다. 주의: combined_burndown은 budget_start clamp를 모르므로
-    # spent/limit/pct만 쓰고 projected_month/status(예측 경고)는 쓰지 않는다 — 예측은
-    # 아래 'AI별 번다운' 섹션이 담당(역할 분리).
-    codex_monthly = burndown(conn, budget, now, "codex", budget_start=bs)
-    combined_bd = combined_burndown([claude_bd, codex_monthly], now)
-    both_budgeted = claude_bd.limit > 0 and codex_monthly.limit > 0
+    month_total = month_spend(conn, None, now)
 
     projects = by_project(conn, None, now)
     projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
     projects = projects[:10]
     sessions = by_session(conn, None, now, limit_n=10)
-    # 효율 코치/추세는 전 AI 합산·달력 월 기준 유지(설계). Burndown 인자는 claude 카드 재사용.
+
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
     cov = pricing_coverage(conn, pricing)
     coach = insights(conn, now, None, cov=cov)
     daily = daily_series(conn, None, now)
 
-    # 통합 추세: provider별 누적을 스택 밴드로. 데이터 있는 provider만 등록 순서대로.
     trend_providers = [p for p in _TREND_STYLE if _provider_has_data(conn, p)]
     bands = stacked_trend(
         [(p, daily_series(conn, p, now)) for p in trend_providers]
@@ -117,18 +99,14 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
 
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     has_data = last is not None and last["t"] is not None
-
-    # 전역 토큰 구성(이번 달, 전 AI 합산). 토큰량 기준 비중 — 바엔 비용 미부착(오해 방지).
     token_comp = token_composition(conn, None, *month_bounds(now))
 
     return {
         "active_nav": "dashboard", "sort": sort,
         "user_label": user_label(config),
-        "budget_configured": budget.total > 0,
-        "budget_start": config.get("budget_start"),
+        "tracked": tracked,
         "month": now.strftime("%Y-%m"),
-        "claude_bd": claude_bd, "codex_bd": codex_bd, "month_total": month_total,
-        "combined_bd": combined_bd, "both_budgeted": both_budgeted,
+        "month_total": month_total,
         "claude_official": claude_official, "codex_official": codex_official,
         "official_fetch": official_fetch_status(conn, config),
         "claude_has_data": _provider_has_data(conn, "claude"),
@@ -137,11 +115,6 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "daily_labels": [p.day for p in daily],
         "trend_series": trend_series,
         "trend_totals": trend_totals,
-        # 추세 기준 = 통합 월 예산(Claude+Codex). 페이스선 0→limit(말일에 예산 도달),
-        # 가로선 = 예산 천장. 둘이 말일에서 수렴. 분모는 clamp된 기간 일수(len(daily)).
-        "daily_pace": [round(budget.total / len(daily) * (i + 1), 4) if budget.total else 0.0
-                       for i, _ in enumerate(daily)],
-        "daily_budget": [budget.total if budget.total else 0.0 for _ in daily],
         "last_ts": last["t"] if has_data else None,
         "token_comp": token_comp,
         "has_data": has_data,

@@ -453,13 +453,10 @@ def test_overview_context_shape(monkeypatch, tmp_path):
     _msg(conn, dedup_key="b", provider="codex", ts="2026-06-11T10:00:00Z", cost_usd=4.0, project="/p")
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
     assert ctx["active_nav"] == "dashboard"
-    # provider별 분리 카드
-    assert ctx["claude_bd"].spent == 10.0
-    assert ctx["codex_bd"].spent == 4.0
-    assert ctx["codex_bd"].weekly_limit == 10.0          # 40 / 4
-    # 총지출 요약 = 두 카드 spent 합
+    # 번다운 카드 제거됨 — month_total로 총지출 확인
     assert ctx["month_total"] == 14.0
-    assert ctx["budget_configured"] is True
+    assert "budget_configured" not in ctx
+    assert "claude_bd" not in ctx and "codex_bd" not in ctx
     assert ctx["projects"][0].project == "/p"
     assert ctx["projects"][0].cost == 14.0
     assert ctx["has_data"] is True
@@ -473,10 +470,11 @@ def test_overview_context_provider_without_data(monkeypatch, tmp_path):
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
     assert ctx["claude_has_data"] is True
     assert ctx["codex_has_data"] is False                # codex 로그 없음
-    assert ctx["budget_configured"] is False
+    assert "budget_configured" not in ctx                # 번다운 카드 제거됨
 
 
 def test_overview_context_applies_budget_start(monkeypatch, tmp_path):
+    """budget_start clamp는 burndown 경로에서만 작동. overview_context는 month_spend(달력 월) 사용."""
     cfg = tmp_path / "cfg.json"
     cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
                    encoding="utf-8")
@@ -485,8 +483,9 @@ def test_overview_context_applies_budget_start(monkeypatch, tmp_path):
     _msg(conn, dedup_key="pre", provider="claude", ts="2026-06-05T10:00:00Z", cost_usd=99.0)
     _msg(conn, dedup_key="post", provider="claude", ts="2026-06-13T10:00:00Z", cost_usd=10.0)
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)   # _NOW_STATUS = 6/15
-    assert ctx["claude_bd"].spent == 10.0                # 6/5(도입 전) 제외
-    assert ctx["claude_bd"].days_in_month == 19          # 6/12~6/30
+    # month_spend는 달력 월 전체(6/1~) 포함
+    assert ctx["month_total"] == 109.0                   # 99 + 10 모두 포함
+    assert "claude_bd" not in ctx
 
 
 def test_overview_context_trend_uses_combined_budget(monkeypatch, tmp_path):
@@ -512,9 +511,9 @@ def test_overview_context_trend_uses_combined_budget(monkeypatch, tmp_path):
     assert series[0]["top"] == series[0]["cum"] # 단일 밴드: top == cum
     assert ctx["trend_totals"][12] == 109.0
     assert ctx["trend_totals"][-1] is None
-    # 페이스선·가로선: 통합 예산(100+40=140) 기준, 말일에 수렴
-    assert ctx["daily_pace"][-1] == 140.0
-    assert ctx["daily_budget"] == [140.0] * 30
+    # 페이스선·가로선 제거됨
+    assert "daily_pace" not in ctx
+    assert "daily_budget" not in ctx
 
 
 def test_overview_context_no_budget_unconfigured(monkeypatch, tmp_path):
@@ -522,8 +521,8 @@ def test_overview_context_no_budget_unconfigured(monkeypatch, tmp_path):
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
-    assert ctx["budget_configured"] is False
-    assert ctx["claude_bd"].limit == 0
+    assert "budget_configured" not in ctx       # 번다운 카드 제거됨
+    assert "claude_bd" not in ctx
 
 
 
