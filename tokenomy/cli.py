@@ -3,9 +3,11 @@
   python -m tokenomy.cli ingest   # 세션 로그 파싱 → DB (증분)
   python -m tokenomy.cli report   # 터미널 요약(번다운 + Top 프로젝트)
   python -m tokenomy.cli all      # ingest 후 report
+  python -m tokenomy.cli official import-fixture <claude|codex> <path>
 """
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -13,10 +15,11 @@ from pathlib import Path
 from tokenomy.aggregate import KST, burndown, by_project, by_session, parse_ts, pricing_coverage
 from tokenomy.codex_parser import CODEX_ROOT, ingest_codex
 from tokenomy.archive import archive_tree
-from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns, maybe_reprice
+from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns, maybe_reprice, insert_official_buckets
 from tokenomy.freshness import CLEANUP_DAYS, freshness, record_ingest
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
-from tokenomy.budget import budget_from_config, load_config, user_label
+from tokenomy.budget import budget_from_config, load_config, user_label, credit_to_usd
+from tokenomy.official_parser import parse_claude, parse_codex
 
 CLAUDE_ROOT = Path.home() / ".claude" / "projects"
 
@@ -40,6 +43,22 @@ def cmd_ingest(conn) -> None:
     if repriced:
         msg += f"\n[reprice] 단가 변경 감지 — 기존 {repriced}행 비용 재계산"
     print(msg)
+
+
+def cmd_official_import(conn, provider: str, path: str, *, now_kst=None,
+                        credit_to_usd_value: float | None = None) -> int:
+    """fixture/실측 raw JSON을 파서→DB로 주입하는 dev 명령(라이브 없이 검증용). 적재 버킷 수 반환.
+
+    provider: 'claude' | 'codex'. now_kst/credit_to_usd_value는 테스트 주입용(미지정 시 실값).
+    """
+    now = now_kst or datetime.now(KST)
+    ctu = credit_to_usd_value if credit_to_usd_value is not None else credit_to_usd(load_config())
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    parse = parse_claude if provider == "claude" else parse_codex
+    buckets = parse(raw, credit_to_usd=ctu)
+    ts = now.isoformat()
+    return insert_official_buckets(conn, provider=provider, fetched_at=ts,
+                                   buckets=buckets, created_at=ts)
 
 
 def _bar(pct: float, width: int = 20) -> str:
@@ -138,8 +157,12 @@ def main(argv: list[str] | None = None) -> None:
     elif cmd == "all":
         cmd_ingest(conn)
         cmd_report(conn)
+    elif cmd == "official" and len(argv) >= 4 and argv[1] == "import-fixture":
+        provider = argv[2] if argv[2] in ("claude", "codex") else "claude"
+        n = cmd_official_import(conn, provider, argv[3])
+        print(f"[official] {provider} 버킷 {n}개 적재")
     else:
-        print("usage: python -m tokenomy.cli [ingest|report|all]")
+        print("usage: python -m tokenomy.cli [ingest|report|all|official import-fixture <claude|codex> <path>]")
 
 
 if __name__ == "__main__":

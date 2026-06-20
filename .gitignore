@@ -23,6 +23,9 @@ data/
 .env
 *.local.json
 
+# 공식 사용량 실측 원문·로컬 fixture(가짜 아님) — 커밋 금지(커밋 정본은 tests/fixtures/official/*.json)
+tests/fixtures/official/local/
+
 # personal config (budget) — never commit
 config/tokenomy.config.json
 
