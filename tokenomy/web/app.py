@@ -12,7 +12,7 @@ from tokenomy import __version__
 from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
 from tokenomy.budget import budget_from_config, credit_to_usd as _credit_to_usd, load_config, save_config
 from tokenomy.cli import cmd_ingest
-from tokenomy.db import connect, insert_official_snapshot
+from tokenomy.db import connect
 from tokenomy.paths import resource_path
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
@@ -187,25 +187,3 @@ def settings_post(claude: str = Form(""), codex: str = Form(""),
     return RedirectResponse("/", status_code=303)
 
 
-def _nonneg_float_or_none(value: str | None) -> float | None:
-    """0 이상 실수면 그 값, 빈값·음수·비숫자면 None(오입력으로 스냅샷이 더럽혀지지 않게)."""
-    try:
-        f = float(value) if value not in (None, "") else None
-    except ValueError:
-        return None
-    return f if (f is not None and f >= 0) else None
-
-
-@app.post("/official")
-def official_post(official_claude: str = Form("")):
-    """회사 공식 사용량(Claude 월 누적액) 스냅샷을 시점별로 append. 게이지가 max 병합한다."""
-    value = _nonneg_float_or_none(official_claude)
-    if value is None:
-        return RedirectResponse("/?notice=official-invalid", status_code=303)
-    now = datetime.now(KST)
-    conn = connect()
-    insert_official_snapshot(
-        conn, provider="claude", target_month=now.strftime("%Y-%m"),
-        cumulative_usd=value, snapshot_ts=now.isoformat(), created_at=now.isoformat(),
-    )
-    return RedirectResponse("/?notice=official-saved", status_code=303)

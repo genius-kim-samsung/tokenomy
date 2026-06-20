@@ -8,13 +8,13 @@ from tokenomy.aggregate import (
     add_business_days, burndown, business_days_between, by_day_session,
     by_dimension, by_model, by_project, by_session, combined_burndown, daily_series,
     effective_month_start, insights,
-    month_bounds, normalize_project, official_merged_burndown, official_view,
-    OfficialMergedBurndown, OfficialView,
+    month_bounds, normalize_project, official_view,
+    OfficialView,
     parse_ts, period_bounds, session_detail, sidechain_split,
     SidechainSplit, stacked_trend, token_composition, pricing_coverage, CoverageReport,
     week_count,
 )
-from tokenomy.db import connect, insert_official_buckets, insert_official_snapshot, ingest_records
+from tokenomy.db import connect, insert_official_buckets, ingest_records
 from tokenomy.budget import Budget
 from tokenomy.official_parser import OfficialBucket
 from tokenomy.parser import UsageRecord
@@ -1543,61 +1543,6 @@ def test_burndown_calendar_fallback_when_no_business_days_elapsed():
     assert bd.business_days_elapsed == 0
     assert bd.daily_avg == 5.0                 # fallback: 10 / 2 달력일
     assert bd.projected_month == 155.0         # 5 × 31
-
-
-# --- 공식(회사) 사용량 병합 official_merged_burndown -------------------------
-
-
-def test_official_merge_no_snapshot_uses_cli():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-05T00:00:00Z", 30.0)
-    m = official_merged_burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
-    assert isinstance(m, OfficialMergedBurndown)
-    assert m.official_spent is None
-    assert m.cli_spent == 30.0
-    assert m.burndown.spent == 30.0            # 공식 없음 → CLI 그대로
-    assert m.missing_delta == 0.0
-    assert m.stale_days is None
-
-
-def test_official_merge_official_higher_shows_missing_delta():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-05T00:00:00Z", 30.0)
-    insert_official_snapshot(
-        conn, provider="claude", target_month="2026-06", cumulative_usd=45.0,
-        snapshot_ts="2026-06-09T09:00:00+09:00", created_at="2026-06-09T09:00:00+09:00",
-    )
-    m = official_merged_burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
-    assert m.official_spent == 45.0
-    assert m.cli_spent == 30.0
-    assert m.burndown.spent == 45.0            # max(45, 30) = 공식
-    assert m.missing_delta == 15.0             # 45 - 30 (웹/앱 등 CLI 미포함분)
-    assert m.official_lt_cli is False
-    assert m.burndown.pct == 0.45              # 병합 spent로 재계산
-
-
-def test_official_merge_official_lower_keeps_cli():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-05T00:00:00Z", 60.0)
-    insert_official_snapshot(
-        conn, provider="claude", target_month="2026-06", cumulative_usd=40.0,
-        snapshot_ts="2026-06-09T09:00:00+09:00", created_at="2026-06-09T09:00:00+09:00",
-    )
-    m = official_merged_burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
-    assert m.burndown.spent == 60.0            # max(40, 60) = CLI(공식 과소 → 차단)
-    assert m.missing_delta == 0.0
-    assert m.official_lt_cli is True           # 공식 < CLI → 주의 신호
-
-
-def test_official_merge_stale_days():
-    conn = connect(":memory:")
-    insert_official_snapshot(
-        conn, provider="claude", target_month="2026-06", cumulative_usd=20.0,
-        snapshot_ts="2026-06-07T09:00:00+09:00", created_at="2026-06-07T09:00:00+09:00",
-    )
-    m = official_merged_burndown(conn, Budget(claude=100, codex=0), NOW, "claude")  # NOW 6/10
-    assert m.official_spent == 20.0
-    assert m.stale_days == 3                    # 6/7 입력 → 6/10 현재, 3일치 미반영
 
 
 # --- Task 4: Codex 주간 윈도우 헬퍼 ---

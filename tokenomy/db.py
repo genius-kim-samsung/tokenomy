@@ -80,17 +80,6 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 
-CREATE TABLE IF NOT EXISTS official_usage (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    provider TEXT,
-    target_month TEXT,        -- "YYYY-MM" (KST 기준 어느 달의 누적인가) — 월 리셋 매칭
-    cumulative_usd REAL,      -- 그 시점 회사 화면의 이번 달 누적 지출($)
-    snapshot_ts TEXT,         -- 누적값의 as-of 시점(KST ISO). 수동 입력이면 입력 시각
-    created_at TEXT           -- DB 행 생성 시각(KST ISO)
-);
-CREATE INDEX IF NOT EXISTS idx_official_provider_month
-    ON official_usage(provider, target_month);
-
 CREATE TABLE IF NOT EXISTS official_buckets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT,
@@ -159,6 +148,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         for col, decl in decls.items():
             if col not in cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    # 구 단일값 official_usage 폐기(멀티버킷 official_buckets로 대체). 로컬 단일 사용자라 이관 없음.
+    # _migrate는 executescript(SCHEMA)보다 먼저 실행되고 SCHEMA에서 CREATE를 뺐으므로 재생성되지 않는다.
+    conn.execute("DROP TABLE IF EXISTS official_usage")
     conn.commit()
 
 
@@ -400,54 +392,6 @@ def set_meta(conn, key: str, value: str) -> None:
 def get_meta(conn, key: str) -> str | None:
     row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
     return row["value"] if row else None
-
-
-def insert_official_snapshot(
-    conn,
-    *,
-    provider: str,
-    target_month: str,
-    cumulative_usd: float,
-    snapshot_ts: str,
-    created_at: str,
-) -> int:
-    """회사 공식 사용량 스냅샷을 append한다(누적값의 시점 기록). 생성된 id 반환.
-
-    같은 달에 여러 번 입력 가능 — 매 입력이 한 행. 최신값(latest_official)이 게이지에
-    쓰이고, 전체 시계열(official_series)은 일별 추이의 마커/계단 표시에 쓰인다.
-    """
-    cur = conn.execute(
-        "INSERT INTO official_usage "
-        "(provider, target_month, cumulative_usd, snapshot_ts, created_at) "
-        "VALUES (?,?,?,?,?)",
-        (provider, target_month, cumulative_usd, snapshot_ts, created_at),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-def latest_official(conn, provider: str, target_month: str):
-    """provider·target_month의 가장 최근 스냅샷 행(snapshot_ts 최신). 없으면 None.
-
-    max 병합(spent = max(공식누적_최신, CLI_월누적))의 '공식누적_최신' 항.
-    """
-    return conn.execute(
-        "SELECT * FROM official_usage WHERE provider=? AND target_month=? "
-        "ORDER BY snapshot_ts DESC, id DESC LIMIT 1",
-        (provider, target_month),
-    ).fetchone()
-
-
-def official_series(conn, provider: str, target_month: str) -> list:
-    """provider·target_month의 전체 스냅샷을 snapshot_ts 오름차순으로 반환.
-
-    일별 추이 차트의 공식 마커/계단 + 구간 사용량(인접 스냅샷 차분) 표시용.
-    """
-    return conn.execute(
-        "SELECT * FROM official_usage WHERE provider=? AND target_month=? "
-        "ORDER BY snapshot_ts ASC, id ASC",
-        (provider, target_month),
-    ).fetchall()
 
 
 def _iso(dt) -> str | None:

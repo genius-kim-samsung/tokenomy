@@ -282,64 +282,6 @@ def burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude",
                              period_start=period_start, period_end=period_end)
 
 
-@dataclass
-class OfficialMergedBurndown:
-    """공식(회사) 사용량과 CLI 추정을 max로 병합한 번다운 + 누락/staleness 신호.
-
-    spent = max(공식누적_최신, CLI_월누적) — 공식이 truth지만 공식<CLI(오입력/지연)면
-    CLI를 택해 과소표시를 차단한다. missing_delta = 공식이 더 큰 만큼(웹/앱 등 CLI에
-    안 잡힌 사용분). stale_days = 공식 입력 후 경과일(그 사이 웹/앱 미반영 경고용).
-    """
-    burndown: Burndown            # 병합 spent로 재계산한 번다운(게이지 본체)
-    cli_spent: float              # CLI(messages) 월누적
-    official_spent: float | None  # 공식 최신 누적(없으면 None — CLI-only)
-    missing_delta: float          # max(0, 공식 - CLI) — 공식에만 잡힌 누락분
-    official_lt_cli: bool         # 공식 < CLI(오입력/지연) → 주의
-    snapshot_ts: str | None       # 공식 최신 스냅샷 시점(KST ISO)
-    stale_days: int | None        # 공식 입력 후 경과 일수(없으면 None)
-
-
-def official_merged_burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude",
-                             *, budget_start: datetime | None = None) -> OfficialMergedBurndown:
-    """CLI 번다운에 공식 사용량 최신 스냅샷을 max 병합한다(공식 입력은 Claude-only 가정).
-
-    공식이 CLI보다 크면 병합 spent로 _compute_burndown을 다시 돌려 게이지·D-day를 갱신한다.
-    target_month는 now_kst의 달력 월("YYYY-MM") — 공식 입력은 매월 1일 리셋(달력월)과 매칭.
-    """
-    from tokenomy.db import latest_official
-
-    cli_bd = burndown(conn, budget, now_kst, provider, budget_start=budget_start)
-    cli_spent = cli_bd.spent
-    target_month = now_kst.strftime("%Y-%m")
-    row = latest_official(conn, provider, target_month)
-    if row is None:
-        return OfficialMergedBurndown(
-            burndown=cli_bd, cli_spent=cli_spent, official_spent=None,
-            missing_delta=0.0, official_lt_cli=False, snapshot_ts=None, stale_days=None,
-        )
-
-    official = round(row["cumulative_usd"] or 0.0, 4)
-    if official > cli_spent:
-        period_start = effective_month_start(now_kst, budget_start)
-        _, period_end = month_bounds(now_kst)
-        merged_bd = _compute_burndown(
-            provider, official, budget.limit_for(provider), cli_bd.unpriced_count,
-            now_kst, period_start=period_start, period_end=period_end,
-        )
-    else:
-        merged_bd = cli_bd   # 공식 ≤ CLI → CLI 유지(과소표시 차단)
-
-    snapshot_ts = row["snapshot_ts"]
-    dt = parse_ts(snapshot_ts)
-    stale_days = (now_kst.date() - dt.date()).days if dt is not None else None
-    return OfficialMergedBurndown(
-        burndown=merged_bd, cli_spent=cli_spent, official_spent=official,
-        missing_delta=round(max(0.0, official - cli_spent), 4),
-        official_lt_cli=official < cli_spent,
-        snapshot_ts=snapshot_ts, stale_days=stale_days,
-    )
-
-
 def combined_burndown(cards: list[Burndown], now_kst: datetime) -> Burndown:
     """provider별 Burndown 리스트 → 통합 Burndown.
 

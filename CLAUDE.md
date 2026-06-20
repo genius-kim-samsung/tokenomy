@@ -41,7 +41,8 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **parser.py / codex_parser.py** — 각 도구 로그를 공통 `UsageRecord`로 정규화. 새 도구 추가는
   여기에 모듈 하나 더(README의 "Adding a parser" 참고).
 - **db.py** — SQLite 적재. `messages`(메시지별 토큰/비용, `dedup_key` UNIQUE로 중복 제거),
-  `sessions`(메타 + 요약 + 턴수), `session_day_turns`(세션×날짜 턴 수), `scan_offsets`(증분 스캔용 byte-offset). 스키마 변경은 `_MIGRATE_COLS`에 ALTER 추가.
+  `sessions`(메타 + 요약 + 턴수), `session_day_turns`(세션×날짜 턴 수), `scan_offsets`(증분 스캔용 byte-offset),
+  `official_buckets`(공식 사용량 멀티버킷 USD 스냅샷), `official_fetch_state`(자동 취득 상태). 스키마 변경은 `_MIGRATE_COLS`에 ALTER 추가.
 - **aggregate.py** — 번다운/프로젝트별/세션별 집계. 월 경계는 **KST** 기준(ts는 UTC라 변환).
   Claude는 월간, Codex는 **주간 누적(carryover)** 번다운(아래 게시). 예산 도입일(`budget_start`)로
   기간 시작을 clamp. `_compute_burndown`은 기간 `[start,end)`를 받는 순수 함수, `codex_burndown`은 별도.
@@ -76,6 +77,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **웹은 `127.0.0.1`만 바인딩** — 네트워크 노출 금지. 쿼리 파라미터는 화이트리스트 fallback(`provider`/`sort`/`period` 등).
   내역·차원별은 주/월 토글 + 사용자 지정 날짜 구간(`start`/`end`) 조회(`views._resolve_range`).
 - **CSS는 Tailwind(standalone CLI)로 빌드.** `static/src/input.css`(토큰+`@layer components`) → `static/app.css`(커밋). 런타임/exe는 무빌드 유지. htmx는 `static/vendor/`에 vendored(오프라인). Alpine은 실수요 시 추가(현재 미사용).
+- **공식 사용량은 멀티버킷(USD 통일) — Claude 버킷/Codex 월간+주간(월÷4, 로컬 첫-사용 앵커).** `credit_to_usd`(config, 기본 0.04)로 크레딧 환산, 토큰 cost 경로와 분리. 구 단일값 `official_usage` 테이블은 `_migrate`가 DROP(로컬 단일 사용자라 이관 없음).
 
 ## 환경변수
 
