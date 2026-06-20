@@ -380,6 +380,30 @@ class CodexBurndown:
     week_spent: float       # 이번 주(월요일~)만의 지출(표시용)
 
 
+def codex_weekly_window(conn, now_kst: datetime) -> tuple[datetime, datetime] | None:
+    """Codex 주간 윈도우 [start, end) — 로컬 CLI 첫 사용 앵커 + 유휴 후 재앵커.
+
+    메시지 ts(KST)를 오름차순 순회하며, 현재 윈도우(start)에서 7일 이상 벗어난 첫
+    메시지마다 그 시점으로 재앵커한다. 연속 사용이면 7일마다 타일링되고, 7일+ 유휴면
+    다음 사용일이 새 앵커가 된다(유휴 기간은 윈도우를 소비하지 않음). end = start + 7일.
+    Codex 사용이 전혀 없으면 None. 공식 누적 스냅샷은 cadence가 희소해 앵커 관측에
+    부적합하므로 로컬 메시지 ts를 1차 근거로 쓴다.
+    """
+    rows = conn.execute(
+        "SELECT ts FROM messages WHERE provider='codex' ORDER BY ts ASC"
+    ).fetchall()
+    ws: datetime | None = None
+    for r in rows:
+        dt = parse_ts(r["ts"])
+        if dt is None:
+            continue
+        if ws is None or dt >= ws + timedelta(days=7):
+            ws = dt
+    if ws is None:
+        return None
+    return ws, ws + timedelta(days=7)
+
+
 def codex_burndown(conn, budget: Budget, now_kst: datetime,
                    *, budget_start: datetime | None = None) -> CodexBurndown:
     """Codex 주간 누적(carryover) 번다운을 산출한다.

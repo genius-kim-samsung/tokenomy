@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -8,6 +8,7 @@ from tokenomy.aggregate import (
     month_bounds, normalize_project, official_merged_burndown, OfficialMergedBurndown,
     parse_ts, period_bounds, session_detail, sidechain_split,
     SidechainSplit, stacked_trend, token_composition, pricing_coverage, CoverageReport,
+    codex_weekly_window,
 )
 from tokenomy.db import connect, insert_official_snapshot
 from tokenomy.budget import Budget
@@ -1648,3 +1649,32 @@ def test_official_merge_stale_days():
     m = official_merged_burndown(conn, Budget(claude=100, codex=0), NOW, "claude")  # NOW 6/10
     assert m.official_spent == 20.0
     assert m.stale_days == 3                    # 6/7 입력 → 6/10 현재, 3일치 미반영
+
+
+# --- Task 4: Codex 주간 윈도우 헬퍼 ---
+
+
+def test_codex_weekly_window_anchors_on_first_use():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-08T01:00:00Z", 5.0, provider="codex", session="a")  # 첫 사용
+    _insert(conn, "2026-06-10T01:00:00Z", 5.0, provider="codex", session="b")
+    now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
+    start, end = codex_weekly_window(conn, now)
+    assert start.date().isoformat() == "2026-06-08"   # 첫 사용 KST 날짜(+9 → 10:00)
+    assert (end - start) == timedelta(days=7)
+
+
+def test_codex_weekly_window_reanchors_after_idle():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-01T01:00:00Z", 5.0, provider="codex", session="a")
+    _insert(conn, "2026-06-12T01:00:00Z", 5.0, provider="codex", session="b")  # 11일 뒤(>7) → 재앵커
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=KST)
+    start, _ = codex_weekly_window(conn, now)
+    assert start.date().isoformat() == "2026-06-12"   # 마지막 사용으로 재앵커
+
+
+def test_codex_weekly_window_none_without_usage():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-08T01:00:00Z", 5.0, provider="claude", session="a")  # claude만
+    now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
+    assert codex_weekly_window(conn, now) is None
