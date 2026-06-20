@@ -1658,8 +1658,7 @@ def test_codex_weekly_window_anchors_on_first_use():
     conn = connect(":memory:")
     _insert(conn, "2026-06-08T01:00:00Z", 5.0, provider="codex", session="a")  # 첫 사용
     _insert(conn, "2026-06-10T01:00:00Z", 5.0, provider="codex", session="b")
-    now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
-    start, end = codex_weekly_window(conn, now)
+    start, end = codex_weekly_window(conn)
     assert start.date().isoformat() == "2026-06-08"   # 첫 사용 KST 날짜(+9 → 10:00)
     assert (end - start) == timedelta(days=7)
 
@@ -1668,13 +1667,11 @@ def test_codex_weekly_window_reanchors_after_idle():
     conn = connect(":memory:")
     _insert(conn, "2026-06-01T01:00:00Z", 5.0, provider="codex", session="a")
     _insert(conn, "2026-06-12T01:00:00Z", 5.0, provider="codex", session="b")  # 11일 뒤(>7) → 재앵커
-    now = datetime(2026, 6, 13, 12, 0, tzinfo=KST)
-    start, _ = codex_weekly_window(conn, now)
+    start, _ = codex_weekly_window(conn)
     assert start.date().isoformat() == "2026-06-12"   # 마지막 사용으로 재앵커
 
 
 def test_codex_weekly_window_none_without_usage():
     conn = connect(":memory:")
     _insert(conn, "2026-06-08T01:00:00Z", 5.0, provider="claude", session="a")  # claude만
-    now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
-    assert codex_weekly_window(conn, now) is None
+    assert codex_weekly_window(conn) is None

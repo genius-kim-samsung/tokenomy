@@ -380,8 +380,8 @@ class CodexBurndown:
     week_spent: float       # 이번 주(월요일~)만의 지출(표시용)
 
 
-def codex_weekly_window(conn, now_kst: datetime) -> tuple[datetime, datetime] | None:
-    """Codex 주간 윈도우 [start, end) — 로컬 CLI 첫 사용 앵커 + 유휴 후 재앵커.
+def codex_weekly_window(conn) -> tuple[datetime, datetime] | None:
+    """사용 이력 기준 가장 최근 7일 윈도우 [start, end).
 
     메시지 ts(KST)를 오름차순 순회하며, 현재 윈도우(start)에서 7일 이상 벗어난 첫
     메시지마다 그 시점으로 재앵커한다. 연속 사용이면 7일마다 타일링되고, 7일+ 유휴면
