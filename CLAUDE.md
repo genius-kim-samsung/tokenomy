@@ -42,7 +42,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **parser.py / codex_parser.py** — 각 도구 로그를 공통 `UsageRecord`로 정규화. 새 도구 추가는
   여기에 모듈 하나 더(README의 "Adding a parser" 참고).
 - **official_fetch.py** — 공식 사용량 라이브 취득(유일한 아웃바운드). 각 CLI의 로컬 OAuth 토큰을
-  **읽기 전용**으로 사용해 공식 API를 단발 GET(≤3s/provider, 백오프 없음). 옵트인(`official_fetch.enabled`
+  **읽기 전용**으로 사용해 공식 API를 단발 GET(≤3s/provider, 백오프 없음). 엔드포인트: Claude `https://api.anthropic.com/api/oauth/usage`, Codex `https://chatgpt.com/backend-api/wham/usage`. 옵트인(`official_fetch.enabled`
   기본 false) + provider 토글 + throttle(`min_interval_minutes` 기본 5). 401→auth_error, 그 외 실패→http_error,
   **마지막 스냅샷·last_success_at 보존**. PII(토큰/account_id) 미저장 — 헤더에 쓰고 버린다.
   트리거: 웹 `POST /official/refresh`(1차) + `cmd_ingest` 데몬스레드 훅(보조, 비차단). 표준 라이브러리만.
