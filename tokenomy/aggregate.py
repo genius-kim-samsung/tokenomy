@@ -436,10 +436,12 @@ def official_view(conn, provider: str, now_kst: datetime, budget: Budget,
 
     - period_used/limit = 월간 버킷(공식 ground truth). 없으면 None.
     - Codex weekly_used = 로컬 CLI 첫-사용 7일 윈도우 합(추정), weekly_limit = 공식 월÷4 또는 budget.codex÷4.
+      유휴 상태(마지막 사용 7일+ 경과로 윈도우가 닫힌 경우) weekly_used=0, weekly_window_end=None.
     - Claude 월 버킷 resets_at None은 다음 달 경계(KST)로 채운다.
     - 활성 버킷 선정(1차): 후보(monthly_limit/event_credit/codex_monthly 중 stale 제외)의
       series 최근 두 스냅샷 used 양의 차분이 가장 큰 버킷 — 동률은 tie-break(event<monthly).
       (2차) 양의 차분이 없으면 remaining>0 첫 버킷; 없으면 첫 후보. promo/rate_window는 항상 제외.
+    - 예측 렌즈(lens)는 Phase 1에서 Claude 전용. Codex는 주간/월간 게이지가 각자 리셋 표시를 담당하므로 lens=None.
     """
     from tokenomy.db import latest_official_snapshot, get_fetch_state, official_bucket_series
 
@@ -480,10 +482,17 @@ def official_view(conn, provider: str, now_kst: datetime, budget: Budget,
         win = codex_weekly_window(conn)
         if win is not None:
             ws, we = win
-            wrows = _range_rows(conn, "codex", ws, we)
-            weekly_used = round(sum((r["cost_usd"] or 0) for r in wrows), 4)
-            weekly_estimated = True
-            weekly_end = we.date()
+            if now_kst >= we:
+                # 윈도우 닫힘(유휴): 마지막 사용 7일+ 경과 → 현재 주간 데이터 없음
+                weekly_used = 0.0
+                weekly_estimated = True
+                weekly_end = None
+            else:
+                # 현재 윈도우 활성
+                wrows = _range_rows(conn, "codex", ws, we)
+                weekly_used = round(sum((r["cost_usd"] or 0) for r in wrows), 4)
+                weekly_estimated = True
+                weekly_end = we.date()
         # 주간 한도 = 공식 월 한도÷4(있으면) 아니면 budget.codex÷4
         if period_limit:
             weekly_limit = round(period_limit / 4, 4)
@@ -527,10 +536,10 @@ def official_view(conn, provider: str, now_kst: datetime, budget: Budget,
 
         active_key = active["bucket_key"]
         reset_date = parse_ts(active["resets_at"]).date() if active["resets_at"] else None
-        if provider == "codex":
-            reset_date = weekly_end or reset_date
-        lens = _lens_from_series(conn, provider, active_key, now_kst,
-                                 active["limit_usd"], active["used_usd"], reset_date)
+        # 렌즈는 Claude 전용(Phase 1). Codex는 주간/월간 게이지가 각자 리셋 표시를 담당.
+        if provider != "codex":
+            lens = _lens_from_series(conn, provider, active_key, now_kst,
+                                     active["limit_usd"], active["used_usd"], reset_date)
 
     note = None if rows else "공식 미취득 — 로컬 추정(USD)"
     return OfficialView(

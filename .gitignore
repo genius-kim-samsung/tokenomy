@@ -44,3 +44,6 @@ tools/
 
 # 로컬 전용 디자인 분석 문서(공개 제외)
 /DESIGN.md
+
+# 세션 로컬 스크래치(codex 세션 id 등) — 커밋 금지
+.context/

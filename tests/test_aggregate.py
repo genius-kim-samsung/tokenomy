@@ -1655,6 +1655,27 @@ def test_official_view_lens_from_series():
     assert v.active_key == "monthly"
 
 
+def test_official_view_codex_has_no_lens():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-09T01:00:00Z", 5.0, provider="codex", session="a")
+    insert_official_buckets(conn, provider="codex", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "codex_monthly", 20.0, 80.0, raw="individual_limit",
+                                         unit="credit", util=25.0)],
+                            created_at="x")
+    now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
+    v = official_view(conn, "codex", now, Budget(claude=100, codex=50), 0.04)
+    assert v.lens is None
+
+
+def test_official_view_codex_idle_window_empty():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-01T01:00:00Z", 9.0, provider="codex", session="a")  # 마지막 사용
+    now = datetime(2026, 6, 12, 12, 0, tzinfo=KST)  # 윈도우(6/1~6/8) 종료 후
+    v = official_view(conn, "codex", now, Budget(claude=100, codex=50), 0.04)
+    assert v.weekly_used_usd == 0.0
+    assert v.weekly_window_end is None
+
+
 def test_official_view_active_bucket_largest_diff():
     conn = connect(":memory:")
     # Claude: event + monthly 둘 다 활성. monthly의 최근 차분이 더 커서 active=monthly(이벤트가 tie-break 우선임에도)
