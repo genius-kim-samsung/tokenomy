@@ -793,3 +793,30 @@ def test_official_refresh_redirects_even_on_fetch_error(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "fetch_provider", boom)
     r = client.post("/official/refresh", data={}, follow_redirects=False)
     assert r.status_code == 303   # 결과 무관 redirect(예외도 삼킴)
+
+
+# ── Task 5 TDD: 설정 UI — 공식 자동 취득 토글 지속 ──────────────────────────────
+
+def test_settings_shows_official_fetch_section(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert "공식 사용량 자동 취득" in r.text
+    assert 'name="official_enabled"' in r.text
+
+
+def test_settings_post_saves_official_fetch(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    cfg = tmp_path / "cfg.json"
+    r = client.post("/settings", data={
+        "claude": "100", "codex": "50", "budget_start": "", "credit_to_usd": "0.04",
+        "official_enabled": "on", "official_claude": "on", "min_interval": "10",
+        # official_codex 미체크(체크박스 미전송) → False로 저장
+    }, follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    of = saved["official_fetch"]
+    assert of["enabled"] is True
+    assert of["claude"] is True
+    assert of["codex"] is False
+    assert of["min_interval_minutes"] == 10
