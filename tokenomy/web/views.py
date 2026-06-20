@@ -13,7 +13,7 @@ from tokenomy.aggregate import (
 )
 from tokenomy.budget import (
     budget_from_config, budget_start_kst, credit_to_usd, load_config,
-    official_fetch_settings, user_label,
+    tracked_providers, user_label,
 )
 from tokenomy.db import get_fetch_state
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
@@ -43,13 +43,14 @@ def _remediation(provider: str, status: str | None) -> str | None:
 
 
 def official_fetch_status(conn, config: dict) -> dict:
-    """공식 취득 옵트인 여부 + provider별 마지막 fetch 상태/안내(표시용)."""
-    enabled = official_fetch_settings(config)["enabled"]
-    out: dict = {"enabled": enabled}
+    """provider별 마지막 fetch 상태/안내(표시용). tracked_providers 게이트 기반."""
+    tracked = tracked_providers(config)
+    out: dict = {}
     for p in ("claude", "codex"):
         st = get_fetch_state(conn, p)
         status = st["last_status"] if st else None
         out[p] = {
+            "tracked": p in tracked,
             "last_status": status,
             "last_attempt_at": st["last_attempt_at"] if st else None,
             "last_error": st["last_error"] if st else None,

@@ -93,13 +93,26 @@ _CODEX_RAW = {"spend_control": {"individual_limit": {
     "used_percent": 25, "reset_at": 1782864001}}}
 
 _NOW = datetime(2026, 6, 10, 9, tzinfo=KST)
-_CFG_ON = {"official_fetch": {"enabled": True, "claude": True, "codex": True,
-                             "min_interval_minutes": 5}, "credit_to_usd": 0.04}
+_CFG_ON = {"tracked_providers": ["claude", "codex"], "credit_to_usd": 0.04,
+           "official_fetch": {"min_interval_minutes": 5}}
+
+
+def _memory_conn():
+    """인메모리 SQLite 연결 — 테스트 헬퍼."""
+    return connect(":memory:")
+
+
+def _boom(req, timeout=None):
+    """urlopen stub — 호출 시 예외(네트워크 미호출 검증용)."""
+    raise AssertionError("network must not be called")
 
 
 def _patch_creds(monkeypatch, tmp_path):
-    """fetch_provider가 읽을 크레덴셜 파일 경로를 tmp로 바꾼다."""
+    """fetch_provider가 읽을 크레덴셜 파일 경로를 tmp로 바꾼다.
+    paths.CLAUDE_CREDS/CODEX_AUTH → creds_present 감지용, of.CLAUDE_CREDS/CODEX_AUTH → 실제 읽기용.
+    """
     import tokenomy.official_fetch as of
+    from tokenomy import paths
     cp = tmp_path / "claude.json"
     cp.write_text(json.dumps({"claudeAiOauth": {"accessToken": "sk-x"}}), encoding="utf-8")
     xp = tmp_path / "codex.json"
@@ -107,23 +120,29 @@ def _patch_creds(monkeypatch, tmp_path):
                   encoding="utf-8")
     monkeypatch.setattr(of, "CLAUDE_CREDS", cp)
     monkeypatch.setattr(of, "CODEX_AUTH", xp)
+    monkeypatch.setattr(paths, "CLAUDE_CREDS", cp)
+    monkeypatch.setattr(paths, "CODEX_AUTH", xp)
 
 
-def test_fetch_disabled_when_optin_off(monkeypatch):
+def test_fetch_skips_untracked_provider(tmp_path, monkeypatch):
     monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
-    conn = connect(":memory:")
-    r = fetch_provider("claude", now_kst=_NOW, config={}, conn=conn, urlopen=_never)
-    assert r.status == "disabled"
-    # state 미기록(옵트인 off는 시도 아님)
+    conn = _memory_conn()
+    cfg = {"tracked_providers": ["claude"]}
+    res = fetch_provider("codex", now_kst=_NOW, config=cfg, conn=conn, urlopen=_boom)
+    assert res.status == "disabled"
+
+
+def test_fetch_silent_skip_when_creds_absent(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
+    from tokenomy import paths
+    monkeypatch.setattr(paths, "creds_present", lambda p: False)
+    conn = _memory_conn()
+    res = fetch_provider("claude", now_kst=_NOW, config={"tracked_providers": ["claude"]},
+                         conn=conn, urlopen=_boom)
+    assert res.status == "disabled"
+    assert res.note == "creds_absent"
+    # state는 기록되지 않아야 함(거짓 auth_error 방지)
     assert get_fetch_state(conn, "claude") is None
-
-
-def test_fetch_disabled_when_provider_toggle_off(monkeypatch):
-    monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
-    conn = connect(":memory:")
-    cfg = {"official_fetch": {"enabled": True, "claude": True, "codex": False}}
-    r = fetch_provider("codex", now_kst=_NOW, config=cfg, conn=conn, urlopen=_never)
-    assert r.status == "disabled"
 
 
 def test_fetch_env_skip(monkeypatch):
@@ -216,10 +235,19 @@ def test_fetch_network_error_is_http_error(monkeypatch, tmp_path):
     assert r.status == "http_error"
 
 
-def test_fetch_missing_creds_is_auth_error(monkeypatch, tmp_path):
+def test_fetch_bad_creds_file_is_auth_error(monkeypatch, tmp_path):
+    """크레덴셜 파일은 있지만 내용이 깨진 경우 → auth_error (creds_present=True이지만 읽기 실패)."""
     monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
     import tokenomy.official_fetch as of
-    monkeypatch.setattr(of, "CLAUDE_CREDS", tmp_path / "nope.json")
+    from tokenomy import paths
+    # creds_present가 True를 반환하도록 paths.CLAUDE_CREDS를 실존 파일로 패치
+    dummy = tmp_path / "dummy.json"
+    dummy.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(paths, "CLAUDE_CREDS", dummy)
+    # _read_claude_token이 읽는 of.CLAUDE_CREDS는 스키마가 깨진 파일로 패치
+    bad = tmp_path / "bad.json"
+    bad.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(of, "CLAUDE_CREDS", bad)
     conn = connect(":memory:")
     r = fetch_provider("claude", now_kst=_NOW, config=_CFG_ON, conn=conn, urlopen=_never)
     assert r.status == "auth_error"

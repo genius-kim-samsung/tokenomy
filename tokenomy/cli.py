@@ -19,7 +19,7 @@ from tokenomy.archive import archive_tree
 from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns, maybe_reprice, insert_official_buckets
 from tokenomy.freshness import CLEANUP_DAYS, freshness, record_ingest
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
-from tokenomy.budget import budget_from_config, load_config, user_label, credit_to_usd, official_fetch_settings
+from tokenomy.budget import budget_from_config, load_config, user_label, credit_to_usd, tracked_providers
 from tokenomy.official_fetch import fetch_provider
 from tokenomy.official_parser import parse_claude, parse_codex
 
@@ -27,19 +27,18 @@ CLAUDE_ROOT = Path.home() / ".claude" / "projects"
 
 
 def _official_fetch_worker(config: dict, now_kst, *, connect_fn=connect) -> None:
-    """옵트인 시 공식 사용량을 취득(자기 conn). 모든 예외 삼킴 — 起動/ingest 비차단용.
+    """공식 사용량 취득(자기 conn). 모든 예외 삼킴 — 起動/ingest 비차단용.
 
     cmd_ingest에서 데몬 스레드로 호출된다. 스레드는 자기 sqlite conn을 연다
-    (sqlite conn은 스레드 간 공유 금지). 비옵트인이면 즉시 반환(네트워크 없음).
+    (sqlite conn은 스레드 간 공유 금지). tracked_providers가 비면 즉시 반환(네트워크 없음).
     """
-    settings = official_fetch_settings(config)
-    if not settings["enabled"]:
+    providers = tracked_providers(config)
+    if not providers:
         return
     try:
         conn = connect_fn()
-        for p in ("claude", "codex"):
-            if settings.get(p, True):
-                fetch_provider(p, now_kst=now_kst, config=config, conn=conn)
+        for p in providers:
+            fetch_provider(p, now_kst=now_kst, config=config, conn=conn)
     except Exception as e:   # 자동 취득 실패는 치명적이지 않음
         print(f"[official] 자동 취득 건너뜀: {e}")
 
@@ -64,12 +63,12 @@ def cmd_ingest(conn) -> None:
     if repriced:
         msg += f"\n[reprice] 단가 변경 감지 — 기존 {repriced}행 비용 재계산"
     print(msg)
-    # 공식 사용량 자동 취득(옵트인) — 데몬 스레드로 분리해 起動/ingest를 블록하지 않는다.
-    if official_fetch_settings(config)["enabled"]:
-        threading.Thread(
-            target=_official_fetch_worker, args=(config, datetime.now(KST)),
-            daemon=True,
-        ).start()
+    # 공식 사용량 자동 취득 — 데몬 스레드로 분리해 起動/ingest를 블록하지 않는다.
+    # tracked_providers가 없으면 _official_fetch_worker가 즉시 반환(네트워크 없음).
+    threading.Thread(
+        target=_official_fetch_worker, args=(config, datetime.now(KST)),
+        daemon=True,
+    ).start()
 
 
 def cmd_official_import(conn, provider: str, path: str, *, now_kst=None,

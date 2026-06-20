@@ -59,8 +59,8 @@ def test_user_label_uses_config_value():
 
 def test_example_config_is_valid():
     cfg = json.loads(open("config/tokenomy.config.example.json", encoding="utf-8").read())
-    assert "budget" in cfg
-    assert "claude" in cfg["budget"] and "codex" in cfg["budget"]
+    assert "tracked_providers" in cfg
+    assert "official_fetch" in cfg
 
 
 def test_config_path_default_uses_paths(tmp_path, monkeypatch):
@@ -125,30 +125,15 @@ def test_credit_to_usd_rejects_bad_values():
 from tokenomy.budget import official_fetch_settings
 
 
-def test_official_fetch_settings_defaults_optin_off():
-    # 미설정: 옵트인 off, provider 토글 on, 5분 throttle
+def test_official_fetch_settings_defaults():
     s = official_fetch_settings({})
-    assert s == {"enabled": False, "claude": True, "codex": True, "min_interval_minutes": 5}
-
-
-def test_official_fetch_settings_reads_user_values():
-    cfg = {"official_fetch": {"enabled": True, "claude": True, "codex": False,
-                              "min_interval_minutes": 10}}
-    s = official_fetch_settings(cfg)
-    assert s["enabled"] is True
-    assert s["codex"] is False
-    assert s["min_interval_minutes"] == 10
+    assert s == {"min_interval_minutes": 5}
 
 
 def test_official_fetch_settings_bad_interval_falls_back():
     assert official_fetch_settings({"official_fetch": {"min_interval_minutes": "x"}})["min_interval_minutes"] == 5
     assert official_fetch_settings({"official_fetch": {"min_interval_minutes": -3}})["min_interval_minutes"] == 5
-
-
-def test_official_fetch_settings_partial_keeps_defaults():
-    # enabled만 준 부분 설정 — 나머지는 기본값으로 채워짐
-    s = official_fetch_settings({"official_fetch": {"enabled": True}})
-    assert s == {"enabled": True, "claude": True, "codex": True, "min_interval_minutes": 5}
+    assert official_fetch_settings({"official_fetch": {"min_interval_minutes": 9}})["min_interval_minutes"] == 9
 
 
 from tokenomy.budget import tracked_providers

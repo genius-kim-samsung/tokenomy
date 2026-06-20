@@ -14,13 +14,12 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from tokenomy import paths
+from tokenomy.paths import CLAUDE_CREDS, CODEX_AUTH
 from tokenomy.aggregate import parse_ts
-from tokenomy.budget import credit_to_usd, official_fetch_settings
+from tokenomy.budget import credit_to_usd, official_fetch_settings, tracked_providers
 from tokenomy.db import get_fetch_state, insert_official_buckets, upsert_fetch_state
 from tokenomy.official_parser import parse_claude, parse_codex
-
-CLAUDE_CREDS = Path.home() / ".claude" / ".credentials.json"
-CODEX_AUTH = Path.home() / ".codex" / "auth.json"
 
 # 공식 사용량 API 엔드포인트
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -106,12 +105,15 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
     실패(AuthError/HTTP/네트워크/파싱)는 예외를 삼켜 state에 기록하고 마지막 스냅샷을 유지한다.
     urlopen은 테스트에서 stub 주입(기본 urllib.request.urlopen).
     """
-    # 1) 옵트인 게이트 — env/설정 모두 off면 시도 없이 반환(state 미기록)
+    # 1) 게이트 — env-skip / 미선택 provider / 크레덴셜 부재는 시도 없이 반환
     settings = official_fetch_settings(config)
     if os.environ.get("TOKENOMY_SKIP_OFFICIAL_FETCH"):
         return FetchResult(provider, "disabled", "skip(env)")
-    if not settings["enabled"] or not settings.get(provider, True):
+    if provider not in tracked_providers(config):
         return FetchResult(provider, "disabled")
+    if not paths.creds_present(provider):
+        # 선언했지만 로그인 안 된 상태 — 거짓 auth_error를 남기지 않고 조용히 skip
+        return FetchResult(provider, "disabled", "creds_absent")
 
     # 2) throttle — 직전 시도가 윈도우 안이면 state를 갱신하지 않고 반환
     state = get_fetch_state(conn, provider)

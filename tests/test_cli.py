@@ -13,25 +13,28 @@ from tokenomy.db import connect, latest_official_snapshot
 # ── _official_fetch_worker 테스트 ──────────────────────────────────────────
 
 
-def test_official_worker_skips_when_disabled(monkeypatch):
-    """옵트인 off → fetch_provider 미호출(네트워크 0)."""
+def test_official_worker_skips_when_no_tracked_providers(monkeypatch):
+    """tracked_providers 없음 → fetch_provider 미호출(네트워크 0)."""
     called = []
     monkeypatch.setattr(cli_module, "fetch_provider",
                         lambda p, **k: called.append(p))
+    # creds_present가 False를 반환하도록 패치 → tracked_providers가 []를 반환
+    import tokenomy.budget as b
+    monkeypatch.setattr(b, "creds_present", lambda p: False)
     cli_module._official_fetch_worker({}, datetime(2026, 6, 10, 9, tzinfo=KST))
     assert called == []
 
 
-def test_official_worker_fetches_enabled_providers(monkeypatch):
-    """옵트인 on + claude=True, codex=False → claude만 fetch."""
+def test_official_worker_fetches_tracked_providers(monkeypatch):
+    """tracked_providers = ["claude"] → claude만 fetch."""
     called = []
     monkeypatch.setattr(cli_module, "fetch_provider",
                         lambda p, **k: called.append(p))
-    cfg = {"official_fetch": {"enabled": True, "claude": True, "codex": False}}
+    cfg = {"tracked_providers": ["claude"]}
     cli_module._official_fetch_worker(
         cfg, datetime(2026, 6, 10, 9, tzinfo=KST),
         connect_fn=lambda: connect(":memory:"))
-    assert called == ["claude"]   # codex 토글 off
+    assert called == ["claude"]
 
 
 def test_official_worker_swallows_exceptions(monkeypatch):
@@ -39,7 +42,7 @@ def test_official_worker_swallows_exceptions(monkeypatch):
     def boom(p, **k):
         raise RuntimeError("down")
     monkeypatch.setattr(cli_module, "fetch_provider", boom)
-    cfg = {"official_fetch": {"enabled": True}}
+    cfg = {"tracked_providers": ["claude"]}
     # 예외를 삼켜 worker가 깨지지 않는다
     cli_module._official_fetch_worker(
         cfg, datetime(2026, 6, 10, 9, tzinfo=KST),

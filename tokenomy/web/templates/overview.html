@@ -32,8 +32,8 @@
       <button class="btn-sm" type="submit">↻ 공식 새로고침</button>
     </form>
   </div>
-  {% if not official_fetch.enabled %}
-  <p class="muted">자동 취득이 꺼져 있습니다 — <a href="/settings">설정</a>에서 켜면 공식 사용량을 자동으로 가져옵니다.</p>
+  {% if not (official_fetch["claude"].tracked or official_fetch["codex"].tracked) %}
+  <p class="muted">추적 중인 provider가 없습니다 — config의 <code>tracked_providers</code>에 추가하면 공식 사용량을 자동으로 가져옵니다.</p>
   {% endif %}
   {% for p in ["claude", "codex"] %}
     {% if official_fetch[p].note %}

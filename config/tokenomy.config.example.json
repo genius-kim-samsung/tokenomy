@@ -1,15 +1,8 @@
 {
   "user_label": "me",
-  "budget": {
-    "claude": 100,
-    "codex": 50
-  },
-  "budget_start": null,
+  "tracked_providers": ["claude", "codex"],
   "credit_to_usd": 0.04,
   "official_fetch": {
-    "enabled": false,
-    "claude": true,
-    "codex": true,
     "min_interval_minutes": 5
   },
   "pricing_overrides": {}
