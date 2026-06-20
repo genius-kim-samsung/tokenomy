@@ -71,7 +71,7 @@ def parse_claude(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
     spend = raw.get("spend")
     if isinstance(spend, dict) and isinstance(spend.get("limit"), dict):
         lim = spend["limit"]
-        used = spend.get("used") or {}
+        used = spend.get("used") or {}  # null used → 0 USD(의도된 폴백)
         exp = lim.get("exponent", 0) or 0
         limit_usd = (lim.get("amount_minor") or 0) / (10 ** exp)
         used_usd = (used.get("amount_minor") or 0) / (10 ** exp)
@@ -92,15 +92,15 @@ def parse_claude(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
             continue
         if key.startswith(_RATE_WINDOW_PREFIXES):
             # 개인 구독 % 창
-            util = val.get("utilization")
-            if util is None:
+            win_util = val.get("utilization")
+            if win_util is None:
                 continue
             out.append(OfficialBucket(
                 bucket_key="rate_window", raw_key=key, bucket_kind="rate_window",
                 label="이용률 창", native_unit="percent",
                 used_native=None, limit_native=None, remaining_native=None,
                 used_usd=None, limit_usd=None, remaining_usd=None,
-                utilization=round(float(util), 4), resets_at=_parse_iso(val.get("resets_at")),
+                utilization=round(float(win_util), 4), resets_at=_parse_iso(val.get("resets_at")),
             ))
         elif val.get("used_dollars") is not None and val.get("limit_dollars") is not None:
             # 이벤트 크레딧(일회성, 자체 만료)
@@ -150,7 +150,7 @@ def parse_codex(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
             used_native=used, limit_native=limit, remaining_native=rem,
             used_usd=round(used * credit_to_usd, 6),
             limit_usd=round(limit * credit_to_usd, 6),
-            remaining_usd=round(rem * credit_to_usd, 6),
+            remaining_usd=round(rem * credit_to_usd, 6),  # API의 자체 remaining(부동소수점상 limit-used과 정확히 일치하지 않을 수 있음, 의도적)
             utilization=float(indiv.get("used_percent") or 0),
             resets_at=_parse_unix(indiv.get("reset_at")),
         ))

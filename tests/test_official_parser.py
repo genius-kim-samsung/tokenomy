@@ -15,10 +15,11 @@ def _by_kind(buckets):
     return {b.bucket_kind: b for b in buckets}
 
 
-def test_claude_enterprise_three_buckets():
+def test_claude_enterprise_buckets():
     buckets = parse_claude(_load("claude_enterprise.json"), credit_to_usd=0.04)
     kinds = _by_kind(buckets)
     # 월 사용 한도(spend) + 이벤트 크레딧 + 프로모션(util 0이면 생략 → 여기선 0.0이라 제외)
+    assert len(buckets) == 2
     assert "monthly_limit" in kinds
     assert "event_credit" in kinds
     m = kinds["monthly_limit"]
