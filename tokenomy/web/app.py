@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
 from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
-from tokenomy.budget import budget_from_config, credit_to_usd as _credit_to_usd, load_config, official_fetch_settings, tracked_providers, save_config
+from tokenomy.budget import credit_to_usd as _credit_to_usd, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect, get_fetch_state
 from tokenomy.official_fetch import fetch_provider
@@ -145,7 +145,8 @@ def official_refresh(provider: str = Form("")):
     conn = connect()
     config = load_config()
     now = datetime.now(KST)
-    targets = [provider] if provider in PROVIDERS else list(PROVIDERS)
+    targets = ([provider] if provider in PROVIDERS
+               else list(tracked_providers(config)))
     for p in targets:
         try:
             fetch_provider(p, now_kst=now, config=config, conn=conn)
@@ -157,21 +158,18 @@ def official_refresh(provider: str = Form("")):
 @app.get("/settings")
 def settings_get(request: Request):
     config = load_config()
-    budget = budget_from_config(config)
     conn = connect()
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
     ofs = official_fetch_settings(config)
+    tracked = tracked_providers(config)
     official_states = {p: (dict(st) if (st := get_fetch_state(conn, p)) else None)
                        for p in PROVIDERS}
     return templates.TemplateResponse(
         request, "settings.html",
-        {"claude": budget.claude, "codex": budget.codex,
-         "budget_start": config.get("budget_start") or "",
+        {"tracked": tracked, "providers": list(PROVIDERS),
          "credit_to_usd": _credit_to_usd(config),
-         "official_fetch": ofs,
-         "tracked_providers": tracked_providers(config),
-         "official_states": official_states,
+         "official_fetch": ofs, "official_states": official_states,
          "active_nav": "settings", "update_tag": check_update(conn),
          "last_ts": last["t"] if last and last["t"] else None,
          **coverage_card_context(conn, pricing)},
@@ -185,31 +183,19 @@ def _to_float(value: str | None) -> float:
         return 0.0
 
 
-def _valid_date_or_none(value: str | None) -> str | None:
-    """'YYYY-MM-DD'면 그대로, 아니면 None. 잘못된 입력으로 config가 깨지지 않게 한다."""
-    if not value:
-        return None
-    try:
-        datetime.strptime(value, "%Y-%m-%d")
-        return value
-    except ValueError:
-        return None
-
-
 @app.post("/settings")
-def settings_post(claude: str = Form(""), codex: str = Form(""),
-                  budget_start: str = Form(""), credit_to_usd: str = Form(""),
-                  min_interval: str = Form("")):
+def settings_post(track_claude: str = Form(""), track_codex: str = Form(""),
+                  credit_to_usd: str = Form(""), min_interval: str = Form("")):
     config = load_config()
-    config["budget"]["claude"] = _to_float(claude)
-    config["budget"]["codex"] = _to_float(codex)
-    config["budget_start"] = _valid_date_or_none(budget_start)
+    sel = [p for p, v in (("claude", track_claude), ("codex", track_codex)) if v]
+    config["tracked_providers"] = sel
     ctu = _to_float(credit_to_usd)
     config["credit_to_usd"] = ctu if ctu > 0 else 0.04
     mi = int(_to_float(min_interval))
-    config["official_fetch"] = {
-        "min_interval_minutes": mi if mi > 0 else 5,
-    }
+    config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 5}
+    # 레거시 키 정리(있으면 제거 — config를 깔끔하게 다시 쓴다)
+    for k in ("budget", "budget_start"):
+        config.pop(k, None)
     save_config(config)
     return RedirectResponse("/", status_code=303)
 

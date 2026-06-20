@@ -4,12 +4,11 @@
 
 <form method="post" action="/settings" class="settings">
 <section class="card">
-  <h2>월 예산</h2>
-  <p class="muted">종량제(API 달러 과금) 기준 월 예산. 0이면 한도 없이 사용량만 추적합니다.</p>
-  <label>Claude (USD) <input type="number" step="0.01" min="0" name="claude" value="{{ '%.2f'|format(claude) }}"></label>
-  <label>Codex (USD) <input type="number" step="0.01" min="0" name="codex" value="{{ '%.2f'|format(codex) }}"></label>
-  <label>예산 도입일 <input type="date" name="budget_start" value="{{ budget_start }}"></label>
-  <p class="muted">도입일을 지정하면 그 날짜부터 예산을 계산합니다(이전 지출 제외). 비우면 매월 1일 기준.</p>
+  <h2>사용하는 AI</h2>
+  <p class="muted">체크한 AI만 공식 사용량 API를 호출하고 대시보드에 표시합니다.
+    토큰은 읽기 전용 단발 호출이며, 사용량 수치만 저장합니다(토큰·계정 식별자 미저장).</p>
+  <label><input type="checkbox" name="track_claude" {% if "claude" in tracked %}checked{% endif %}> Claude</label>
+  <label><input type="checkbox" name="track_codex" {% if "codex" in tracked %}checked{% endif %}> Codex (ChatGPT)</label>
   <label>credit_to_usd <span class="muted">(크레딧→USD 환산, 기본 0.04)</span>
     <input type="number" step="0.001" min="0" name="credit_to_usd" value="{{ credit_to_usd }}"></label>
   <p class="disclaimer">ⓘ 값은 로컬 config(tokenomy.config.json)에만 저장됩니다.</p>
@@ -18,10 +17,8 @@
 <section class="card">
   <h2>공식 사용량 자동 취득</h2>
   <p class="muted">각 CLI의 로컬 OAuth 토큰으로 공식 사용량 API를 <strong>읽기 전용 단발 호출</strong>합니다.
-    tracked_providers에 등록된 provider만 취득합니다. 토큰은 읽기만 하고 refresh하지 않으며,
+    체크한 AI에 대해 자동 취득합니다. 토큰은 읽기만 하고 refresh하지 않으며,
     사용량 수치만 저장합니다(토큰·계정 식별자 미저장).</p>
-  <p class="muted">추적 중인 provider: <strong>{{ tracked_providers | join(", ") or "없음" }}</strong>
-    (config의 <code>tracked_providers</code>로 설정)</p>
   <label>최소 취득 간격(분) <input type="number" step="1" min="1" name="min_interval" value="{{ official_fetch.min_interval_minutes }}"></label>
   <p class="muted">엔드포인트 quota는 CLI와 공유됩니다 — 간격을 너무 짧게 두면 한도(429)에 걸릴 수 있습니다(기본 5분).</p>
   <div class="muted">
@@ -76,6 +73,6 @@
   <h2>데이터 · 프라이버시</h2>
   <p class="muted">모든 처리는 로컬에서 이뤄지며 토큰 사용 메타와 <strong>세션 식별용 첫 프롬프트 발췌</strong>만 저장합니다 — <strong>전체 대화 기록은 저장하지 않습니다</strong>.
     데이터는 소스 실행 시 repo의 <code>data/</code>, exe 실행 시 <code>~/.tokenomy/</code>에 쌓입니다.
-    공식 사용량 취득은 옵트인 시에만 외부 API를 호출합니다(토큰·계정 식별자 미저장).</p>
+    공식 사용량 취득은 위 "사용하는 AI"에 체크된 provider에 대해서만 외부 API를 호출합니다(토큰·계정 식별자 미저장).</p>
 </section>
 {% endblock %}

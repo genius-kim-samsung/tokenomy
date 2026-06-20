@@ -117,32 +117,10 @@ def test_settings_get_renders_form(tmp_path, monkeypatch):
     client, _ = _client_with_config(tmp_path, monkeypatch)
     r = client.get("/settings")
     assert r.status_code == 200
-    assert "예산" in r.text
-    assert 'name="claude"' in r.text
-    assert 'name="codex"' in r.text
+    assert 'name="track_claude"' in r.text
+    assert 'name="track_codex"' in r.text
     assert 'class="sidebar"' in r.text
     assert "전체 대화 기록은 저장하지 않습니다" in r.text
-
-
-def test_settings_post_writes_config(tmp_path, monkeypatch):
-    client, cfg = _client_with_config(tmp_path, monkeypatch)
-    r = client.post("/settings", data={"claude": "150", "codex": "40"},
-                    follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/"
-    saved = json.loads(cfg.read_text(encoding="utf-8"))
-    assert saved["budget"]["claude"] == 150.0
-    assert saved["budget"]["codex"] == 40.0
-
-
-def test_settings_post_invalid_number_falls_back_zero(tmp_path, monkeypatch):
-    client, cfg = _client_with_config(tmp_path, monkeypatch)
-    r = client.post("/settings", data={"claude": "abc", "codex": ""},
-                    follow_redirects=False)
-    assert r.status_code == 303
-    saved = json.loads(cfg.read_text(encoding="utf-8"))
-    assert saved["budget"]["claude"] == 0.0
-    assert saved["budget"]["codex"] == 0.0
 
 
 
@@ -421,35 +399,6 @@ def test_analysis_renders_rows(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "claude-opus-4-8" in r.text
     assert "합계 $12.50" in r.text
-
-
-def test_settings_get_shows_budget_start_field(tmp_path, monkeypatch):
-    client, cfg = _client_with_config(tmp_path, monkeypatch)
-    cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
-                   encoding="utf-8")
-    r = client.get("/settings")
-    assert r.status_code == 200
-    assert 'name="budget_start"' in r.text
-    assert "2026-06-12" in r.text          # 기존 값 표시
-
-
-def test_settings_post_writes_budget_start(tmp_path, monkeypatch):
-    client, cfg = _client_with_config(tmp_path, monkeypatch)
-    r = client.post("/settings",
-                    data={"claude": "200", "codex": "40", "budget_start": "2026-06-12"},
-                    follow_redirects=False)
-    assert r.status_code == 303
-    saved = json.loads(cfg.read_text(encoding="utf-8"))
-    assert saved["budget_start"] == "2026-06-12"
-
-
-def test_settings_post_blank_budget_start_is_null(tmp_path, monkeypatch):
-    client, cfg = _client_with_config(tmp_path, monkeypatch)
-    r = client.post("/settings", data={"claude": "200", "codex": "40", "budget_start": ""},
-                    follow_redirects=False)
-    assert r.status_code == 303
-    saved = json.loads(cfg.read_text(encoding="utf-8"))
-    assert saved["budget_start"] is None
 
 
 def test_dashboard_shows_codex_section(tmp_path, monkeypatch):
@@ -790,3 +739,23 @@ def test_overview_shows_auth_error_note(tmp_path, monkeypatch):
                        last_success_at=None, last_status="auth_error", last_error="HTTP 401")
     r = client.get("/")
     assert "Codex CLI를 1회 실행" in r.text
+
+
+# ── Task 6 설정 UI: 예산 입력 제거, tracked_providers 선택 ─────────────────────────
+
+def test_settings_post_writes_tracked_providers(tmp_path, monkeypatch):
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    client.post("/settings", data={"track_claude": "on", "min_interval": "7",
+                                   "credit_to_usd": "0.05"})
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["tracked_providers"] == ["claude"]
+    assert saved["official_fetch"]["min_interval_minutes"] == 7
+    assert "budget" not in saved
+
+
+def test_settings_get_has_provider_checkboxes(tmp_path, monkeypatch):
+    client, _ = _client_with_config(tmp_path, monkeypatch)
+    html = client.get("/settings").text
+    assert 'name="track_claude"' in html
+    assert 'name="track_codex"' in html
+    assert "월 예산" not in html
