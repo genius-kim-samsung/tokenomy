@@ -768,6 +768,8 @@ def test_overview_official_panel_renders(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert 'action="/official"' not in r.text     # 수동 입력 폼 제거
     assert "공식" in r.text                         # 공식 미러 패널 노출
+    assert "월 사용 한도" in r.text                 # 버킷 라벨 렌더 확인
+    assert "30" in r.text and "100" in r.text      # used/limit USD 렌더 확인
 
 
 def test_settings_shows_credit_to_usd(tmp_path, monkeypatch):
@@ -776,3 +778,14 @@ def test_settings_shows_credit_to_usd(tmp_path, monkeypatch):
     r = client.get("/settings")
     assert r.status_code == 200
     assert "credit_to_usd" in r.text or "크레딧" in r.text
+
+
+def test_settings_post_persists_credit_to_usd(tmp_path, monkeypatch):
+    """POST /settings에서 credit_to_usd를 저장하고 GET /settings에서 조회할 수 있어야 한다."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"claude": "100", "codex": "50",
+                                        "budget_start": "", "credit_to_usd": "0.05"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    g = client.get("/settings")
+    assert "0.05" in g.text
