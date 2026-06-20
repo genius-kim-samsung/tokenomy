@@ -1,0 +1,18 @@
+{
+  "user_id": "[redacted]",
+  "account_id": "[redacted]",
+  "email": "[redacted]",
+  "plan_type": "business",
+  "rate_limit": null,
+  "credits": {"has_credits": true, "unlimited": false, "overage_limit_reached": false},
+  "spend_control": {
+    "reached": false,
+    "individual_limit": {
+      "source": "group_based_spend_controls",
+      "limit": "2000", "used": "500.0", "remaining": "1500.0",
+      "used_percent": 25, "remaining_percent": 75,
+      "reset_after_seconds": 982330, "reset_at": 1782864001
+    }
+  },
+  "promo": null
+}

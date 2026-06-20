@@ -1,0 +1,8 @@
+{
+  "five_hour": {"utilization": 42.0, "resets_at": "2026-06-20T15:00:00+00:00"},
+  "seven_day": {"utilization": 18.0, "resets_at": "2026-06-25T00:00:00+00:00"},
+  "seven_day_opus": {"utilization": 30.0, "resets_at": "2026-06-25T00:00:00+00:00"},
+  "cinder_cove": null,
+  "extra_usage": null,
+  "spend": null
+}
