@@ -53,6 +53,8 @@ def load_config(path: str | Path | None = None) -> dict:
             "budget": {"claude": 0.0, "codex": 0.0},
             "budget_start": None,
             "credit_to_usd": 0.04,
+            "official_fetch": {"enabled": False, "claude": True, "codex": True,
+                               "min_interval_minutes": 5},
             "pricing_overrides": {}}
     p = _config_path(path)
     if not p.exists():
@@ -106,3 +108,29 @@ def credit_to_usd(config: dict) -> float:
     except (TypeError, ValueError):
         return 0.04
     return f if f > 0 else 0.04
+
+
+def official_fetch_settings(config: dict) -> dict:
+    """공식 사용량 자동 취득 설정(옵트인). 누락·오설정은 안전 기본값으로 폴백.
+
+    기본: enabled False(네트워크 옵트인), provider 토글 True, min_interval_minutes 5.
+    토큰/엔드포인트는 코드 상수 — 여기선 토글·throttle만 정규화한다.
+    """
+    raw = config.get("official_fetch") or {}
+
+    def _flag(key: str, default: bool) -> bool:
+        v = raw.get(key, default)
+        return v if isinstance(v, bool) else default
+
+    try:
+        mi = int(raw.get("min_interval_minutes", 5))
+    except (TypeError, ValueError):
+        mi = 5
+    if mi < 0:
+        mi = 5
+    return {
+        "enabled": _flag("enabled", False),
+        "claude": _flag("claude", True),
+        "codex": _flag("codex", True),
+        "min_interval_minutes": mi,
+    }

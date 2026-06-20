@@ -120,3 +120,32 @@ def test_credit_to_usd_rejects_bad_values():
     assert credit_to_usd({"credit_to_usd": -1}) == 0.04
     assert credit_to_usd({"credit_to_usd": "x"}) == 0.04
     assert credit_to_usd({"credit_to_usd": None}) == 0.04
+
+
+from tokenomy.budget import official_fetch_settings
+
+
+def test_official_fetch_settings_defaults_optin_off():
+    # 미설정: 옵트인 off, provider 토글 on, 5분 throttle
+    s = official_fetch_settings({})
+    assert s == {"enabled": False, "claude": True, "codex": True, "min_interval_minutes": 5}
+
+
+def test_official_fetch_settings_reads_user_values():
+    cfg = {"official_fetch": {"enabled": True, "claude": True, "codex": False,
+                              "min_interval_minutes": 10}}
+    s = official_fetch_settings(cfg)
+    assert s["enabled"] is True
+    assert s["codex"] is False
+    assert s["min_interval_minutes"] == 10
+
+
+def test_official_fetch_settings_bad_interval_falls_back():
+    assert official_fetch_settings({"official_fetch": {"min_interval_minutes": "x"}})["min_interval_minutes"] == 5
+    assert official_fetch_settings({"official_fetch": {"min_interval_minutes": -3}})["min_interval_minutes"] == 5
+
+
+def test_official_fetch_settings_partial_keeps_defaults():
+    # enabled만 준 부분 설정 — 나머지는 기본값으로 채워짐
+    s = official_fetch_settings({"official_fetch": {"enabled": True}})
+    assert s == {"enabled": True, "claude": True, "codex": True, "min_interval_minutes": 5}

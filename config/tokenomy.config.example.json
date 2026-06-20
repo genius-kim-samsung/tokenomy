@@ -6,5 +6,11 @@
   },
   "budget_start": null,
   "credit_to_usd": 0.04,
+  "official_fetch": {
+    "enabled": false,
+    "claude": true,
+    "codex": true,
+    "min_interval_minutes": 5
+  },
   "pricing_overrides": {}
 }
