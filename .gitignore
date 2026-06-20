@@ -47,3 +47,6 @@ tools/
 
 # 세션 로컬 스크래치(codex 세션 id 등) — 커밋 금지
 .context/
+
+# subagent-driven-development 진행 스크래치(브리프·리포트·diff·원장) — 커밋 금지
+.superpowers/
