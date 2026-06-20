@@ -24,7 +24,7 @@ CODEX_AUTH = Path.home() / ".codex" / "auth.json"
 
 # 공식 사용량 API 엔드포인트
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-CODEX_USAGE_URL = "https://api.openai.com/v1/usage/codex_api_spend_control"
+CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 
 # 요청 헤더 상수
 _CLAUDE_UA = "claude-code/2.1.179"

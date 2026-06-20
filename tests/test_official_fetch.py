@@ -155,6 +155,8 @@ def test_fetch_codex_success_no_pii_stored(monkeypatch, tmp_path):
     op = _opener(payload=_CODEX_RAW)
     r = fetch_provider("codex", now_kst=_NOW, config=_CFG_ON, conn=conn, urlopen=op)
     assert r.status == "ok"
+    # 올바른 엔드포인트 호출
+    assert op.calls and op.calls[0][0] == "https://chatgpt.com/backend-api/wham/usage"
     # PII(account_id="acc", access_token="jwt")가 DB 어디에도 없어야 한다
     dump = json.dumps([dict(row) for row in latest_official_snapshot(conn, "codex")])
     assert "acc" not in dump and "jwt" not in dump
