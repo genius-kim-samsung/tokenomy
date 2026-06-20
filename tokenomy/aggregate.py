@@ -902,7 +902,7 @@ def daily_series(conn, provider: str | None, now_kst: datetime) -> list[DayPoint
     """일별 누적 비용 시계열. 기간 [달력 월 1일, 말일].
 
     실제 누적값은 오늘까지만 채우고 이후 날은 None(미래 구간 — 차트에서 선이 끊김).
-    달력 월 기준(1일 시작) — budget_start clamp 없음.
+    달력 월 기준(1일 시작, 고정). 레거시 budget_start clamp는 없다.
     """
     period_start, period_end = month_bounds(now_kst)
     last_day = (period_end - timedelta(days=1)).day
@@ -929,7 +929,7 @@ def stacked_trend(
     """provider별 누적 시계열을 스택 밴드 경계값으로 변환.
 
     per_provider: [(provider, [DayPoint, …]), …] — 모든 리스트가 같은 길이·날짜 정렬
-        (동일 now_kst/budget_start로 만든 daily_series라 보장됨).
+        (동일 now_kst로 만든 daily_series라 보장됨; 달력 월 기준 고정).
     반환: [{"provider": str, "cum": [float|None], "top": [float|None]}, …]
         - cum = 그 provider의 원본 누적(툴팁 표시·% 분모용)
         - top = 아래 밴드까지 더한 running sum(차트 fill 경계용)

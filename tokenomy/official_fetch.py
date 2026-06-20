@@ -99,9 +99,9 @@ def _http_get_json(url: str, headers: dict, urlopen) -> dict:
 
 def fetch_provider(provider: str, *, now_kst, config, conn,
                    urlopen=urllib.request.urlopen) -> FetchResult:
-    """공식 사용량 1회 취득(옵트인·비차단·단발). 결과 FetchResult.
+    """공식 사용량 1회 취득(비차단·단발). 결과 FetchResult.
 
-    경로: 옵트인/env-skip → throttle → 토큰읽기 → GET(≤3s) → 파서 → 트랜잭션 적재 → state(ok).
+    게이트 순서: env-skip → tracked_providers 미포함 → 크레덴셜 부재 → throttle → GET(≤3s) → 파서 → 적재.
     실패(AuthError/HTTP/네트워크/파싱)는 예외를 삼켜 state에 기록하고 마지막 스냅샷을 유지한다.
     urlopen은 테스트에서 stub 주입(기본 urllib.request.urlopen).
     """

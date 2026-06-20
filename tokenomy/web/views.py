@@ -109,8 +109,6 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "month_total": month_total,
         "claude_official": claude_official, "codex_official": codex_official,
         "official_fetch": official_fetch_status(conn, config),
-        "claude_has_data": _provider_has_data(conn, "claude"),
-        "codex_has_data": _provider_has_data(conn, "codex"),
         "projects": projects, "sessions": sessions, "insights": coach,
         "daily_labels": [p.day for p in daily],
         "trend_series": trend_series,

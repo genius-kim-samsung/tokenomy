@@ -362,13 +362,12 @@ def test_overview_context_provider_without_data(monkeypatch, tmp_path):
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
-    assert ctx["claude_has_data"] is True
-    assert ctx["codex_has_data"] is False                # codex 로그 없음
+    assert ctx["has_data"] is True
     assert "budget_configured" not in ctx                # 번다운 카드 제거됨
 
 
-def test_overview_context_applies_budget_start(monkeypatch, tmp_path):
-    """budget_start clamp는 burndown 경로에서만 작동. overview_context는 month_spend(달력 월) 사용."""
+def test_overview_context_ignores_legacy_budget_start(monkeypatch, tmp_path):
+    """legacy budget_start JSON 키는 무시됨. overview_context는 항상 달력 월(month_spend) 기준."""
     cfg = tmp_path / "cfg.json"
     cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
                    encoding="utf-8")
@@ -382,7 +381,7 @@ def test_overview_context_applies_budget_start(monkeypatch, tmp_path):
     assert "claude_bd" not in ctx
 
 
-def test_overview_context_trend_uses_combined_budget(monkeypatch, tmp_path):
+def test_overview_context_trend_calendar_month_ignores_legacy_budget(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg.json"
     cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
                    encoding="utf-8")

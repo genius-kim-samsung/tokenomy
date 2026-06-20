@@ -77,7 +77,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **웹은 `127.0.0.1`만 바인딩** — 네트워크 노출 금지. 쿼리 파라미터는 화이트리스트 fallback(`provider`/`sort`/`period` 등).
   내역·차원별은 주/월 토글 + 사용자 지정 날짜 구간(`start`/`end`) 조회(`views._resolve_range`).
 - **CSS는 Tailwind(standalone CLI)로 빌드.** `static/src/input.css`(토큰+`@layer components`) → `static/app.css`(커밋). 런타임/exe는 무빌드 유지. htmx는 `static/vendor/`에 vendored(오프라인). Alpine은 실수요 시 추가(현재 미사용).
-- **공식 사용량은 멀티버킷(USD 통일) — Claude 버킷/Codex 월간+주간(월÷4, 로컬 첫-사용 앵커).** `credit_to_usd`(config, 기본 0.04)로 크레딧 환산, 토큰 cost 경로와 분리. 구 단일값 `official_usage` 테이블은 `_migrate`가 DROP(로컬 단일 사용자라 이관 없음).
+- **공식 사용량은 멀티버킷(USD 통일) — Claude 버킷/Codex 월간+주간(월÷4는 주간 한도 *추정치* 도출 방식 — 공식 리셋 주기와 다름; 실제 리셋은 공식 API `resets_at`; 로컬 첫-사용 앵커는 `codex_weekly_window`의 주간 used 추정 기준).** `credit_to_usd`(config, 기본 0.04)로 크레딧 환산, 토큰 cost 경로와 분리. 구 단일값 `official_usage` 테이블은 `_migrate`가 DROP(로컬 단일 사용자라 이관 없음).
 - **공식 사용량 취득은 default-on(tracked providers만)·비차단.** `tracked_providers` 목록에 있는 provider만 공식 API를 호출하고, 첫 실행 시 크레덴셜 파일 존재로 시드한다. `cmd_ingest`는 fetch를 **데몬 스레드**(자기 sqlite conn)로 분리해 起動(`launcher._safe_ingest`)을 막지 않는다.
   타임아웃 ≤3s, **백오프 없음**(단발 시도, 실패 즉시 포기). throttle(`min_interval_minutes`)은 우리 호출 빈도만 제어(엔드포인트 quota는 CLI와 공유 — 충돌 못 막음). `TOKENOMY_SKIP_OFFICIAL_FETCH`로 전체 강제 차단 가능.
 - **토큰은 읽기 전용, refresh 금지.** Claude `~/.claude/.credentials.json`, Codex `~/.codex/auth.json`을 읽기만.

@@ -87,13 +87,8 @@ def test_report_runs_without_budget(capsys, monkeypatch):
     import tokenomy.budget as b
     # tracked_providers가 ["claude"]만 반환하도록 패치(크레덴셜 파일 불필요)
     monkeypatch.setattr(b, "creds_present", lambda p: p == "claude")
-    # load_config가 빈 dict 반환(budget 설정 없음)
-    monkeypatch.setattr(b, "load_config", lambda path=None: {"tracked_providers": ["claude"]})
 
     conn = connect(":memory:")
-    # cmd_report에 주입된 conn이 메모리 DB를 사용하도록 패치
-    monkeypatch.setattr(cli_module, "connect", lambda: conn)
-
     # freshness가 db를 조회하므로 ingest 기록 없이도 동작해야 함
     cmd_report(conn)
     out = capsys.readouterr().out

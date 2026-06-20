@@ -100,6 +100,21 @@ providers change prices, or override per-user via `pricing_overrides`. Change a
 price and the next ingest recalculates existing costs automatically — no need to
 re-ingest your raw logs.
 
+## Official usage fetch
+
+Tokenomy automatically fetches live official usage for each provider listed in
+`tracked_providers`. It uses the locally stored OAuth token in **read-only** mode
+(no token refresh) and makes a single HTTP GET per provider (≤ 3 s, no retry).
+**No PII is stored** — the access token and account ID are used only for the
+request header and then discarded; only usage numbers are written to the local DB.
+
+- **Default-on** for providers in `tracked_providers`; accounts without a USD
+  limit (personal subscription) fall back to a usage-only view.
+- Set `TOKENOMY_SKIP_OFFICIAL_FETCH` to disable all network calls (offline /
+  CI / testing).
+- `min_interval_minutes` (default 5) throttles how often we call the API —
+  controls *our* call frequency, not the provider's quota.
+
 ## Adding a parser for another tool
 
 Tokenomy normalizes each tool's logs into `UsageRecord` (see
