@@ -1,17 +1,17 @@
 # Tokenomy 로드맵 / 향후 계획
 
-- 최종 갱신: 2026-06-17 (v0.2.0 스코프 그릴 확정 — 채택 6개·provider parity·증분 릴리스)
+- 최종 갱신: 2026-06-21 (공식 사용량 우선 전환 — 수동 예산/번다운 제거, official-first main 머지). 직전: 2026-06-17 (v0.2.0 스코프 그릴 확정)
 - 상태: **초안** — 코드/spec의 "미해결·후속" 신호 + 사용자 비전을 종합.
 - 관련: [PRD.md](PRD.md) · [ARCHITECTURE.md](ARCHITECTURE.md) · [DATA-MODEL.md](DATA-MODEL.md)
 
 ## 현재 상태 (v0.1.8)
 
 - Claude Code + Codex CLI 증분 수집(byte-offset), SQLite 적재, raw archive(30일 휘발 대비)
-- provider별 예산 번다운(Claude 월간 / Codex 주간 누적·이월) + 예산 도입일(`budget_start`) + 소진 예상일, 효율 코치 카드
+- ~~provider별 예산 번다운(Claude 월간 / Codex 주간 누적·이월) + 예산 도입일(`budget_start`)~~ → **2026-06-20 제거**. 공식 사용량 API 기반 한도·잔여·예측(`official_view`+`lens`: 일일 소비속도·소진예상·리셋 D-day) + 효율 코치 카드 (아래 '공식 사용량 우선 전환')
 - 웹 대시보드 페이지: overview(`/`) / 내역(`/history`) / 차원별(`/analysis`) / 세션 상세 / settings.
   과거 `/projects`·`/sessions`·`/models` 탭은 `/history`·`/analysis`로 301 리다이렉트(레거시)
-- overview: 이번 달 총지출 요약 + Claude/Codex provider별 번다운 카드 + 통합 추세 차트
-- 통합 추세 차트: AI별 스택 영역(구성 비중) + 월 예산 가로선·예산 도입일 정합 + 끝점 라벨로 AI별 구성 상시 표시(금액·%)
+- overview: 이번 달 총지출(금액) + **공식 사용량 패널**(provider별 버킷 + 예측 lens) + 통합 추세 차트 (번다운 카드 제거)
+- 통합 추세 차트: AI별 스택 영역(구성 비중) + 끝점 라벨로 AI별 구성 상시 표시(금액·%) (월 예산 가로선·도입일 정합 제거)
 - **차원별 분석 뷰(`/analysis`)** — 모델·스킬·브랜치 귀속 비용 롤업(차원 선택기) + 서브에이전트(sidechain) 비중 카드 + 미귀속 버킷 명시. 기존 모델별(`/models`)을 일반화·흡수 (v0.1.6)
 - **토큰 구성비·캐시 재구축 신호 (v0.1.7)** — 오버뷰 토큰 구성 미니바(input/output/cache_wr/cache_rd 4종 비중, **토큰량 기준** — 비용≠토큰 주석) + 차원별 테이블 토큰 4분할(cache_wr 칸) + 효율 코치 "캐시 재구축" 카드(이어지는 세션인데 캐시를 못 읽은 고유 세션 수, 달력 월 기준)
 - **단가 커버리지 진단 + 단가 변경 자동 재계산 (v0.1.8)** — 모델별 단가 매칭 신뢰도(미식별·버전경계 의심·거친 매칭)를 settings 카드·overview 경고·CLI report로 노출 + `pricing_overrides`로 새 모델 단가 자가 추가(prepend). 단가(pricing.json/overrides) 변경 시 핑거프린트로 기존 비용 자동 재계산(`maybe_reprice` — `cache_creation_1h` 분리 저장으로 5m/1h도 정확). v0.2.0 채택 세트 #1 (아래)
@@ -20,7 +20,7 @@
 - 메시지 수를 사용자 턴(`user_turns`) 기준 집계 + 멀티데이 세션 날짜별 정확 카운트(`session_day_turns`)
 - Codex 세션 식별용 첫 사용자 프롬프트 120자 발췌(`sessions.summary`) — 프라이버시 발췌선 유지
 - Windows onefile exe(pywebview 네이티브 창) + 인앱 업데이트 배너
-- 조직 예산 등급 정책 제거 → 사용자 입력 예산으로 범용화 완료
+- 조직 예산 등급 정책 제거 → 사용자 입력 예산 → **수동 예산 전면 제거(2026-06-20), 공식 사용량 API가 한도/잔여의 정본**
 
 ## 다음 마일스톤 — v0.2.0: 수집된 raw 데이터를 빠짐없이 가공해 보여주기
 
@@ -82,6 +82,26 @@
 
 각 항목 끝의 출처는 근거 위치다. 우선순위는 사용자 확정 전 잠정.
 
+### 공식 사용량 우선 전환 후속 (2026-06-20 머지)
+
+> 2026-06-20 grill+domain-modeling으로 수동 예산/번다운을 제거하고 공식 사용량 API를
+> 한도/잔여의 정본으로 전환(main 머지 완료). 모델·결정 근거: [CONTEXT.md](../CONTEXT.md) ·
+> [ADR 0001](adr/0001-remove-manual-budget-official-usage-as-source-of-truth.md) ·
+> 플랜 [2026-06-20-remove-budget-official-first](superpowers/plans/2026-06-20-remove-budget-official-first.md).
+> 사용 형태를 **엔터프라이즈/종량제**(공식 USD 한도) vs **개인 구독제**(rate-window %) 2모드로 분리.
+
+- [ ] **모드별 view 본격 분리** — 현재는 공식 데이터 유무로 "공식 패널 / 사용량 전용 폴백"만 분기.
+  엔터프라이즈/종량제용(USD 한도·소진예측 중심)과 개인 구독제용(5h/7d rate-window 잔여 중심) view를
+  각 특성에 맞게 별도 구성. *(이번 스코프에서 명시적으로 후속으로 미룬 핵심 항목.)*
+- [ ] **모드 자동판정** — 공식 API 응답 모양(USD 한도 버킷 vs rate-window-only)으로 사용 형태를
+  자동 판정해 위 view를 선택. 현재는 데이터 유무로만 분기.
+- [ ] **Codex 일일 소비속도 lens (Phase 2)** — 현재 `lens`는 Claude 전용, Codex는 주간/월간 게이지만
+  (lens=None). Codex도 `official_bucket_series` 차분으로 일일 소비속도·소진예상 산출. *(출처: `aggregate.py` official_view 주석 "예측 렌즈는 Phase 1에서 Claude 전용".)*
+- [ ] **전환 후속 문서/위생 polish** (최종 whole-branch 리뷰 defer 항목): README.en에 "공식 사용량 취득"
+  섹션 보강(README.md과 parity), CLAUDE.md Codex 주간추정(월÷4) 주석 정밀화, README 사용량 전용 폴백
+  트리거에 "한도 미제공 계정" 추가, `cli.py` `_print_recent_sessions`를 `tracked_providers` 기반으로,
+  오해 소지 테스트명(`test_overview_context_*budget*`) 정리.
+
 ### 배포 / 공개 전환
 - [ ] **공개 원격 분리** — 조직 흔적(과거 티어 값·개인 식별자·내부 기획 경로) 없는 클린 커밋으로
   public 레포 시작. squash vs `git filter-repo` 방식은 실행 단계에서 확정.
@@ -133,5 +153,5 @@
 ## 의도적 비목표 (재확인 — 당분간 안 함)
 
 - 팀/멀티유저 집계 (1머신 1사용자 유지)
-- 구독 정액제 전용 UI (종량제 우선)
+- 구독 정액제 *전용* 앱은 아님(종량제 우선). 단 **개인 구독제(rate-window)는 1급 사용 모드로 채택**(2026-06-20) — 모드별 view 분리는 위 후속 과제 참고
 - 통화 환산 / 클라우드 동기화 / 계정·인증
