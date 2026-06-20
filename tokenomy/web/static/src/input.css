@@ -90,6 +90,12 @@
            shadow-[0_1px_2px_rgba(0,0,0,0.3)];
   }
   .card-head { @apply flex justify-between items-center; }
+  .inline-form { @apply inline; }
+  .btn-sm {
+    @apply inline-flex items-center gap-1 bg-primary text-white border-0 rounded
+           px-2 py-1 text-[12px] cursor-pointer transition;
+  }
+  .btn-sm:hover { @apply brightness-110; }
 
   h1 { @apply text-[18px] font-semibold; }
   h2 { @apply text-[15px] m-0 mb-2 font-semibold; }

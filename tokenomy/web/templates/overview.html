@@ -26,7 +26,20 @@
 
 {# 공식 미러 패널 — USD 1차. 공식 ground truth + 토크노미 예측 렌즈 #}
 <section class="card">
-  <h2>공식 사용량 <span class="muted">· 공식 앱 미러 + 예측</span></h2>
+  <div class="card-head">
+    <h2>공식 사용량 <span class="muted">· 공식 앱 미러 + 예측</span></h2>
+    <form method="post" action="/official/refresh" class="inline-form">
+      <button class="btn-sm" type="submit">↻ 공식 새로고침</button>
+    </form>
+  </div>
+  {% if not official_fetch.enabled %}
+  <p class="muted">자동 취득이 꺼져 있습니다 — <a href="/settings">설정</a>에서 켜면 공식 사용량을 자동으로 가져옵니다.</p>
+  {% endif %}
+  {% for p in ["claude", "codex"] %}
+    {% if official_fetch[p].note %}
+    <p class="muted">⚠ {{ p }}: {{ official_fetch[p].note }}{% if official_fetch[p].last_attempt_at %} <span class="muted">({{ official_fetch[p].last_attempt_at[:16] }})</span>{% endif %}</p>
+    {% endif %}
+  {% endfor %}
 
   {# Claude — 버킷(월 한도 → 이벤트 → 프로모션 → 이용률 창) #}
   {% if claude_official.status == "ok" %}

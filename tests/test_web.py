@@ -820,3 +820,23 @@ def test_settings_post_saves_official_fetch(tmp_path, monkeypatch):
     assert of["claude"] is True
     assert of["codex"] is False
     assert of["min_interval_minutes"] == 10
+
+
+# ── Task 6 TDD: 대시보드 새로고침 버튼 + 취득 상태 표면 ──────────────────────────────
+
+def test_overview_has_refresh_button(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'action="/official/refresh"' in r.text
+
+
+def test_overview_shows_auth_error_note(tmp_path, monkeypatch):
+    client, fake_connect = _client(tmp_path, monkeypatch)
+    # codex 토큰 만료 상태를 심는다
+    from tokenomy.db import upsert_fetch_state
+    conn = fake_connect()
+    upsert_fetch_state(conn, "codex", last_attempt_at="2026-06-10T09:00:00+09:00",
+                       last_success_at=None, last_status="auth_error", last_error="HTTP 401")
+    r = client.get("/")
+    assert "Codex CLI를 1회 실행" in r.text

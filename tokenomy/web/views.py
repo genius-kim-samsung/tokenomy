@@ -12,8 +12,10 @@ from tokenomy.aggregate import (
     token_composition,
 )
 from tokenomy.budget import (
-    budget_from_config, budget_start_kst, credit_to_usd, load_config, user_label,
+    budget_from_config, budget_start_kst, credit_to_usd, load_config,
+    official_fetch_settings, user_label,
 )
+from tokenomy.db import get_fetch_state
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 
 _SORT_KEYS = {
@@ -28,6 +30,32 @@ _TREND_STYLE: dict[str, tuple[str, str, str]] = {
     "claude": ("Claude", "#cc785c", "rgba(204,120,92,0.5)"),   # 코랄(기존 누적선 색 유지)
     "codex": ("Codex", "#5db8a6", "rgba(93,184,166,0.5)"),     # teal(DESIGN.md accent-teal)
 }
+
+
+def _remediation(provider: str, status: str | None) -> str | None:
+    """fetch 상태 코드에 따른 사용자 안내 문자열을 반환한다. 정상/없음이면 None."""
+    if status == "auth_error":
+        return ("Codex CLI를 1회 실행해 토큰을 갱신하세요"
+                if provider == "codex" else "재로그인이 필요합니다")
+    if status == "http_error":
+        return "취득 실패 — 잠시 후 다시 시도하세요"
+    return None
+
+
+def official_fetch_status(conn, config: dict) -> dict:
+    """공식 취득 옵트인 여부 + provider별 마지막 fetch 상태/안내(표시용)."""
+    enabled = official_fetch_settings(config)["enabled"]
+    out: dict = {"enabled": enabled}
+    for p in ("claude", "codex"):
+        st = get_fetch_state(conn, p)
+        status = st["last_status"] if st else None
+        out[p] = {
+            "last_status": status,
+            "last_attempt_at": st["last_attempt_at"] if st else None,
+            "last_error": st["last_error"] if st else None,
+            "note": _remediation(p, status),
+        }
+    return out
 
 
 def _provider_has_data(conn, provider: str) -> bool:
@@ -101,6 +129,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "claude_bd": claude_bd, "codex_bd": codex_bd, "month_total": month_total,
         "combined_bd": combined_bd, "both_budgeted": both_budgeted,
         "claude_official": claude_official, "codex_official": codex_official,
+        "official_fetch": official_fetch_status(conn, config),
         "claude_has_data": _provider_has_data(conn, "claude"),
         "codex_has_data": _provider_has_data(conn, "codex"),
         "projects": projects, "sessions": sessions, "insights": coach,
