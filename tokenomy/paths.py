@@ -45,3 +45,16 @@ def resource_path(rel: str) -> Path:
     """번들된 읽기전용 리소스. frozen이면 _MEIPASS, 소스면 repo 루트 기준."""
     base = Path(getattr(sys, "_MEIPASS", _REPO_ROOT))
     return base / rel
+
+
+# 공식 사용량 취득용 로컬 OAuth 크레덴셜 위치(읽기 전용). 존재 여부 감지에만 쓴다.
+CLAUDE_CREDS = Path.home() / ".claude" / ".credentials.json"
+CODEX_AUTH = Path.home() / ".codex" / "auth.json"
+
+
+def creds_present(provider: str) -> bool:
+    """provider의 로컬 크레덴셜 파일이 존재하면 True(내용 검증은 안 함)."""
+    import tokenomy.paths as _self
+    _creds = {"claude": _self.CLAUDE_CREDS, "codex": _self.CODEX_AUTH}
+    p = _creds.get(provider)
+    return bool(p and p.exists())

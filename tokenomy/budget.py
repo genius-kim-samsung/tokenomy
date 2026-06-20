@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tokenomy.paths import creds_present
+
 KST = timezone(timedelta(hours=9))
 
 
@@ -50,6 +52,7 @@ def _config_path(path: str | Path | None = None) -> Path:
 
 def load_config(path: str | Path | None = None) -> dict:
     base = {"user_label": _default_label(),
+            "tracked_providers": None,           # None → 첫 호출 시 크레덴셜로 시드
             "budget": {"claude": 0.0, "codex": 0.0},
             "budget_start": None,
             "credit_to_usd": 0.04,
@@ -134,3 +137,18 @@ def official_fetch_settings(config: dict) -> dict:
         "codex": _flag("codex", True),
         "min_interval_minutes": mi,
     }
+
+
+def tracked_providers(config: dict) -> list[str]:
+    """사용자가 쓴다고 선언한 provider 목록. 없거나 비면 크레덴셜 존재로 시드한다.
+
+    config['tracked_providers']가 유효한 리스트면 PROVIDERS 순서로 정규화(알 수 없는 값 제거).
+    비었거나 None이면 크레덴셜 파일이 있는 provider로 시드(무설정 첫 실행이 대개 정답).
+    """
+    from tokenomy.aggregate import PROVIDERS
+    raw = config.get("tracked_providers")
+    if isinstance(raw, list):
+        sel = [p for p in PROVIDERS if p in raw]
+        if sel:
+            return sel
+    return [p for p in PROVIDERS if creds_present(p)]

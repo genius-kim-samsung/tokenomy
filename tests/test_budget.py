@@ -149,3 +149,29 @@ def test_official_fetch_settings_partial_keeps_defaults():
     # enabled만 준 부분 설정 — 나머지는 기본값으로 채워짐
     s = official_fetch_settings({"official_fetch": {"enabled": True}})
     assert s == {"enabled": True, "claude": True, "codex": True, "min_interval_minutes": 5}
+
+
+from tokenomy.budget import tracked_providers
+from tokenomy import paths
+
+
+def test_creds_present_detects_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "CLAUDE_CREDS", tmp_path / ".claude" / ".credentials.json")
+    monkeypatch.setattr(paths, "CODEX_AUTH", tmp_path / ".codex" / "auth.json")
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / ".credentials.json").write_text("{}", encoding="utf-8")
+    assert paths.creds_present("claude") is True
+    assert paths.creds_present("codex") is False
+
+
+def test_tracked_providers_explicit_list_wins():
+    assert tracked_providers({"tracked_providers": ["codex"]}) == ["codex"]
+    # 알 수 없는 값 제거 + PROVIDERS 순서 정규화
+    assert tracked_providers({"tracked_providers": ["codex", "x", "claude"]}) == ["claude", "codex"]
+
+
+def test_tracked_providers_seeds_from_creds_when_absent(monkeypatch):
+    import tokenomy.budget as b
+    monkeypatch.setattr(b, "creds_present", lambda p: p == "claude")
+    assert tracked_providers({}) == ["claude"]
+    assert tracked_providers({"tracked_providers": []}) == ["claude"]   # 빈 리스트도 시드
