@@ -11,7 +11,7 @@ from tokenomy.aggregate import (
     token_composition,
 )
 from tokenomy.budget import (
-    credit_to_usd, load_config, official_fetch_settings, tracked_providers, user_label,
+    credit_to_usd, load_config, tracked_providers, user_label,
 )
 from tokenomy.db import get_fetch_state
 from tokenomy.pricing import apply_pricing_overrides, load_pricing

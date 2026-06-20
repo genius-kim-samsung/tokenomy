@@ -103,7 +103,7 @@
                 const pct = total ? Math.round(v / total * 100) : 0;
                 return `${ds.label}  $${v.toFixed(2)} (${pct}%)`;
               }
-              const y = ctx.parsed.y;                    // 기준선(페이스/예산)
+              const y = ctx.parsed.y;                    // 비면적 데이터셋(향후 확장용)
               return y == null ? null : `${ds.label}  $${y.toFixed(2)}`;
             },
             footer: (items) => {

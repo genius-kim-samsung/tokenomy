@@ -87,11 +87,6 @@ def cmd_official_import(conn, provider: str, path: str, *, now_kst=None,
                                    buckets=buckets, created_at=ts)
 
 
-def _bar(pct: float, width: int = 20) -> str:
-    fill = int(min(max(pct, 0.0), 1.0) * width)
-    return "[" + "#" * fill + "-" * (width - fill) + "]"
-
-
 def cmd_report(conn) -> None:
     config = load_config()
     ctu = credit_to_usd(config)

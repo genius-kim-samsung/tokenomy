@@ -10,12 +10,11 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from tokenomy.budget import Budget
 from tokenomy.pricing import find_rate, _is_version_boundary
 
 KST = timezone(timedelta(hours=9))
 
-# 합산/탭바가 도는 provider 목록. 3번째 AI 추가 시 여기 + Budget 필드 + 파서 + 단가만 보강.
+# 합산/탭바가 도는 provider 목록. 3번째 AI 추가 시 여기 + 파서 + 단가만 보강.
 PROVIDERS = ("claude", "codex")
 
 # 효율 코치 휴리스틱 임계값 — 실데이터 캘리브레이션 전 튜닝값(단정 금지, 신호로만 사용)
@@ -97,18 +96,6 @@ def add_business_days(start: date, n: int) -> date:
     return d
 
 
-def effective_month_start(now_kst: datetime, budget_start: datetime | None) -> datetime:
-    """이번 달 기간 시작 — budget_start가 이번 달 안이면 그 날짜로 clamp, 아니면 1일.
-
-    budget_start가 과거·미래 달이면 무시(달력 월 1일). 일회성 도입일이 첫 달만
-    영향을 주도록 한다.
-    """
-    start, nxt = month_bounds(now_kst)
-    if budget_start and start <= budget_start < nxt:
-        return _midnight(budget_start)
-    return start
-
-
 def week_count(effective_start: datetime, now_kst: datetime) -> int:
     """effective_start가 속한 주(1주차)부터 now가 속한 주까지의 주 수(월요일 경계).
 
@@ -137,29 +124,6 @@ def period_bounds(period: str, anchor_kst: datetime) -> tuple[datetime, datetime
         return start, nxt, f"{start.strftime('%Y-%m-%d')} ~ {end.strftime(end_fmt)}"
     start, nxt = month_bounds(a)                   # month (기본/폴백)
     return start, nxt, start.strftime("%Y-%m")
-
-
-@dataclass
-class Burndown:
-    provider: str
-    limit: float
-    spent: float
-    pct: float
-    days_in_month: int
-    day_of_month: int
-    days_left: int
-    daily_avg: float           # 영업일당 평균(경과 영업일 0이면 달력일 fallback)
-    projected_month: float
-    exhaust_day: int | None    # 소진 예측 날짜의 일(day) — cli 호환. exhaust_date.day
-    on_track: bool
-    unpriced_count: int
-    status: str  # "ok" | "warn" | "exceeds"
-    # D-day(영업일) 신규 필드 — 달력 필드(day_of_month/days_left/days_in_month)와 분리.
-    exhaust_date: date | None = None       # 현 추세 소진 예측일(이번 달 안에 안 소진이면 None)
-    business_days_elapsed: int = 0         # 기간 시작~오늘(포함) 영업일
-    business_days_left: int = 0            # 내일~월말 영업일
-    idle_business_days: int = 0            # 소진일~월말 영업일(월말 토큰 공백 일수)
-    dday_warning: bool = False             # 월말 3영업일+ 공백 임박 or 잔량 ≤20%
 
 
 @dataclass
@@ -195,136 +159,6 @@ def _month_rows(conn, provider: str | None, now_kst: datetime) -> list:
 def month_spend(conn, provider: str | None, now_kst: datetime) -> float:
     """provider(또는 None=전체)의 이번 달(KST) cost_usd 합. 번다운 없이 총지출만."""
     return round(sum((r["cost_usd"] or 0) for r in _month_rows(conn, provider, now_kst)), 4)
-
-
-def _compute_burndown(provider: str, spent: float, limit: float,
-                      unpriced: int, now_kst: datetime, *,
-                      period_start: datetime | None = None,
-                      period_end: datetime | None = None) -> Burndown:
-    """집계된 (spent, limit, unpriced)로 Burndown을 산출하는 순수 함수.
-
-    period_start/end 미지정 시 now_kst의 달력 월을 기간으로 쓴다(하위호환). 지정 시
-    그 기간 [start, end)를 기준으로 경과일·예상치를 계산한다(예: 도입일 clamp).
-    provider별 burndown과 통합 combined_burndown이 공유한다.
-    """
-    if period_start is None or period_end is None:
-        period_start, period_end = month_bounds(now_kst)
-    days_in_month = (period_end - period_start).days
-    day_of_month = (_midnight(now_kst) - period_start).days + 1
-    days_left = days_in_month - day_of_month
-    pct = (spent / limit) if limit > 0 else 0.0
-
-    # 영업일 경계(주말 제외). 사내 대다수가 평일만 근무하므로 D-day 추세는 영업일로 외삽.
-    today = now_kst.date()
-    tomorrow = today + timedelta(days=1)
-    pe_date = period_end.date()
-    business_days_elapsed = business_days_between(period_start.date(), tomorrow)  # 오늘 포함
-    business_days_left = business_days_between(tomorrow, pe_date)                 # 내일~월말
-
-    # 영업일당 평균 + 현 추세 월말 예상치. 경과 영업일 0(월초 주말만 사용)이면 달력일로
-    # fallback — 거짓 안전(0)·division by zero를 막는다.
-    if business_days_elapsed > 0:
-        daily_avg = spent / business_days_elapsed
-        projected = spent + daily_avg * business_days_left
-    else:
-        daily_avg = spent / day_of_month if day_of_month else 0.0
-        projected = daily_avg * days_in_month
-
-    # 소진 예측일(영업일 추세 외삽). 이번 달 안에 안 소진되면 None.
-    exhaust_date: date | None = None
-    if limit > 0 and daily_avg > 0:
-        remaining = limit - spent
-        if remaining <= 0:
-            exhaust_date = today                       # 이미 소진
-        else:
-            days_needed = math.ceil(remaining / daily_avg)
-            if business_days_elapsed > 0:
-                cand = add_business_days(today, days_needed)
-            else:
-                cand = today + timedelta(days=days_needed)   # fallback: 달력일
-            if cand < pe_date:
-                exhaust_date = cand
-    exhaust_day = exhaust_date.day if exhaust_date else None
-    idle_business_days = business_days_between(exhaust_date, pe_date) if exhaust_date else 0
-
-    on_track = (projected <= limit) if limit > 0 else True
-
-    if limit > 0 and spent >= limit:
-        status = "exceeds"
-    elif limit > 0 and projected > limit:
-        status = "warn"
-    else:
-        status = "ok"
-
-    # D-day 경고: 현 추세로 월말 3영업일+ 토큰 공백이 생기거나(소진일~월말 ≥3),
-    # 잔량이 ≤20%면 발동. 둘 다 "곧 쓸 토큰이 없다"의 조기 신호.
-    dday_warning = bool(
-        (exhaust_date is not None and idle_business_days >= 3)
-        or (limit > 0 and pct >= 0.80)
-    )
-
-    return Burndown(
-        provider=provider, limit=limit, spent=round(spent, 4), pct=round(pct, 4),
-        days_in_month=days_in_month, day_of_month=day_of_month, days_left=days_left,
-        daily_avg=round(daily_avg, 4), projected_month=round(projected, 4),
-        exhaust_day=exhaust_day, on_track=on_track, unpriced_count=unpriced,
-        status=status,
-        exhaust_date=exhaust_date, business_days_elapsed=business_days_elapsed,
-        business_days_left=business_days_left, idle_business_days=idle_business_days,
-        dday_warning=dday_warning,
-    )
-
-
-def burndown(conn, budget: Budget, now_kst: datetime, provider: str = "claude",
-             *, budget_start: datetime | None = None) -> Burndown:
-    period_start = effective_month_start(now_kst, budget_start)
-    _, period_end = month_bounds(now_kst)
-    rows = _range_rows(conn, provider, period_start, period_end)
-    spent = sum((r["cost_usd"] or 0) for r in rows)
-    unpriced = sum(1 for r in rows if not r["priced"])
-    limit = budget.limit_for(provider)
-    return _compute_burndown(provider, spent, limit, unpriced, now_kst,
-                             period_start=period_start, period_end=period_end)
-
-
-def combined_burndown(cards: list[Burndown], now_kst: datetime) -> Burndown:
-    """provider별 Burndown 리스트 → 통합 Burndown.
-
-    한도(limit>0)가 있는 provider만 spent·limit·unpriced를 합산해 분자/분모 범위를
-    일치시킨다(예: claude 한도만 있으면 codex 지출은 통합 바에서 제외). 한도 있는
-    provider가 하나도 없으면 limit=0(사용량만, spent=전체 합산)으로 둔다.
-    호출부는 PROVIDERS 전체를 넘기므로 cards는 비어있지 않다(빈 리스트는 한도 0·지출 0).
-    """
-    capped = [c for c in cards if c.limit > 0]
-    if capped:
-        spent = sum(c.spent for c in capped)
-        limit = sum(c.limit for c in capped)
-        unpriced = sum(c.unpriced_count for c in capped)
-    else:
-        spent = sum(c.spent for c in cards)
-        limit = 0.0
-        unpriced = sum(c.unpriced_count for c in cards)
-    return _compute_burndown("전체", spent, limit, unpriced, now_kst)
-
-
-@dataclass
-class CodexBurndown:
-    """Codex 주간 누적(carryover) 번다운.
-
-    분모 limit_to_date = weekly_limit(W) × weeks_elapsed(N).
-    분자 spent = effective_start ~ 이번 달 누적 지출. remaining = 이번 주 가용(이월 포함).
-    월이 바뀌면 분자·분모 모두 리셋(이월 소멸). 주간 모델이라 예상 월말은 내지 않는다.
-    """
-    provider: str           # "codex"
-    weekly_limit: float     # W = 월한도 ÷ 4
-    weeks_elapsed: int      # N (이번 달 충전 횟수)
-    limit_to_date: float    # W × N
-    spent: float            # 이번 달 누적 지출(effective_start~)
-    remaining: float        # 이번 주 가용 = limit_to_date − spent
-    pct: float
-    status: str             # "ok" | "exceeds"
-    unpriced_count: int
-    week_spent: float       # 이번 주(월요일~)만의 지출(표시용)
 
 
 def codex_weekly_window(conn) -> tuple[datetime, datetime] | None:
@@ -551,38 +385,6 @@ def official_view(conn, provider: str, now_kst: datetime,
         weekly_used_usd=weekly_used, weekly_limit_usd=weekly_limit,
         weekly_estimated=weekly_estimated, weekly_window_end=weekly_end,
         fetched_at=fetched_at, stale_minutes=stale_minutes, status=status, note=note,
-    )
-
-
-def codex_burndown(conn, budget: Budget, now_kst: datetime,
-                   *, budget_start: datetime | None = None) -> CodexBurndown:
-    """Codex 주간 누적(carryover) 번다운을 산출한다.
-
-    effective_start(도입일 or 달력 월 1일)부터 이번 달 말까지의 누적 지출과
-    weekly_limit × weeks_elapsed를 비교한다. 이월 모델이라 일별 예상치는 제공하지 않는다.
-    """
-    month_start, month_end = month_bounds(now_kst)
-    eff = effective_month_start(now_kst, budget_start)
-    weekly = budget.weekly_codex_limit()
-    weeks = week_count(eff, now_kst)
-    limit_to_date = round(weekly * weeks, 4)
-
-    rows = _range_rows(conn, "codex", eff, month_end)
-    spent = round(sum((r["cost_usd"] or 0) for r in rows), 4)
-    unpriced = sum(1 for r in rows if not r["priced"])
-    remaining = round(limit_to_date - spent, 4)
-    pct = round(spent / limit_to_date, 4) if limit_to_date > 0 else 0.0
-
-    week_start = max(_midnight(now_kst) - timedelta(days=now_kst.weekday()), eff)
-    week_rows = _range_rows(conn, "codex", week_start, month_end)
-    week_spent = round(sum((r["cost_usd"] or 0) for r in week_rows), 4)
-
-    status = "exceeds" if (limit_to_date > 0 and spent >= limit_to_date) else "ok"
-
-    return CodexBurndown(
-        provider="codex", weekly_limit=round(weekly, 4), weeks_elapsed=weeks,
-        limit_to_date=limit_to_date, spent=spent, remaining=remaining, pct=pct,
-        status=status, unpriced_count=unpriced, week_spent=week_spent,
     )
 
 
