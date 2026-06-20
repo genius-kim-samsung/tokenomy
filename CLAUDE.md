@@ -20,6 +20,10 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 
 # 테스트
 .venv\Scripts\python -m pytest
+
+# enterprise 공식 사용량 view 미리보기 — 개인 계정 PC에서 격리 DB로 시드 후 웹 확인(개인 DB 미오염)
+.venv\Scripts\python scripts\seed_official_enterprise.py   # ~/.tokenomy-ent-preview 시드 + 실행 안내 출력
+
 # 프론트엔드 스타일 빌드 — CSS/템플릿 클래스 변경 시에만. 산출 app.css는 커밋(런타임 무빌드).
 .\build_css.ps1
 

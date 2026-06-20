@@ -1,0 +1,36 @@
+{
+  "user_id": "[redacted]",
+  "account_id": "[redacted]",
+  "email": "[redacted]",
+  "plan_type": "business",
+  "rate_limit": null,
+  "code_review_rate_limit": null,
+  "additional_rate_limits": null,
+  "credits": {
+    "has_credits": true,
+    "unlimited": false,
+    "overage_limit_reached": false,
+    "balance": null,
+    "approx_local_messages": null,
+    "approx_cloud_messages": null
+  },
+  "spend_control": {
+    "reached": false,
+    "individual_limit": {
+      "source": "group_based_spend_controls",
+      "limit": "5875",
+      "used": "1073.9418209791183",
+      "remaining": "4801.058179020882",
+      "used_percent": 18,
+      "remaining_percent": 82,
+      "reset_after_seconds": 982330,
+      "reset_at": 1782864001
+    }
+  },
+  "rate_limit_reached_type": null,
+  "promo": null,
+  "referral_beacon": null,
+  "rate_limit_reset_credits": {
+    "available_count": 0
+  }
+}

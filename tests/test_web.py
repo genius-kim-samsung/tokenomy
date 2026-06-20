@@ -1,9 +1,21 @@
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from tokenomy.db import connect
+from tokenomy.db import connect, insert_official_buckets
 from tokenomy.web import app as app_module
+
+_FIX = Path(__file__).parent / "fixtures" / "official"
+
+
+def _seed_official(conn, provider, fixture, parse):
+    """엔터프라이즈 실측 fixture를 parse→insert로 시드(골든 테스트 공용)."""
+    raw = json.loads((_FIX / fixture).read_text(encoding="utf-8"))
+    buckets = parse(raw, credit_to_usd=0.04)
+    insert_official_buckets(conn, provider=provider,
+                            fetched_at="2026-06-20T09:00:00+09:00",
+                            buckets=buckets, created_at="2026-06-20T09:00:00+09:00")
 
 
 def _client(tmp_path, monkeypatch):
@@ -644,6 +656,47 @@ def test_overview_official_panel_renders(tmp_path, monkeypatch):
     assert "공식" in r.text                         # 공식 미러 패널 노출
     assert "월 사용 한도" in r.text                 # 버킷 라벨 렌더 확인
     assert "30" in r.text and "100" in r.text      # used/limit USD 렌더 확인
+
+
+# ── 엔터프라이즈 view 골든 테스트(실측 응답 고정) ────────────────────────────────
+# 개인 구독(% 창)이 아니라 enterprise 계정의 달러/크레딧 게이지 분기를 고정한다.
+# 실측 raw(docs/enterprise-usage-api-response.md)를 fixture로 시드 → 렌더 → 출력 단언.
+
+def test_overview_enterprise_claude_dollar_buckets_render(tmp_path, monkeypatch):
+    """엔터프라이즈 Claude(실측): 달러 버킷이 USD 게이지로 렌더되어야 한다.
+
+    spend(월 사용 한도 $0/$243) + cinder_cove(포함된 크레딧 $393.10/$1,000) 두 버킷이
+    used/limit USD와 소진율로 나온다. 개인 구독 % 창이 아니라 달러 게이지 분기 검증.
+    """
+    from tokenomy.official_parser import parse_claude
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_official(conn, "claude", "claude_enterprise_real.json", parse_claude)
+    r = client.get("/")
+    assert r.status_code == 200
+    # cinder_cove 이벤트 크레딧(달러 본체) — 코드네임 비의존 라벨 + USD 게이지
+    assert "포함된 크레딧" in r.text
+    assert "$393.10" in r.text and "1,000" in r.text
+    assert "39% 사용됨" in r.text
+    # spend 월 사용 한도($0/$243) — used 0도 게이지로 렌더
+    assert "월 사용 한도" in r.text and "243" in r.text
+
+
+def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
+    """엔터프라이즈 Codex(실측): 크레딧 한도가 credit_to_usd 환산 USD 게이지로 렌더되어야 한다.
+
+    individual_limit used 1073.94 / limit 5875 credits → ×0.04 = $42.96 / $235 월간 게이지.
+    주간(월÷4) 추정 게이지도 함께. 개인 구독 % 창이 아니라 USD 월간 분기 검증.
+    """
+    from tokenomy.official_parser import parse_codex
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_official(conn, "codex", "codex_enterprise_real.json", parse_codex)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "월간 한도" in r.text
+    assert "$42.96" in r.text and "235" in r.text
+    assert "이번 주" in r.text       # 주간(월÷4) 추정 게이지도 렌더
 
 
 def test_settings_shows_credit_to_usd(tmp_path, monkeypatch):

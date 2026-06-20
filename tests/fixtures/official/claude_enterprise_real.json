@@ -1,0 +1,46 @@
+{
+  "five_hour": null,
+  "seven_day": null,
+  "seven_day_oauth_apps": null,
+  "seven_day_opus": null,
+  "seven_day_sonnet": null,
+  "seven_day_cowork": null,
+  "seven_day_omelette": null,
+  "tangelo": null,
+  "iguana_necktie": null,
+  "omelette_promotional": {
+    "utilization": 0.0,
+    "resets_at": null,
+    "limit_dollars": null,
+    "used_dollars": null,
+    "remaining_dollars": null
+  },
+  "cinder_cove": {
+    "utilization": 39.30956080000001,
+    "resets_at": "2026-09-10T01:47:22.420960+00:00",
+    "limit_dollars": 1000,
+    "used_dollars": 393.095608,
+    "remaining_dollars": 606.9043919999999
+  },
+  "amber_ladder": null,
+  "extra_usage": {
+    "is_enabled": true,
+    "monthly_limit": 24300,
+    "used_credits": 0.0,
+    "utilization": null,
+    "currency": "USD",
+    "decimal_places": 2,
+    "disabled_reason": null,
+    "daily": null,
+    "weekly": null
+  },
+  "limits": [],
+  "spend": {
+    "used": {"amount_minor": 0, "currency": "USD", "exponent": 2},
+    "limit": {"amount_minor": 24300, "currency": "USD", "exponent": 2},
+    "percent": 0,
+    "severity": "normal",
+    "enabled": true,
+    "disabled_reason": null
+  }
+}
