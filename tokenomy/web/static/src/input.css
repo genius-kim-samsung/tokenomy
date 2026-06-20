@@ -204,6 +204,73 @@
   .cov-table .num { text-align: right; font-variant-numeric: tabular-nums; }
   .cov-table tr.unpriced { color: #b45309; }
   .status-warn { color: #b45309; } .status-info { color: #2563eb; } .status-ok { color: #16a34a; }
+
+  /* ── 공식 사용량 provider 카드(ADR 0002) ──
+     인코딩 규칙: 게이지 fill 색 = 임계(utilization)만 / 텍스처(해치) = 출처(추정)만.
+     provider 액센트(--accent)는 카드 크롬(좌측 바·마크)에만 — 게이지 fill엔 절대 쓰지 않는다. */
+  .official-grid { @apply grid gap-3; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .provider-card {
+    @apply bg-elev border border-line rounded-lg p-3;
+    border-left: 3px solid var(--accent, var(--color-muted));
+  }
+  .provider-card[data-status="no_data"] { @apply opacity-90; }
+  .provider-head { @apply flex items-center gap-2 mb-1; }
+  .provider-mark { @apply inline-block w-2.5 h-2.5 rounded-full shrink-0; background: var(--accent, var(--color-muted)); }
+  .provider-name { @apply font-semibold; }
+  /* 우측 묶음(신선도 + provider별 새로고침). Claude·Codex는 API가 달라 각자 취득하므로
+     새로고침도 카드별로 둔다 — 한쪽 실패 시 그 카드만 다시 시도. */
+  .provider-actions { @apply ml-auto flex items-center gap-1.5 shrink-0; }
+  .provider-fresh { @apply text-[12px] text-muted tabular-nums; }
+  .provider-refresh-form { @apply inline-flex; }
+  .provider-refresh { @apply text-muted text-[13px] leading-none px-1 py-0.5 rounded; }
+  .provider-refresh:hover { @apply text-body bg-card; }
+  .provider-note { @apply text-[12px] text-exceeds mt-2; }
+
+  .gauge-row { @apply mt-2; }
+  .gauge-line { @apply flex items-center gap-2 text-[13px]; }
+  .gauge-label { @apply font-medium truncate; }
+  .gauge-pct { @apply ml-auto shrink-0 tabular-nums font-semibold; }
+  .gauge-pct.lvl-ok { @apply text-ok; }
+  .gauge-pct.lvl-warn { @apply text-warn; }
+  .gauge-pct.lvl-exceeds { @apply text-exceeds; }
+
+  .gauge { @apply relative block w-full h-2.5 my-1 rounded-full overflow-hidden bg-card; }
+  .gauge.gauge-est { @apply bg-transparent; border: 1px dashed var(--color-line); }
+  .gauge-fill, .gauge-ghost { @apply absolute left-0 top-0 h-full rounded-full; }
+  .gauge-fill { @apply transition-[width] duration-500; }
+  .gauge-fill.s-ok { background-color: var(--color-ok); }
+  .gauge-fill.s-warn { background-color: var(--color-warn); }
+  .gauge-fill.s-exceeds { background-color: var(--color-exceeds); }
+  /* 추정: 같은 임계색 위에 대각선 해치 — 불확실성 신호. 색은 임계 그대로 유지. */
+  .gauge-fill.est {
+    background-image: repeating-linear-gradient(45deg,
+      rgba(255,255,255,0.45) 0 2px, rgba(255,255,255,0) 2px 5px);
+  }
+  /* 고스트: 예측(리셋시 예상) 연장 — fill 뒤에 깔려 fill~ghost 구간만 노출 */
+  .gauge-ghost { background-color: rgba(212,160,23,0.30); }            /* warn 앰버 30% */
+  .gauge-ghost.ghost-warn { background-color: rgba(198,69,69,0.38); }  /* exceeds 적 38% */
+
+  .gauge-meta { @apply flex items-baseline justify-between gap-2 text-[12px] mt-0.5; }
+  .gauge-caption { @apply tabular-nums text-body; }
+  .gauge-sub { @apply text-muted shrink-0; }
+  /* 고스트(예측) 게이지 해설 — 옅은 연장 구간이 무슨 뜻인지 텍스트로 못박는다 */
+  .gauge-forecast { @apply text-[11px] text-muted mt-0.5; }
+  .gauge-forecast.warn { @apply text-exceeds font-medium; }
+
+  .chip { @apply inline-block px-1.5 py-px rounded text-[11px] font-semibold shrink-0; }
+  .chip-official { @apply bg-card text-muted; }
+  .chip-est { @apply bg-card text-muted; border: 1px dashed var(--color-line); }
+  .chip-warn { @apply text-exceeds; background: #f7e3e3; }
+
+  /* 사용량 전용 폴백(공식 데이터 없음) */
+  .fallback { @apply mt-1; }
+  .fallback-num { @apply text-[22px] font-semibold tabular-nums; }
+  .spark { @apply block w-full h-7 mt-1; }
+  .spark polyline { fill: none; stroke: var(--accent, var(--color-muted)); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+
+  /* 출처 범례(disclaimer) — 게이지 텍스처를 작게 재현해 가르친다 */
+  .src-official { @apply font-semibold text-body; }
+  .src-est { @apply font-semibold text-muted; border-bottom: 1px dashed var(--color-muted); }
 }
 
 /* ── 세션 표(.sess) 반응형: 기존 동작 그대로 이식(원시 CSS) ── */

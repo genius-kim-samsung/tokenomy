@@ -101,7 +101,7 @@ def parse_claude(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
         util = (used_usd / limit_usd * 100) if limit_usd > 0 else 0.0
         out.append(OfficialBucket(
             bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit",
-            label="월 사용 한도", native_unit="usd",
+            label="사용 한도(Enterprise)", native_unit="usd",
             used_native=used_usd, limit_native=limit_usd,
             remaining_native=round(limit_usd - used_usd, 6),
             used_usd=used_usd, limit_usd=limit_usd,
@@ -131,12 +131,10 @@ def parse_claude(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
             rem = val.get("remaining_dollars")
             rem = float(rem) if rem is not None else round(limit - used, 6)
             resets = _parse_iso(val.get("resets_at"))
-            label = "포함된 크레딧"
-            if resets is not None:
-                label += f" · {resets.date().isoformat()} 만료"
+            # 만료일은 라벨이 아니라 sub('만료 YYYY-MM-DD')에 표시 — 다른 게이지의 리셋 위치와 정렬(views).
             out.append(OfficialBucket(
                 bucket_key="event", raw_key=key, bucket_kind="event_credit",
-                label=label, native_unit="usd",
+                label="일회성 크레딧", native_unit="usd",
                 used_native=used, limit_native=limit, remaining_native=rem,
                 used_usd=used, limit_usd=limit, remaining_usd=rem,
                 utilization=round(used / limit * 100, 4) if limit > 0 else 0.0,

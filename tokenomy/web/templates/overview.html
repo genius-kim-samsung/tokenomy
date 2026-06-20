@@ -12,68 +12,69 @@
   {% endif %}
 </section>
 
-{# 공식 미러 패널 — USD 1차. 공식 ground truth + 토크노미 예측 렌즈 #}
+{# 공식 미러 패널 — provider별 카드 그리드(ADR 0002). 색=임계 · 텍스처=공식/추정 #}
 <section class="card">
   <div class="card-head">
-    <h2>공식 사용량 <span class="muted">· 공식 앱 미러 + 예측</span></h2>
-    <form method="post" action="/official/refresh" class="inline-form">
-      <button class="btn-sm" type="submit">↻ 공식 새로고침</button>
-    </form>
+    <h2>AI별 사용량 <span class="muted">· 공식 앱 미러 + 예측</span></h2>
   </div>
-  {% if not tracked %}
-  <p class="muted">추적 중인 provider가 없습니다 — config의 <code>tracked_providers</code>에 추가하면 공식 사용량을 자동으로 가져옵니다.</p>
-  {% endif %}
-  {% for p in tracked %}
-    {% if official_fetch[p].note %}
-    <p class="muted">⚠ {{ p }}: {{ official_fetch[p].note }}{% if official_fetch[p].last_attempt_at %} <span class="muted">({{ official_fetch[p].last_attempt_at[:16] }})</span>{% endif %}</p>
-    {% endif %}
-  {% endfor %}
+  <div class="official-grid">
+    {% for c in official_cards %}
+    <article class="provider-card" data-status="{{ c.status }}" style="--accent: {{ c.accent }}">
+      <header class="provider-head">
+        <span class="provider-mark"></span>
+        <span class="provider-name">{{ c.label }}</span>
+        <span class="provider-actions">
+          {% if c.status == "error" %}
+            <span class="chip chip-warn">⚠ 갱신 실패{% if c.fresh %} · {{ c.fresh }}{% endif %}</span>
+          {% elif c.fresh %}
+            <span class="provider-fresh">{{ c.fresh }}</span>
+          {% endif %}
+          <form method="post" action="/official/refresh" class="provider-refresh-form">
+            <input type="hidden" name="provider" value="{{ c.provider }}">
+            <button class="provider-refresh" type="submit"
+                    title="{{ c.label }} 공식 사용량만 새로고침" aria-label="{{ c.label }} 새로고침">↻</button>
+          </form>
+        </span>
+      </header>
 
-  {# Claude — 버킷(월 한도 → 이벤트 → 프로모션 → 이용률 창) #}
-  {% if claude_official.status == "ok" %}
-  <div class="official-provider">
-    <h3>Claude</h3>
-    {% for b in claude_official.buckets %}
-    <div class="official-bucket">
-      <div class="ai-name">{{ b.label }}
-        {% if b.native_unit == "percent" %}<span class="muted">· {{ '%.0f'|format(b.utilization) }}% 사용됨</span>{% endif %}</div>
-      {% if b.used_usd is not none and b.limit_usd %}
-        <div class="ai-num">${{ '{:,.2f}'.format(b.used_usd) }} <span class="ai-denom">/ ${{ '{:,.0f}'.format(b.limit_usd) }}</span></div>
-        <span class="bar"><span class="fill s-ok" style="width: {{ [b.utilization, 100]|min }}%"></span></span>
-        <div class="muted">{{ '%.0f'|format(b.utilization) }}% 사용됨{% if b.resets_at %} · 리셋 {{ b.resets_at[:10] }}{% endif %} · <span class="src-official">공식</span></div>
+      {% for g in c.gauges %}
+      <div class="gauge-row">
+        <div class="gauge-line">
+          <span class="gauge-label">{{ g.label }}</span>
+          <span class="gauge-pct lvl-{{ g.level }}">{{ g.util }}%{% if g.exhausted %} 소진{% endif %}</span>
+          <span class="chip {{ 'chip-est' if g.estimated else 'chip-official' }}">{{ '추정' if g.estimated else '공식' }}</span>
+        </div>
+        <span class="gauge{% if g.estimated %} gauge-est{% endif %}">
+          {% if g.ghost_pct %}<span class="gauge-ghost{% if g.ghost_warn %} ghost-warn{% endif %}" style="width: {{ g.ghost_pct }}%"></span>{% endif %}
+          <span class="gauge-fill s-{{ g.level }}{% if g.estimated %} est{% endif %}" style="width: {{ g.fill_pct }}%"></span>
+        </span>
+        {% if g.caption or g.sub %}
+        <div class="gauge-meta">
+          {% if g.caption %}<span class="gauge-caption">{{ g.caption }}</span>{% else %}<span></span>{% endif %}
+          {% if g.sub %}<span class="gauge-sub">{{ g.sub }}</span>{% endif %}
+        </div>
+        {% endif %}
+        {% if g.forecast %}<div class="gauge-forecast{% if g.ghost_warn %} warn{% endif %}">{{ g.forecast }}</div>{% endif %}
+      </div>
+      {% endfor %}
+
+      {% if c.fallback %}
+      <div class="fallback">
+        <p class="fallback-num serif">${{ '{:,.2f}'.format(c.fallback.estimate_usd) }} <span class="chip chip-est">추정</span></p>
+        {% if c.fallback.spark %}
+        <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true">
+          <polyline points="{{ c.fallback.spark }}"></polyline>
+        </svg>
+        {% endif %}
+        <p class="muted">공식 미취득 · 로컬 추정</p>
+      </div>
       {% endif %}
-    </div>
-    {% endfor %}
-    {% if claude_official.lens and claude_official.lens.daily_rate_usd is not none %}
-    <p class="muted">예측: ${{ '%.2f'|format(claude_official.lens.daily_rate_usd) }}/영업일{% if claude_official.lens.exhaust_date %} · 소진 예상 {{ claude_official.lens.exhaust_date }}{% endif %}</p>
-    {% endif %}
-  </div>
-  {% else %}
-  <p class="muted">Claude 공식 미취득 — 로컬 추정 ${{ '{:,.2f}'.format(month_total) }} <span class="src-est">추정</span></p>
-  {% endif %}
 
-  {# Codex — 월간(공식) + 주간(예측) 2게이지 #}
-  <div class="official-provider">
-    <h3>Codex</h3>
-    {% if codex_official.period_limit_usd %}
-    <div class="official-bucket">
-      <div class="ai-name">월간 한도 <span class="muted">· 공식</span></div>
-      <div class="ai-num">${{ '{:,.2f}'.format(codex_official.period_used_usd) }} <span class="ai-denom">/ ${{ '{:,.0f}'.format(codex_official.period_limit_usd) }}</span></div>
-      <span class="bar"><span class="fill s-ok" style="width: {{ [codex_official.period_used_usd / codex_official.period_limit_usd * 100, 100]|min if codex_official.period_limit_usd else 0 }}%"></span></span>
-      <div class="muted"><span class="src-official">공식</span></div>
-    </div>
-    {% endif %}
-    {% if codex_official.weekly_limit_usd %}
-    <div class="official-bucket">
-      <div class="ai-name">이번 주 <span class="muted">· 예측(월÷4)</span></div>
-      <div class="ai-num">${{ '{:,.2f}'.format(codex_official.weekly_used_usd or 0) }} <span class="ai-denom">/ ${{ '{:,.0f}'.format(codex_official.weekly_limit_usd) }}</span></div>
-      <span class="bar"><span class="fill s-ok" style="width: {{ [(codex_official.weekly_used_usd or 0) / codex_official.weekly_limit_usd * 100, 100]|min }}%"></span></span>
-      <div class="muted">{% if codex_official.weekly_window_end %}리셋 {{ codex_official.weekly_window_end }} · {% endif %}<span class="src-est">추정</span></div>
-    </div>
-    {% endif %}
-    {% if not codex_official.period_limit_usd and not codex_official.weekly_limit_usd %}
-    <p class="muted">Codex 공식·로컬 데이터 없음</p>
-    {% endif %}
+      {% if c.note %}<p class="provider-note">⚠ {{ c.note }}</p>{% endif %}
+    </article>
+    {% else %}
+    <p class="muted">추적 중인 provider가 없습니다 — 설정에서 추가하면 공식 사용량을 자동으로 가져옵니다.</p>
+    {% endfor %}
   </div>
   <p class="disclaimer">ⓘ <span class="src-official">공식</span>=API ground truth · <span class="src-est">추정</span>=로컬 CLI 토큰단가</p>
 </section>

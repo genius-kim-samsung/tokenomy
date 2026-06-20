@@ -4,9 +4,9 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
-    KST, DIM_COLUMNS, DateGroup, DaySessionRow, FolderGroup,
+    KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup,
     by_day_session, by_dimension, by_project, by_session, daily_series,
-    insights, month_bounds, month_spend, official_view, period_bounds,
+    insights, month_bounds, month_spend, official_view, parse_ts, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
 )
@@ -40,26 +40,212 @@ def _remediation(provider: str, status: str | None) -> str | None:
     return None
 
 
-def official_fetch_status(conn, config: dict) -> dict:
-    """provider별 마지막 fetch 상태/안내(표시용). tracked provider만 순회."""
-    out: dict = {}
-    for p in tracked_providers(config):
-        st = get_fetch_state(conn, p)
-        status = st["last_status"] if st else None
-        out[p] = {
-            "last_status": status,
-            "last_attempt_at": st["last_attempt_at"] if st else None,
-            "last_error": st["last_error"] if st else None,
-            "note": _remediation(p, status),
-        }
-    return out
-
-
 def _provider_has_data(conn, provider: str) -> bool:
     row = conn.execute(
         "SELECT MAX(ts) t FROM messages WHERE provider=?", (provider,)
     ).fetchone()
     return row is not None and row["t"] is not None
+
+
+# ── 공식 사용량 provider 카드 조립(ADR 0002) ───────────────────────────────────
+# provider 액센트 색은 _TREND_STYLE과 동일 팔레트(추세 범례와 일관). 카드 크롬에만 쓰고
+# 게이지 fill엔 절대 쓰지 않는다 — fill 색은 임계(utilization) 전용.
+_PROVIDER_META = {
+    "claude": {"label": "Claude", "accent": "#cc785c"},   # 코랄(brand)
+    "codex": {"label": "Codex", "accent": "#5db8a6"},      # teal(상태색 회피)
+}
+
+
+def _gauge_level(util: float | None) -> str:
+    """utilization(%) → 임계 클래스. 100%가 사실상 상한이라 경계를 당겨 적색을 살린다.
+
+    <75 ok · 75~90 warn · ≥90 exceeds. (ADR 0002)
+    """
+    u = util or 0.0
+    if u >= 90:
+        return "exceeds"
+    if u >= 75:
+        return "warn"
+    return "ok"
+
+
+def _fresh_label(stale_minutes: int | None) -> str | None:
+    """취득 신선도 문자열. None이면 표시하지 않는다."""
+    if stale_minutes is None:
+        return None
+    if stale_minutes < 1:
+        return "방금"
+    if stale_minutes < 60:
+        return f"{stale_minutes}분 전"
+    if stale_minutes < 1440:
+        return f"{stale_minutes // 60}시간 전"
+    return f"{stale_minutes // 1440}일 전"
+
+
+def _sparkline_points(series, w: float = 120.0, h: float = 28.0) -> str | None:
+    """일별 누적 시계열(DayPoint) → SVG polyline points. 유효 점 2개 미만이면 None."""
+    vals = [p.cumulative_cost for p in series if p.cumulative_cost is not None]
+    if len(vals) < 2:
+        return None
+    lo, hi = min(vals), max(vals)
+    span = (hi - lo) or 1.0
+    pad = 2.0
+    iw, ih = w - 2 * pad, h - 2 * pad
+    n = len(vals)
+    pts = []
+    for i, v in enumerate(vals):
+        x = pad + (i / (n - 1)) * iw
+        y = pad + ih - ((v - lo) / span) * ih
+        pts.append(f"{x:.1f},{y:.1f}")
+    return " ".join(pts)
+
+
+def _gauge_caption(used_usd: float | None, limit_usd: float | None, *,
+                   used_native: float | None = None, limit_native: float | None = None,
+                   native_unit: str = "usd") -> str | None:
+    """USD 한도가 있으면 '$used / $limit'. 없으면(rate-window %) None(게이지 %가 대신 말함).
+
+    credit 버킷(Codex)은 USD가 환산값이라 원본 크레딧을 괄호로 병기한다
+    ('$42.96 / $235 (크레딧 1,074 / 5,875)'). 환산 단가가 바뀌어도 원본이 정본임을 드러낸다.
+    """
+    if used_usd is None or not limit_usd:
+        return None
+    cap = f"${used_usd:,.2f} / ${limit_usd:,.0f}"
+    if native_unit == "credit" and used_native is not None and limit_native:
+        cap += f" (크레딧 {used_native:,.0f} / {limit_native:,.0f})"
+    return cap
+
+
+def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
+    """공식 버킷 dict → 게이지 표시 모델. active 버킷이면 렌즈로 고스트(예측) 채움."""
+    util = b["utilization"] or 0.0
+    used, limit = b["used_usd"], b["limit_usd"]
+    # 리셋/만료 날짜는 모두 sub 한 자리에 표시(정렬 일관). event_credit은 '만료', 그 외는 '리셋'.
+    sub = None
+    if b["resets_at"]:
+        d = b["resets_at"][:10]
+        sub = f"만료 {d}" if b["bucket_kind"] == "event_credit" else f"리셋 {d}"
+
+    # 고스트(예측 렌즈) — active 버킷 + 렌즈 있을 때만. 현재→리셋시 예상 위치를 옅게 연장.
+    # 고스트는 색만으론 의미가 안 와닿으므로 forecast 텍스트를 함께 단다("이 속도면…").
+    ghost_pct = None
+    ghost_warn = False
+    forecast = None
+    lens = view.lens
+    if (lens and lens.daily_rate_usd and limit and used is not None
+            and b["bucket_key"] == view.active_key):
+        days = lens.days_left_to_reset or 0
+        projected = used + lens.daily_rate_usd * days
+        proj_util = projected / limit * 100 if limit else 0.0
+        if proj_util > util:
+            ghost_pct = round(min(proj_util, 100), 1)
+            ghost_warn = bool(lens.dday_warning) or proj_util >= 90
+            if ghost_warn:
+                forecast = "⚠ 이 속도면 리셋 전 소진"
+                if lens.exhaust_date:
+                    forecast += f" (예상 {lens.exhaust_date:%m-%d})"
+            else:
+                forecast = f"이 속도면 리셋 시 ~{round(proj_util)}%"
+
+    return {
+        "label": b["label"],
+        "util": round(util),
+        "fill_pct": round(min(util, 100), 1),
+        "level": _gauge_level(util),
+        "estimated": False,
+        "caption": _gauge_caption(used, limit, used_native=b["used_native"],
+                                  limit_native=b["limit_native"], native_unit=b["native_unit"]),
+        "sub": sub,
+        "ghost_pct": ghost_pct,
+        "ghost_warn": ghost_warn,
+        "forecast": forecast,
+        "exhausted": util >= 100,
+    }
+
+
+def _weekly_gauge(view) -> dict | None:
+    """Codex 주간(월÷4) 추정 게이지. weekly 한도 없으면 None. estimated=True(해치)."""
+    limit = view.weekly_limit_usd
+    if not limit:
+        return None
+    used = view.weekly_used_usd or 0.0
+    util = used / limit * 100 if limit else 0.0
+    sub = f"리셋 {view.weekly_window_end.isoformat()}" if view.weekly_window_end else None
+    return {
+        "label": "이번 주",
+        "util": round(util),
+        "fill_pct": round(min(util, 100), 1),
+        "level": _gauge_level(util),
+        "estimated": True,
+        "caption": _gauge_caption(used, limit),
+        "sub": sub,
+        "ghost_pct": None,
+        "ghost_warn": False,
+        "forecast": None,
+        "exhausted": util >= 100,
+    }
+
+
+def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) -> dict:
+    """OfficialView + fetch 상태 → 카드 1개 표시 모델.
+
+    공식 버킷이 있으면 게이지(만료 버킷 제외) + Codex 주간 추정. fetch 실패면 스탈+경고.
+    공식 데이터가 전혀 없으면 사용량 전용 폴백(로컬 추정 + 스파크라인).
+    """
+    meta = _PROVIDER_META.get(provider, {"label": provider.title(), "accent": "#6c6a64"})
+    fs_status = fetch_state["last_status"] if fetch_state else None
+    note = _remediation(provider, fs_status)
+    has_official = view.status == "ok" and bool(view.buckets)
+
+    gauges: list[dict] = []
+    fallback = None
+    if has_official:
+        for b in view.buckets:
+            # 만료(resets_at 과거) 버킷은 더 이상 actionable이 아니므로 숨긴다.
+            r = parse_ts(b["resets_at"]) if b["resets_at"] else None
+            if r is not None and r < now_kst:
+                continue
+            gauges.append(_bucket_gauge(b, view, now_kst))
+        wk = _weekly_gauge(view)
+        if wk:
+            gauges.append(wk)
+        status = "error" if fs_status in ("auth_error", "http_error") else "ok"
+    else:
+        status = "no_data"
+        fallback = {
+            "estimate_usd": month_spend(conn, provider, now_kst),
+            "spark": _sparkline_points(daily_series(conn, provider, now_kst)),
+        }
+
+    return {
+        "provider": provider,
+        "label": meta["label"],
+        "accent": meta["accent"],
+        "status": status,
+        "fresh": _fresh_label(view.stale_minutes),
+        "note": note,
+        "gauges": gauges,
+        "fallback": fallback,
+    }
+
+
+def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[dict]:
+    """대시보드 공식 사용량 그리드용 provider 카드 리스트.
+
+    표시 대상 = tracked ∪ 공식 스냅샷 있음 ∪ 로컬 데이터 있음. 그 외는 생략.
+    순서는 PROVIDERS 고정(claude→codex→…). 새 provider는 PROVIDERS·_PROVIDER_META만 늘리면 된다.
+    """
+    now = now_kst or datetime.now(KST)
+    ctu = credit_to_usd(config)
+    tracked = set(tracked_providers(config))
+    cards: list[dict] = []
+    for p in PROVIDERS:
+        view = official_view(conn, p, now, ctu)
+        has_official = view.status == "ok" and bool(view.buckets)
+        if p not in tracked and not has_official and not _provider_has_data(conn, p):
+            continue
+        cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now))
+    return cards
 
 
 def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
@@ -108,7 +294,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "month": now.strftime("%Y-%m"),
         "month_total": month_total,
         "claude_official": claude_official, "codex_official": codex_official,
-        "official_fetch": official_fetch_status(conn, config),
+        "official_cards": official_cards(conn, config, now),
         "projects": projects, "sessions": sessions, "insights": coach,
         "daily_labels": [p.day for p in daily],
         "trend_series": trend_series,

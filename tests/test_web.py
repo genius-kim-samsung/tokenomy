@@ -675,11 +675,12 @@ def test_overview_enterprise_claude_dollar_buckets_render(tmp_path, monkeypatch)
     r = client.get("/")
     assert r.status_code == 200
     # cinder_cove 이벤트 크레딧(달러 본체) — 코드네임 비의존 라벨 + USD 게이지
-    assert "포함된 크레딧" in r.text
+    assert "일회성 크레딧" in r.text
     assert "$393.10" in r.text and "1,000" in r.text
-    assert "39% 사용됨" in r.text
-    # spend 월 사용 한도($0/$243) — used 0도 게이지로 렌더
-    assert "월 사용 한도" in r.text and "243" in r.text
+    assert "39%" in r.text                       # 게이지 utilization 표시
+    assert "만료 2026-09-10" in r.text            # 만료일은 라벨이 아니라 sub로 이동
+    # spend 사용 한도(Enterprise) ($0/$243) — used 0도 게이지로 렌더
+    assert "사용 한도(Enterprise)" in r.text and "243" in r.text
 
 
 def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
@@ -694,8 +695,9 @@ def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
     _seed_official(conn, "codex", "codex_enterprise_real.json", parse_codex)
     r = client.get("/")
     assert r.status_code == 200
-    assert "월간 한도" in r.text
+    assert "월간 크레딧 한도" in r.text   # codex_monthly 버킷 라벨(공식 게이지)
     assert "$42.96" in r.text and "235" in r.text
+    assert "크레딧 1,074 / 5,875" in r.text   # USD는 환산값 — 원본 크레딧 병기
     assert "이번 주" in r.text       # 주간(월÷4) 추정 게이지도 렌더
 
 
@@ -777,11 +779,18 @@ def test_settings_post_saves_official_fetch(tmp_path, monkeypatch):
 
 # ── Task 6 TDD: 대시보드 새로고침 버튼 + 취득 상태 표면 ──────────────────────────────
 
-def test_overview_has_refresh_button(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
+def test_overview_has_per_provider_refresh_buttons(tmp_path, monkeypatch):
+    """새로고침은 provider별 카드 안에 — Claude/Codex는 API가 달라 각자 취득한다.
+
+    tracked면 데이터가 없어도(폴백 카드) 카드가 떠서, 각 카드가 자기 provider를
+    hidden 필드로 가진 /official/refresh 폼을 렌더해야 한다(한쪽만 재시도 가능)."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
     r = client.get("/")
     assert r.status_code == 200
     assert 'action="/official/refresh"' in r.text
+    assert 'name="provider" value="claude"' in r.text
+    assert 'name="provider" value="codex"' in r.text
 
 
 def test_overview_shows_auth_error_note(tmp_path, monkeypatch):
