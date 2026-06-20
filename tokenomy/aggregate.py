@@ -404,6 +404,176 @@ def codex_weekly_window(conn) -> tuple[datetime, datetime] | None:
     return ws, ws + timedelta(days=7)
 
 
+# 공식 미러 패널의 버킷 표시 순서(공식 앱 미러).
+_BUCKET_ORDER = {"monthly_limit": 0, "codex_monthly": 0, "event_credit": 1, "promo": 2, "rate_window": 3}
+
+
+@dataclass
+class OfficialLens:
+    """예측 렌즈 — 활성 버킷의 소비 속도/소진예상/리셋 D-day."""
+    bucket_key: str
+    daily_rate_usd: float | None    # USD/영업일. 유효 차분 1개 미만이면 None
+    exhaust_date: date | None
+    days_left_to_reset: int | None  # 현재 주기 리셋까지 영업일
+    dday_warning: bool
+
+
+@dataclass
+class OfficialView:
+    """공식 미러 패널 1개(provider별) — 버킷 + 주기 USD + 예측 렌즈 + 상태."""
+    provider: str
+    buckets: list[dict]                 # 표시용(버킷 행 dict, 표시 순서)
+    active_key: str | None
+    lens: OfficialLens | None
+    period_used_usd: float | None       # 월간(공식). 없으면 None
+    period_limit_usd: float | None
+    weekly_used_usd: float | None       # Codex 주간(로컬 추정). Claude=None
+    weekly_limit_usd: float | None
+    weekly_estimated: bool
+    weekly_window_end: date | None
+    fetched_at: str | None
+    stale_minutes: int | None
+    status: str                         # "ok" | "no_data" | fetch_state.last_status
+    note: str | None
+
+
+def _row_to_bucket_dict(r) -> dict:
+    """official_buckets 행 → 표시용 dict(resets_at은 ISO 문자열)."""
+    d = dict(r)
+    return {
+        "bucket_key": d["bucket_key"], "raw_key": d["raw_key"], "bucket_kind": d["bucket_kind"],
+        "label": d["label"], "native_unit": d["native_unit"],
+        "used_native": d["used_native"], "limit_native": d["limit_native"],
+        "remaining_native": d["remaining_native"],
+        "used_usd": d["used_usd"], "limit_usd": d["limit_usd"], "remaining_usd": d["remaining_usd"],
+        "utilization": d["utilization"], "resets_at": d["resets_at"],
+    }
+
+
+def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
+                      limit_usd: float | None, used_usd: float | None,
+                      reset_date: date | None) -> OfficialLens | None:
+    """official_bucket_series의 단조 증가 차분으로 일일 소비속도·소진예상·리셋 D-day 산출.
+
+    음수 차분(리셋/만료)·30분 미만 간격은 버린다. 유효 차분이 없으면 daily_rate=None.
+    """
+    from tokenomy.db import official_bucket_series
+
+    series = official_bucket_series(conn, provider, bucket_key)
+    pts = []
+    for r in series:
+        dt = parse_ts(r["fetched_at"])
+        if dt is not None and r["used_usd"] is not None:
+            pts.append((dt, r["used_usd"]))
+    pts.sort(key=lambda x: x[0])
+
+    rate: float | None = None
+    if len(pts) >= 2:
+        first_dt, first_u = pts[0]
+        last_dt, last_u = pts[-1]
+        delta = last_u - first_u
+        bdays = business_days_between(first_dt.date(), last_dt.date())
+        if delta > 0 and bdays > 0 and (last_dt - first_dt) >= timedelta(minutes=30):
+            rate = round(delta / bdays, 4)
+
+    exhaust_date: date | None = None
+    if rate and limit_usd and used_usd is not None and limit_usd > used_usd:
+        need = math.ceil((limit_usd - used_usd) / rate)
+        exhaust_date = add_business_days(now_kst.date(), need)
+
+    days_left = business_days_between(now_kst.date(), reset_date) if reset_date else None
+    dday = bool((exhaust_date is not None and reset_date is not None and exhaust_date < reset_date)
+                or (limit_usd and used_usd is not None and used_usd / limit_usd >= 0.80))
+    return OfficialLens(bucket_key=bucket_key, daily_rate_usd=rate, exhaust_date=exhaust_date,
+                        days_left_to_reset=days_left, dday_warning=dday)
+
+
+def official_view(conn, provider: str, now_kst: datetime, budget: Budget,
+                  credit_to_usd: float, *, budget_start: datetime | None = None) -> OfficialView:
+    """공식 미러 패널 컨텍스트. 최신 스냅샷(공식) + 로컬 주간 윈도우(Codex)를 합친다.
+
+    - period_used/limit = 월간 버킷(공식 ground truth). 없으면 None.
+    - Codex weekly_used = 로컬 CLI 첫-사용 7일 윈도우 합(추정), weekly_limit = 공식 월÷4 또는 budget.codex÷4.
+    - Claude 월 버킷 resets_at None은 다음 달 경계(KST)로 채운다.
+    - 활성 버킷 = series 양의 차분이 가장 큰 것(동률은 [event,monthly] tie-break),
+      차분 없으면 차감 순서 remaining>0 첫 버킷. promo/rate_window/stale은 후보 제외.
+    """
+    from tokenomy.db import latest_official_snapshot, get_fetch_state
+
+    rows = latest_official_snapshot(conn, provider)
+    fetched_at = rows[0]["fetched_at"] if rows else None
+    _, next_month = month_bounds(now_kst)
+
+    buckets = [_row_to_bucket_dict(r) for r in rows]
+    # Claude 월 버킷 resets_at 보강(다음 달 경계)
+    for b in buckets:
+        if b["bucket_kind"] in ("monthly_limit", "codex_monthly") and not b["resets_at"]:
+            b["resets_at"] = next_month.isoformat()
+    buckets.sort(key=lambda b: _BUCKET_ORDER.get(b["bucket_kind"], 9))
+
+    monthly = next((b for b in buckets if b["bucket_kind"] in ("monthly_limit", "codex_monthly")), None)
+    period_used = monthly["used_usd"] if monthly else None
+    period_limit = monthly["limit_usd"] if monthly else None
+
+    # staleness(분)
+    stale_minutes = None
+    if fetched_at:
+        dt = parse_ts(fetched_at)
+        if dt is not None:
+            stale_minutes = max(0, int((now_kst - dt).total_seconds() // 60))
+
+    # 상태
+    if rows:
+        status = "ok"
+    else:
+        st = get_fetch_state(conn, provider)
+        status = st["last_status"] if st else "no_data"
+
+    # Codex 주간(로컬 추정)
+    weekly_used = weekly_limit = None
+    weekly_estimated = False
+    weekly_end: date | None = None
+    if provider == "codex":
+        win = codex_weekly_window(conn)
+        if win is not None:
+            ws, we = win
+            wrows = _range_rows(conn, "codex", ws, we)
+            weekly_used = round(sum((r["cost_usd"] or 0) for r in wrows), 4)
+            weekly_estimated = True
+            weekly_end = we.date()
+        # 주간 한도 = 공식 월 한도÷4(있으면) 아니면 budget.codex÷4
+        if period_limit:
+            weekly_limit = round(period_limit / 4, 4)
+        elif budget.codex:
+            weekly_limit = round(budget.codex / 4, 4)
+
+    # 활성 버킷 + 렌즈
+    active_key = None
+    lens = None
+    candidates = [b for b in buckets if b["bucket_kind"] in
+                  ("monthly_limit", "event_credit", "codex_monthly")]
+    if candidates:
+        # 차감 순서 tie-break: event 먼저, 그다음 monthly
+        order = {"event_credit": 0, "monthly_limit": 1, "codex_monthly": 1}
+        candidates.sort(key=lambda b: order.get(b["bucket_kind"], 9))
+        active = next((b for b in candidates if (b["remaining_usd"] or 0) > 0), candidates[0])
+        active_key = active["bucket_key"]
+        reset_date = parse_ts(active["resets_at"]).date() if active["resets_at"] else None
+        if provider == "codex":
+            reset_date = weekly_end or reset_date
+        lens = _lens_from_series(conn, provider, active_key, now_kst,
+                                 active["limit_usd"], active["used_usd"], reset_date)
+
+    note = None if rows else "공식 미취득 — 로컬 추정(USD)"
+    return OfficialView(
+        provider=provider, buckets=buckets, active_key=active_key, lens=lens,
+        period_used_usd=period_used, period_limit_usd=period_limit,
+        weekly_used_usd=weekly_used, weekly_limit_usd=weekly_limit,
+        weekly_estimated=weekly_estimated, weekly_window_end=weekly_end,
+        fetched_at=fetched_at, stale_minutes=stale_minutes, status=status, note=note,
+    )
+
+
 def codex_burndown(conn, budget: Budget, now_kst: datetime,
                    *, budget_start: datetime | None = None) -> CodexBurndown:
     """Codex 주간 누적(carryover) 번다운을 산출한다.

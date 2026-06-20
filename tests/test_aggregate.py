@@ -1675,3 +1675,91 @@ def test_codex_weekly_window_none_without_usage():
     conn = connect(":memory:")
     _insert(conn, "2026-06-08T01:00:00Z", 5.0, provider="claude", session="a")  # claude만
     assert codex_weekly_window(conn) is None
+
+
+# --- Task 5: official_view (Claude 버킷 + Codex 2게이지 + 예측 렌즈) ---
+
+from tokenomy.aggregate import official_view, OfficialView
+from tokenomy.db import insert_official_buckets
+from tokenomy.official_parser import OfficialBucket
+
+
+def _ob(key, kind, used_usd, limit_usd, raw="r", unit="usd", util=0.0, resets=None):
+    return OfficialBucket(
+        bucket_key=key, raw_key=raw, bucket_kind=kind, label=key, native_unit=unit,
+        used_native=used_usd, limit_native=limit_usd,
+        remaining_native=(limit_usd - used_usd) if limit_usd else None,
+        used_usd=used_usd, limit_usd=limit_usd,
+        remaining_usd=(limit_usd - used_usd) if limit_usd else None,
+        utilization=util, resets_at=resets,
+    )
+
+
+def test_official_view_no_data_status():
+    conn = connect(":memory:")
+    v = official_view(conn, "claude", NOW, Budget(claude=100, codex=50), 0.04)
+    assert isinstance(v, OfficialView)
+    assert v.status == "no_data"
+    assert v.buckets == []
+
+
+def test_official_view_claude_monthly_period():
+    conn = connect(":memory:")
+    insert_official_buckets(
+        conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+        buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
+                 _ob("event", "event_credit", 125.0, 500.0, raw="cinder")],
+        created_at="2026-06-10T09:00:00+09:00",
+    )
+    v = official_view(conn, "claude", NOW, Budget(claude=100, codex=50), 0.04)
+    assert v.status == "ok"
+    assert v.period_used_usd == 30.0 and v.period_limit_usd == 100.0
+    assert {b["bucket_key"] for b in v.buckets} == {"monthly", "event"}
+    # 월 버킷 resets_at은 다음 달 경계로 채워짐
+    monthly = next(b for b in v.buckets if b["bucket_key"] == "monthly")
+    assert monthly["resets_at"].startswith("2026-07-01")
+
+
+def test_official_view_codex_weekly_from_local():
+    conn = connect(":memory:")
+    # 로컬 Codex 사용(주간 used 근거)
+    _insert(conn, "2026-06-09T01:00:00Z", 12.0, provider="codex", session="a")
+    # 공식 월간 한도(주간 한도 = 80/4 = 20)
+    insert_official_buckets(
+        conn, provider="codex", fetched_at="2026-06-10T09:00:00+09:00",
+        buckets=[_ob("monthly", "codex_monthly", 20.0, 80.0, raw="individual_limit",
+                     unit="credit", util=25.0)],
+        created_at="2026-06-10T09:00:00+09:00",
+    )
+    now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
+    v = official_view(conn, "codex", now, Budget(claude=100, codex=50), 0.04)
+    assert v.period_used_usd == 20.0 and v.period_limit_usd == 80.0  # 월간(공식)
+    assert v.weekly_limit_usd == 20.0      # 공식 월 한도 80 ÷ 4
+    assert v.weekly_used_usd == 12.0       # 로컬 윈도우 합(첫 사용 6/9~)
+    assert v.weekly_estimated is True
+
+
+def test_official_view_codex_weekly_fallback_budget():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-09T01:00:00Z", 5.0, provider="codex", session="a")
+    now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
+    # 공식 없음 → 주간 한도 = budget.codex(50) ÷ 4 = 12.5, 월간은 no_data
+    v = official_view(conn, "codex", now, Budget(claude=100, codex=50), 0.04)
+    assert v.weekly_limit_usd == 12.5
+    assert v.weekly_used_usd == 5.0
+    assert v.period_used_usd is None       # 공식 월간 없음
+
+
+def test_official_view_lens_from_series():
+    conn = connect(":memory:")
+    # 두 스냅샷(차분 → 일일 소비속도). 6/8 used 10 → 6/10 used 30, 2영업일 차분 20 → 10/영업일
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-08T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 10.0, 100.0, raw="spend")],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")],
+                            created_at="x")
+    v = official_view(conn, "claude", NOW, Budget(claude=100, codex=50), 0.04)
+    assert v.lens is not None
+    assert v.lens.daily_rate_usd == 10.0   # (30-10) / 2 영업일
+    assert v.active_key == "monthly"
