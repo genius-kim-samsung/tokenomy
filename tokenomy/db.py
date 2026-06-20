@@ -505,6 +505,7 @@ def official_bucket_series(conn, provider: str, bucket_key: str) -> list:
 
 
 def get_fetch_state(conn, provider: str):
+    """공식 사용량 취득 상태 조회."""
     return conn.execute(
         "SELECT * FROM official_fetch_state WHERE provider=?", (provider,)
     ).fetchone()
@@ -513,6 +514,7 @@ def get_fetch_state(conn, provider: str):
 def upsert_fetch_state(conn, provider: str, *, last_attempt_at: str | None,
                        last_success_at: str | None, last_status: str,
                        last_error: str | None) -> None:
+    """공식 사용량 취득 상태 갱신. 실패(non-ok) 시 last_success_at을 COALESCE로 보존."""
     conn.execute(
         "INSERT INTO official_fetch_state "
         "(provider, last_attempt_at, last_success_at, last_status, last_error) "
@@ -524,3 +526,4 @@ def upsert_fetch_state(conn, provider: str, *, last_attempt_at: str | None,
         (provider, last_attempt_at, last_success_at, last_status, last_error),
     )
     conn.commit()
+

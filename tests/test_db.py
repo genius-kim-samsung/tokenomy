@@ -2,6 +2,7 @@ import json
 
 from tokenomy.db import (
     connect,
+    get_fetch_state,
     ingest_records,
     ingest_root,
     ingest_titles,
@@ -9,6 +10,7 @@ from tokenomy.db import (
     latest_official,
     official_series,
     set_user,
+    upsert_fetch_state,
 )
 from tokenomy.parser import UsageRecord
 
@@ -586,3 +588,17 @@ def test_fetch_state_roundtrip():
                        last_status="ok", last_error=None)
     st = get_fetch_state(conn, "claude")
     assert st["last_status"] == "ok"
+
+
+def test_fetch_state_preserves_success_on_failure():
+    conn = connect(":memory:")
+    # 성공 1회 기록
+    upsert_fetch_state(conn, "claude", last_attempt_at="t1", last_success_at="t1",
+                       last_status="ok", last_error=None)
+    # 이후 실패(성공 시각 없음) → last_success_at은 직전 성공값 보존, 상태만 갱신
+    upsert_fetch_state(conn, "claude", last_attempt_at="t2", last_success_at=None,
+                       last_status="auth_error", last_error="401")
+    st = get_fetch_state(conn, "claude")
+    assert st["last_status"] == "auth_error"
+    assert st["last_success_at"] == "t1"   # COALESCE로 보존
+    assert st["last_attempt_at"] == "t2"
