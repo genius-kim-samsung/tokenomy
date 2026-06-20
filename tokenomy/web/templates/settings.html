@@ -10,6 +10,8 @@
     <label>Codex (USD) <input type="number" step="0.01" min="0" name="codex" value="{{ '%.2f'|format(codex) }}"></label>
     <label>예산 도입일 <input type="date" name="budget_start" value="{{ budget_start }}"></label>
     <p class="muted">도입일을 지정하면 그 날짜부터 예산을 계산합니다(이전 지출 제외). 비우면 매월 1일 기준.</p>
+    <label>credit_to_usd <span class="muted">(크레딧→USD 환산, 기본 0.04)</span>
+      <input type="number" step="0.001" min="0" name="credit_to_usd" value="{{ credit_to_usd }}"></label>
     <button class="btn" type="submit">저장</button>
   </form>
   <p class="disclaimer">ⓘ 값은 로컬 config(tokenomy.config.json)에만 저장됩니다.</p>

@@ -24,35 +24,58 @@
   {% endif %}
 </section>
 
-{% if claude_bd.limit > 0 %}
+{# 공식 미러 패널 — USD 1차. 공식 ground truth + 토크노미 예측 렌즈 #}
 <section class="card">
-  <h2>Claude 회사 월 할당 <span class="muted">· D-day 게이지</span></h2>
-  <p class="total-num serif">${{ '{:,.2f}'.format(gauge.spent) }}
-    <span class="ai-denom">/ ${{ '{:,.0f}'.format(gauge.limit) }}</span></p>
-  <span class="bar"><span class="fill s-{{ gauge.status }}" style="width: {{ [gauge.pct * 100, 100]|min }}%"></span></span>
-  <p class="muted">{{ '%.0f'|format(gauge.pct * 100) }}% 사용 · 남은 영업일 {{ gauge.business_days_left }}일{% if gauge.exhaust_date %} · 현 추세 소진 예상 {{ gauge.exhaust_date }}{% endif %}</p>
+  <h2>공식 사용량 <span class="muted">· 공식 앱 미러 + 예측</span></h2>
 
-  {% if gauge.dday_warning %}
-  <div class="banner error">⚠ D-day 경고 —
-    {% if gauge.exhaust_date %}현 추세로 {{ gauge.exhaust_date }} 소진, 월말까지 약 {{ gauge.idle_business_days }}영업일 토큰 공백 예상{% else %}잔량 {{ '%.0f'|format((1 - gauge.pct) * 100) }}% — 곧 소진{% endif %}</div>
+  {# Claude — 버킷(월 한도 → 이벤트 → 프로모션 → 이용률 창) #}
+  {% if claude_official.status == "ok" %}
+  <div class="official-provider">
+    <h3>Claude</h3>
+    {% for b in claude_official.buckets %}
+    <div class="official-bucket">
+      <div class="ai-name">{{ b.label }}
+        {% if b.native_unit == "percent" %}<span class="muted">· {{ '%.0f'|format(b.utilization) }}% 사용됨</span>{% endif %}</div>
+      {% if b.used_usd is not none and b.limit_usd %}
+        <div class="ai-num">${{ '{:,.2f}'.format(b.used_usd) }} <span class="ai-denom">/ ${{ '{:,.0f}'.format(b.limit_usd) }}</span></div>
+        <span class="bar"><span class="fill s-ok" style="width: {{ [b.utilization, 100]|min }}%"></span></span>
+        <div class="muted">{{ '%.0f'|format(b.utilization) }}% 사용됨{% if b.resets_at %} · 리셋 {{ b.resets_at[:10] }}{% endif %} · <span class="src-official">공식</span></div>
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% if claude_official.lens and claude_official.lens.daily_rate_usd is not none %}
+    <p class="muted">예측: ${{ '%.2f'|format(claude_official.lens.daily_rate_usd) }}/영업일{% if claude_official.lens.exhaust_date %} · 소진 예상 {{ claude_official.lens.exhaust_date }}{% endif %}</p>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="muted">Claude 공식 미취득 — 로컬 추정 ${{ '{:,.2f}'.format(claude_bd.spent) }} <span class="src-est">추정</span></p>
   {% endif %}
 
-  <p class="muted">{% if gauge.official_spent is not none %}공식 ${{ '{:,.2f}'.format(gauge.official_spent) }} · {% endif %}로컬 추정 ${{ '{:,.2f}'.format(gauge.cli_spent) }}{% if gauge.missing_delta > 0 %} · 누락 ${{ '{:,.2f}'.format(gauge.missing_delta) }} (웹/앱 등 미포함){% endif %}</p>
-
-  {% if official_notes %}
-  <ul class="coach">
-    {% for n in official_notes %}<li class="lvl-{{ n.level }}">{{ n.text }}</li>{% endfor %}
-  </ul>
-  {% endif %}
-
-  <form method="post" action="/official" class="settings">
-    <label>공식 사용량 입력 <span class="muted">(회사 화면의 이번 달 누적 $)</span>
-      <input type="number" step="0.01" min="0" name="official_claude" placeholder="예: 1234.56"></label>
-    <button class="btn" type="submit">공식 사용량 저장</button>
-  </form>
-  <p class="disclaimer">ⓘ 입력 시점별로 누적 저장됩니다 · 게이지는 공식과 로컬 추정 중 큰 값을 사용합니다.</p>
+  {# Codex — 월간(공식) + 주간(예측) 2게이지 #}
+  <div class="official-provider">
+    <h3>Codex</h3>
+    {% if codex_official.period_limit_usd %}
+    <div class="official-bucket">
+      <div class="ai-name">월간 한도 <span class="muted">· 공식</span></div>
+      <div class="ai-num">${{ '{:,.2f}'.format(codex_official.period_used_usd) }} <span class="ai-denom">/ ${{ '{:,.0f}'.format(codex_official.period_limit_usd) }}</span></div>
+      <span class="bar"><span class="fill s-ok" style="width: {{ [codex_official.period_used_usd / codex_official.period_limit_usd * 100, 100]|min if codex_official.period_limit_usd else 0 }}%"></span></span>
+      <div class="muted"><span class="src-official">공식</span></div>
+    </div>
+    {% endif %}
+    {% if codex_official.weekly_limit_usd %}
+    <div class="official-bucket">
+      <div class="ai-name">이번 주 <span class="muted">· 예측(월÷4)</span></div>
+      <div class="ai-num">${{ '{:,.2f}'.format(codex_official.weekly_used_usd or 0) }} <span class="ai-denom">/ ${{ '{:,.0f}'.format(codex_official.weekly_limit_usd) }}</span></div>
+      <span class="bar"><span class="fill s-ok" style="width: {{ [(codex_official.weekly_used_usd or 0) / codex_official.weekly_limit_usd * 100, 100]|min }}%"></span></span>
+      <div class="muted">{% if codex_official.weekly_window_end %}리셋 {{ codex_official.weekly_window_end }} · {% endif %}<span class="src-est">추정</span></div>
+    </div>
+    {% endif %}
+    {% if not codex_official.period_limit_usd and not codex_official.weekly_limit_usd %}
+    <p class="muted">Codex 공식·로컬 데이터 없음</p>
+    {% endif %}
+  </div>
+  <p class="disclaimer">ⓘ <span class="src-official">공식</span>=API ground truth · <span class="src-est">추정</span>=로컬 CLI 토큰단가</p>
 </section>
-{% endif %}
 
 <section class="card">
   <h2>AI별 사용 현황</h2>

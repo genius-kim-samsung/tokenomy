@@ -7,11 +7,13 @@ from tokenomy.aggregate import (
     KST, DIM_COLUMNS, DateGroup, DaySessionRow, FolderGroup, burndown,
     by_day_session, by_dimension, by_project, by_session, codex_burndown,
     combined_burndown, daily_series, insights, month_bounds,
-    official_merged_burndown, period_bounds,
+    official_view, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
 )
-from tokenomy.budget import budget_from_config, budget_start_kst, load_config, user_label
+from tokenomy.budget import (
+    budget_from_config, budget_start_kst, credit_to_usd, load_config, user_label,
+)
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 
 _SORT_KEYS = {
@@ -35,56 +37,21 @@ def _provider_has_data(conn, provider: str) -> bool:
     return row is not None and row["t"] is not None
 
 
-def _official_notes(merged) -> list[dict]:
-    """공식 사용량 상태 안내 노트. 부풀리지 않고 사실 그대로 + 입력 유도(설계 5).
-
-    - 미입력: 입력 유도(웹/앱 포함 정확도↑)
-    - 공식<CLI: 오입력/지연 주의
-    - staleness: 최근 N일 웹/앱 미반영 → 실사용은 더 높을 수 있음 + 업데이트 유도
-    """
-    notes: list[dict] = []
-    if merged.official_spent is None:
-        notes.append({"level": "info",
-                      "text": "공식 사용량 미입력 — 회사 화면의 이번 달 누적액을 입력하면 "
-                              "웹/앱 포함 실사용에 맞춰집니다."})
-        return notes
-    if merged.official_lt_cli:
-        notes.append({"level": "warn",
-                      "text": "공식 입력값이 로컬 추정보다 작습니다 — 입력값을 확인하세요."})
-    if merged.stale_days and merged.stale_days >= 1:
-        notes.append({"level": "info",
-                      "text": f"최근 {merged.stale_days}일치 웹/앱 사용이 공식에 미반영 — "
-                              "실사용은 더 높을 수 있습니다. 공식 사용량을 업데이트해주세요."})
-    return notes
-
-
-def _gauge(merged) -> dict:
-    """히어로 D-day 연료 게이지 컨텍스트(Claude 회사 할당 기준). merged.burndown을 평탄화."""
-    bd = merged.burndown
-    return {
-        "pct": bd.pct, "spent": bd.spent, "limit": bd.limit, "status": bd.status,
-        "dday_warning": bd.dday_warning,
-        "exhaust_date": bd.exhaust_date.isoformat() if bd.exhaust_date else None,
-        "business_days_left": bd.business_days_left,
-        "idle_business_days": bd.idle_business_days,
-        "official_spent": merged.official_spent, "cli_spent": merged.cli_spent,
-        "missing_delta": merged.missing_delta, "official_lt_cli": merged.official_lt_cli,
-        "stale_days": merged.stale_days,
-    }
-
-
 def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     now = now_kst or datetime.now(KST)
     config = load_config()
     budget = budget_from_config(config)
     bs = budget_start_kst(config)
 
-    # 게이지(히어로) = Claude 회사 월 할당 기준. 공식 사용량을 max 병합해 웹/앱 누락을 줄인다.
-    # 공식 입력은 Claude-only(Codex 공식 기능 미출시) — Codex는 아래 별도 섹션.
-    claude_merged = official_merged_burndown(conn, budget, now, "claude", budget_start=bs)
-    claude_bd = claude_merged.burndown
+    # 카드 번다운(로컬 추정). 공식 ground truth는 아래 공식 미러 패널이 별도로 보여준다.
+    claude_bd = burndown(conn, budget, now, "claude", budget_start=bs)
     codex_bd = codex_burndown(conn, budget, now, budget_start=bs)
     month_total = round(claude_bd.spent + codex_bd.spent, 4)
+
+    # 공식 미러 패널(provider별) — USD 1차. Claude=버킷, Codex=월간+주간 2게이지.
+    ctu = credit_to_usd(config)
+    claude_official = official_view(conn, "claude", now, budget, ctu, budget_start=bs)
+    codex_official = official_view(conn, "codex", now, budget, ctu, budget_start=bs)
 
     # 히어로 통합 사용률(총지출/총예산). 두 provider 모두 월 예산이 설정된 경우만 노출한다
     # (한쪽만이면 통합 분모가 불완전 → 금액만 표시). codex를 월간 Burndown으로 변환해
@@ -133,7 +100,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "month": now.strftime("%Y-%m"),
         "claude_bd": claude_bd, "codex_bd": codex_bd, "month_total": month_total,
         "combined_bd": combined_bd, "both_budgeted": both_budgeted,
-        "gauge": _gauge(claude_merged), "official_notes": _official_notes(claude_merged),
+        "claude_official": claude_official, "codex_official": codex_official,
         "claude_has_data": _provider_has_data(conn, "claude"),
         "codex_has_data": _provider_has_data(conn, "codex"),
         "projects": projects, "sessions": sessions, "insights": coach,

@@ -543,54 +543,6 @@ def test_overview_context_no_budget_unconfigured(monkeypatch, tmp_path):
     assert ctx["claude_bd"].limit == 0
 
 
-def test_overview_context_gauge_merges_official(monkeypatch, tmp_path):
-    cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
-    conn = connect(":memory:")
-    _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=30.0)
-    insert_official_snapshot(
-        conn, provider="claude", target_month="2026-06", cumulative_usd=45.0,
-        snapshot_ts="2026-06-14T09:00:00+09:00", created_at="2026-06-14T09:00:00+09:00",
-    )
-    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)   # 6/15
-    g = ctx["gauge"]
-    assert g["official_spent"] == 45.0
-    assert g["cli_spent"] == 30.0
-    assert g["spent"] == 45.0              # max(45, 30) 병합
-    assert g["missing_delta"] == 15.0
-    assert g["stale_days"] == 1            # 6/14 입력 → 6/15
-    assert ctx["claude_bd"].spent == 45.0  # 병합값이 번다운에도 반영
-    # staleness 경고 노트(웹/앱 미반영) 노출
-    assert any("미반영" in n["text"] for n in ctx["official_notes"])
-
-
-def test_overview_context_no_official_shows_input_prompt(monkeypatch, tmp_path):
-    cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
-    conn = connect(":memory:")
-    _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=30.0)
-    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
-    assert ctx["gauge"]["official_spent"] is None
-    assert any("미입력" in n["text"] for n in ctx["official_notes"])
-
-
-def test_overview_context_official_lower_than_cli_warns(monkeypatch, tmp_path):
-    cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
-    conn = connect(":memory:")
-    _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=60.0)
-    insert_official_snapshot(
-        conn, provider="claude", target_month="2026-06", cumulative_usd=40.0,
-        snapshot_ts="2026-06-15T09:00:00+09:00", created_at="2026-06-15T09:00:00+09:00",
-    )
-    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
-    assert ctx["gauge"]["spent"] == 60.0           # max → CLI 유지
-    assert ctx["gauge"]["official_lt_cli"] is True
-    assert any("확인" in n["text"] for n in ctx["official_notes"])
-
 
 # ─── period_bounds: 일/주/월 경계 + 라벨 ──────────────────────────────────────
 

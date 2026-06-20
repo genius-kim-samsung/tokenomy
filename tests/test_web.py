@@ -171,33 +171,6 @@ def test_official_post_rejects_non_numeric(tmp_path, monkeypatch):
     assert conn.execute("SELECT COUNT(*) c FROM official_usage").fetchone()["c"] == 0
 
 
-def test_dashboard_shows_dday_gauge_and_official_form(tmp_path, monkeypatch):
-    client, cfg = _client_with_config(tmp_path, monkeypatch)
-    cfg.write_text('{"budget": {"claude": 100, "codex": 0}}', encoding="utf-8")
-    conn = connect(str(tmp_path / "t.db"))
-    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
-                 "VALUES ('a','claude','s1','2026-06-10T10:00:00Z',30.0,1)")
-    conn.commit()
-    r = client.get("/")
-    assert r.status_code == 200
-    assert 'name="official_claude"' in r.text     # 공식 사용량 입력 폼
-    assert "공식 사용량" in r.text
-
-
-def test_official_input_then_gauge_reflects_merge(tmp_path, monkeypatch):
-    """critical path: 공식 입력 → max 병합 → 게이지가 병합값·누락분 표시."""
-    client, cfg = _client_with_config(tmp_path, monkeypatch)
-    cfg.write_text('{"budget": {"claude": 1000, "codex": 0}}', encoding="utf-8")
-    conn = connect(str(tmp_path / "t.db"))
-    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
-                 "VALUES ('a','claude','s1','2026-06-10T10:00:00Z',100.0,1)")
-    conn.commit()
-    client.post("/official", data={"official_claude": "250"})   # 공식 누적 250 입력
-    r = client.get("/")
-    assert r.status_code == 200
-    assert "250.00" in r.text       # 게이지 spent = max(250, 100)
-    assert "150.00" in r.text       # 누락분 = 250 - 100 (웹/앱 등 CLI 미포함)
-
 
 def test_dashboard_shows_onboarding_when_no_budget(tmp_path, monkeypatch):
     client, _ = _client_with_config(tmp_path, monkeypatch)  # config 없음 → 예산 0
@@ -751,3 +724,55 @@ def test_coverage_card_context_injected_pricing():
     # gpt-5.5가 주입 pricing의 'gpt-5'에 부분일치 → 버전경계 의심
     assert ctx["coverage_status"][0] == "info"
     assert "gpt-5.5" in ctx["coverage_suspects"]
+
+
+# ── Task 6+7 TDD 신규 테스트 ──────────────────────────────────────────────────
+
+def test_overview_context_keys(tmp_path, monkeypatch):
+    """overview_context가 claude_official/codex_official을 반환하고 gauge/official_notes는 없어야 한다."""
+    from tokenomy.web.views import overview_context
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    ctx = overview_context(conn, "cost")
+    assert "claude_official" in ctx and "codex_official" in ctx
+    assert "gauge" not in ctx and "official_notes" not in ctx
+
+
+def test_overview_has_official_panels(tmp_path, monkeypatch):
+    """대시보드에 수동 입력 폼(/official)이 없어야 한다."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+                 "VALUES ('a','codex','s1','p','2026-06-10T10:00:00Z','gpt-5.5',5.0,1)")
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'action="/official"' not in r.text
+    assert "공식 사용량 입력" not in r.text
+
+
+def test_overview_official_panel_renders(tmp_path, monkeypatch):
+    """공식 버킷을 삽입하면 공식 미러 패널이 렌더링되어야 한다."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    from tokenomy.db import insert_official_buckets
+    from tokenomy.official_parser import OfficialBucket
+    conn_b = OfficialBucket(
+        bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit", label="월 사용 한도",
+        native_unit="usd", used_native=30.0, limit_native=100.0, remaining_native=70.0,
+        used_usd=30.0, limit_usd=100.0, remaining_usd=70.0, utilization=30.0, resets_at=None,
+    )
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[conn_b], created_at="2026-06-10T09:00:00+09:00")
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'action="/official"' not in r.text     # 수동 입력 폼 제거
+    assert "공식" in r.text                         # 공식 미러 패널 노출
+
+
+def test_settings_shows_credit_to_usd(tmp_path, monkeypatch):
+    """설정 페이지에 credit_to_usd 입력 필드가 있어야 한다."""
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert "credit_to_usd" in r.text or "크레딧" in r.text

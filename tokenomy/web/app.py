@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
 from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
-from tokenomy.budget import budget_from_config, load_config, save_config
+from tokenomy.budget import budget_from_config, credit_to_usd as _credit_to_usd, load_config, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect, insert_official_snapshot
 from tokenomy.paths import resource_path
@@ -149,6 +149,7 @@ def settings_get(request: Request):
         request, "settings.html",
         {"claude": budget.claude, "codex": budget.codex,
          "budget_start": config.get("budget_start") or "",
+         "credit_to_usd": _credit_to_usd(config),
          "active_nav": "settings", "update_tag": check_update(conn),
          "last_ts": last["t"] if last and last["t"] else None,
          **coverage_card_context(conn, pricing)},
@@ -175,11 +176,13 @@ def _valid_date_or_none(value: str | None) -> str | None:
 
 @app.post("/settings")
 def settings_post(claude: str = Form(""), codex: str = Form(""),
-                  budget_start: str = Form("")):
+                  budget_start: str = Form(""), credit_to_usd: str = Form("")):
     config = load_config()
     config["budget"]["claude"] = _to_float(claude)
     config["budget"]["codex"] = _to_float(codex)
     config["budget_start"] = _valid_date_or_none(budget_start)
+    ctu = _to_float(credit_to_usd)
+    config["credit_to_usd"] = ctu if ctu > 0 else 0.04
     save_config(config)
     return RedirectResponse("/", status_code=303)
 

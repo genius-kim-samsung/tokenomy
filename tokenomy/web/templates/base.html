@@ -12,10 +12,6 @@
     <main class="content">
       {% if notice == "ingest-failed" %}
       <div class="banner error">새로고침(ingest) 중 오류 — 기존 데이터를 표시합니다.</div>
-      {% elif notice == "official-saved" %}
-      <div class="banner">공식 사용량을 저장했습니다.</div>
-      {% elif notice == "official-invalid" %}
-      <div class="banner error">공식 사용량 입력값이 올바르지 않습니다 — 0 이상 숫자를 입력하세요.</div>
       {% endif %}
       {% block body %}{% endblock %}
     </main>
