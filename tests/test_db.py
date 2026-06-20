@@ -521,3 +521,68 @@ def test_official_usage_table_created_on_legacy_db(tmp_path):
         snapshot_ts="2026-06-19T09:00:00+09:00", created_at="2026-06-19T09:00:00+09:00",
     )
     assert latest_official(conn, "claude", "2026-06")["cumulative_usd"] == 10.0
+
+
+from tokenomy.db import (
+    insert_official_buckets, latest_official_snapshot,
+    official_bucket_series, get_fetch_state, upsert_fetch_state,
+)
+from tokenomy.official_parser import OfficialBucket
+
+
+def _bucket(key, used_usd, limit_usd, raw_key="r"):
+    return OfficialBucket(
+        bucket_key=key, raw_key=raw_key, bucket_kind="monthly_limit", label="L",
+        native_unit="usd", used_native=used_usd, limit_native=limit_usd,
+        remaining_native=limit_usd - used_usd, used_usd=used_usd, limit_usd=limit_usd,
+        remaining_usd=limit_usd - used_usd, utilization=0.0, resets_at=None,
+    )
+
+
+def test_official_buckets_insert_and_latest():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-20T10:00:00+09:00",
+                            buckets=[_bucket("monthly", 30.0, 100.0), _bucket("event", 125.0, 500.0, "cinder")],
+                            created_at="2026-06-20T10:00:00+09:00")
+    rows = latest_official_snapshot(conn, "claude")
+    assert len(rows) == 2
+    assert {r["bucket_key"] for r in rows} == {"monthly", "event"}
+
+
+def test_official_buckets_latest_picks_newest_fetch():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-20T10:00:00+09:00",
+                            buckets=[_bucket("monthly", 30.0, 100.0)], created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-20T12:00:00+09:00",
+                            buckets=[_bucket("monthly", 40.0, 100.0)], created_at="x")
+    rows = latest_official_snapshot(conn, "claude")
+    assert len(rows) == 1
+    assert rows[0]["used_usd"] == 40.0     # 최신 스냅샷만
+
+
+def test_official_buckets_idempotent_refresh():
+    conn = connect(":memory:")
+    for _ in range(2):  # 같은 fetched_at·bucket_key 재삽입 → 멱등(중복 행 없음)
+        insert_official_buckets(conn, provider="claude", fetched_at="2026-06-20T10:00:00+09:00",
+                                buckets=[_bucket("monthly", 30.0, 100.0)], created_at="x")
+    count = conn.execute("SELECT COUNT(*) c FROM official_buckets").fetchone()["c"]
+    assert count == 1
+
+
+def test_official_bucket_series_ordered():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-20T12:00:00+09:00",
+                            buckets=[_bucket("monthly", 40.0, 100.0)], created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-20T10:00:00+09:00",
+                            buckets=[_bucket("monthly", 30.0, 100.0)], created_at="x")
+    series = official_bucket_series(conn, "claude", "monthly")
+    assert [r["used_usd"] for r in series] == [30.0, 40.0]   # fetched_at 오름차순
+
+
+def test_fetch_state_roundtrip():
+    conn = connect(":memory:")
+    assert get_fetch_state(conn, "claude") is None
+    upsert_fetch_state(conn, "claude", last_attempt_at="t1", last_success_at="t1",
+                       last_status="ok", last_error=None)
+    st = get_fetch_state(conn, "claude")
+    assert st["last_status"] == "ok"

@@ -90,6 +90,33 @@ CREATE TABLE IF NOT EXISTS official_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_official_provider_month
     ON official_usage(provider, target_month);
+
+CREATE TABLE IF NOT EXISTS official_buckets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT,
+    fetched_at TEXT,        -- 스냅샷 as-of(로컬 fetch 완료 시각, KST ISO). 같은 값 = 한 스냅샷
+    bucket_key TEXT,        -- 'monthly'|'event'|'promo'|'rate_window'
+    raw_key TEXT,           -- 원 API 키(코드네임/창 이름) — 다중 충돌 시 분리키
+    bucket_kind TEXT,       -- 'monthly_limit'|'event_credit'|'promo'|'rate_window'|'codex_monthly'
+    label TEXT,
+    native_unit TEXT,       -- 'usd'|'credit'|'percent'
+    used_native REAL, limit_native REAL, remaining_native REAL,
+    used_usd REAL, limit_usd REAL, remaining_usd REAL,
+    utilization REAL,
+    resets_at TEXT,
+    created_at TEXT,
+    UNIQUE(provider, fetched_at, bucket_key, raw_key)
+);
+CREATE INDEX IF NOT EXISTS idx_official_buckets_lookup
+    ON official_buckets(provider, fetched_at);
+
+CREATE TABLE IF NOT EXISTS official_fetch_state (
+    provider TEXT PRIMARY KEY,
+    last_attempt_at TEXT,
+    last_success_at TEXT,
+    last_status TEXT,
+    last_error TEXT
+);
 """
 
 
@@ -421,3 +448,79 @@ def official_series(conn, provider: str, target_month: str) -> list:
         "ORDER BY snapshot_ts ASC, id ASC",
         (provider, target_month),
     ).fetchall()
+
+
+def _iso(dt) -> str | None:
+    """datetime → ISO 문자열, None은 그대로(official_buckets.resets_at 저장용)."""
+    return dt.isoformat() if dt is not None else None
+
+
+def insert_official_buckets(conn, *, provider: str, fetched_at: str,
+                            buckets: list, created_at: str) -> int:
+    """한 스냅샷의 버킷 전부를 단일 트랜잭션으로 적재. 적재한 버킷 수 반환.
+
+    UNIQUE(provider, fetched_at, bucket_key, raw_key) + INSERT OR REPLACE로
+    같은 스냅샷 재취득(새로고침)이 멱등하게 처리된다(부분 스냅샷·중복 방지).
+    buckets는 official_parser.OfficialBucket 리스트(duck-typed).
+    """
+    with conn:   # 트랜잭션(예외 시 롤백)
+        for b in buckets:
+            conn.execute(
+                "INSERT OR REPLACE INTO official_buckets "
+                "(provider, fetched_at, bucket_key, raw_key, bucket_kind, label, native_unit, "
+                " used_native, limit_native, remaining_native, used_usd, limit_usd, remaining_usd, "
+                " utilization, resets_at, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (provider, fetched_at, b.bucket_key, b.raw_key, b.bucket_kind, b.label,
+                 b.native_unit, b.used_native, b.limit_native, b.remaining_native,
+                 b.used_usd, b.limit_usd, b.remaining_usd, b.utilization,
+                 _iso(b.resets_at), created_at),
+            )
+    return len(buckets)
+
+
+def latest_official_snapshot(conn, provider: str) -> list:
+    """provider의 가장 최근 fetched_at에 속한 버킷 행 전부(없으면 빈 리스트)."""
+    row = conn.execute(
+        "SELECT MAX(fetched_at) m FROM official_buckets WHERE provider=?", (provider,)
+    ).fetchone()
+    if not row or not row["m"]:
+        return []
+    return conn.execute(
+        "SELECT * FROM official_buckets WHERE provider=? AND fetched_at=? ORDER BY id",
+        (provider, row["m"]),
+    ).fetchall()
+
+
+def official_bucket_series(conn, provider: str, bucket_key: str) -> list:
+    """provider·bucket_key의 (fetched_at, used_usd, used_native) 시계열(오름차순).
+
+    예측 렌즈의 used 차분 계산용. 같은 bucket_key 다중(raw_key)이면 합산 없이 전부 반환.
+    """
+    return conn.execute(
+        "SELECT fetched_at, used_usd, used_native FROM official_buckets "
+        "WHERE provider=? AND bucket_key=? ORDER BY fetched_at ASC, id ASC",
+        (provider, bucket_key),
+    ).fetchall()
+
+
+def get_fetch_state(conn, provider: str):
+    return conn.execute(
+        "SELECT * FROM official_fetch_state WHERE provider=?", (provider,)
+    ).fetchone()
+
+
+def upsert_fetch_state(conn, provider: str, *, last_attempt_at: str | None,
+                       last_success_at: str | None, last_status: str,
+                       last_error: str | None) -> None:
+    conn.execute(
+        "INSERT INTO official_fetch_state "
+        "(provider, last_attempt_at, last_success_at, last_status, last_error) "
+        "VALUES (?,?,?,?,?) "
+        "ON CONFLICT(provider) DO UPDATE SET "
+        "  last_attempt_at=excluded.last_attempt_at, "
+        "  last_success_at=COALESCE(excluded.last_success_at, official_fetch_state.last_success_at), "
+        "  last_status=excluded.last_status, last_error=excluded.last_error",
+        (provider, last_attempt_at, last_success_at, last_status, last_error),
+    )
+    conn.commit()
