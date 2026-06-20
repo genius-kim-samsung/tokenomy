@@ -8,7 +8,7 @@ from tokenomy.aggregate import (
     add_business_days, burndown, business_days_between, by_day_session,
     by_dimension, by_model, by_project, by_session, combined_burndown, daily_series,
     effective_month_start, insights,
-    month_bounds, normalize_project, official_view,
+    month_bounds, month_spend, normalize_project, official_view,
     OfficialView,
     parse_ts, period_bounds, session_detail, sidechain_split,
     SidechainSplit, stacked_trend, token_composition, pricing_coverage, CoverageReport,
@@ -339,8 +339,7 @@ def test_insights_low_cache_and_websearch():
     # web_search 합 60 > 50 → info 카드
     _msg(conn, dedup_key="a", ts="2026-06-10T10:00:00Z", cost_usd=5.0,
          input_tokens=90, cache_read=10, web_search=60)
-    bd = burndown(conn, _B, _NOW_STATUS, "claude")
-    cards = insights(conn, bd, _NOW_STATUS, "claude")
+    cards = insights(conn, _NOW_STATUS, "claude")
     levels = {c.level for c in cards}
     texts = " ".join(c.text for c in cards)
     assert "warn" in levels and "info" in levels
@@ -352,8 +351,7 @@ def test_insights_unpriced_card():
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", ts="2026-06-10T10:00:00Z", cost_usd=0.0,
          input_tokens=100, cache_read=100, priced=0)
-    bd = burndown(conn, _B, _NOW_STATUS, "claude")
-    cards = insights(conn, bd, _NOW_STATUS, "claude")
+    cards = insights(conn, _NOW_STATUS, "claude")
     assert any("미식별" in c.text for c in cards)
 
 
@@ -362,25 +360,10 @@ def test_insights_clean_returns_placeholder():
     # 캐시 충분(0.9), web_search 적음, priced, projected 낮음 → 특이신호 없음
     _msg(conn, dedup_key="a", ts="2026-06-10T10:00:00Z", cost_usd=1.0,
          input_tokens=10, cache_read=90, web_search=0, priced=1)
-    bd = burndown(conn, _B, _NOW_STATUS, "claude")
-    cards = insights(conn, bd, _NOW_STATUS, "claude")
+    cards = insights(conn, _NOW_STATUS, "claude")
     assert len(cards) == 1
     assert "특이 신호 없음" in cards[0].text
 
-
-def test_daily_series_clamps_to_budget_start():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-05T00:00:00Z", 50.0, session="pre")    # 도입 전(제외)
-    _insert(conn, "2026-06-13T00:00:00Z", 10.0, session="post")   # 도입 후(KST 6/13)
-    now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
-    bs = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
-    pts = daily_series(conn, "claude", now, budget_start=bs)
-    assert len(pts) == 19                       # 6/12~6/30
-    assert pts[0].day == 12 and pts[0].cumulative_cost == 0.0    # 12일 지출 없음
-    assert pts[1].day == 13 and pts[1].cumulative_cost == 10.0   # 6/5 $50 제외
-    assert pts[3].day == 15 and pts[3].cumulative_cost == 10.0   # 오늘까지 누적 유지
-    assert pts[4].cumulative_cost is None       # 16일(미래) → None
-    assert pts[-1].day == 30 and pts[-1].cumulative_cost is None
 
 
 def test_daily_series_cumulative():
@@ -515,23 +498,23 @@ def test_overview_context_trend_uses_combined_budget(monkeypatch, tmp_path):
     _msg(conn, dedup_key="pre", provider="claude", ts="2026-06-05T10:00:00Z", cost_usd=99.0)
     _msg(conn, dedup_key="post", provider="claude", ts="2026-06-13T10:00:00Z", cost_usd=10.0)
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)   # 6/15
-    # x축: 6/12~6/30 (19일)
-    assert ctx["daily_labels"][0] == 12
+    # x축: daily_series는 달력 월 기준(budget_start clamp 없음) → 6/1~6/30 (30일)
+    assert ctx["daily_labels"][0] == 1
     assert ctx["daily_labels"][-1] == 30
-    assert len(ctx["daily_labels"]) == 19
+    assert len(ctx["daily_labels"]) == 30
     # 추세 스택: codex 데이터 없음 → Claude 밴드 1개
     assert "daily_actual" not in ctx
     series = ctx["trend_series"]
     assert [s["label"] for s in series] == ["Claude"]
-    assert series[0]["cum"][0] == 0.0           # 6/12 지출 없음
-    assert series[0]["cum"][1] == 10.0          # 6/13
-    assert series[0]["cum"][-1] is None         # 6/30(미래)
+    assert series[0]["cum"][4] == 99.0          # 6/5(idx4) 지출 포함(calendar month)
+    assert series[0]["cum"][12] == 109.0        # 6/13(idx12) 누적 99+10
+    assert series[0]["cum"][-1] is None         # 6/30(미래) → None
     assert series[0]["top"] == series[0]["cum"] # 단일 밴드: top == cum
-    assert ctx["trend_totals"][1] == 10.0
+    assert ctx["trend_totals"][12] == 109.0
     assert ctx["trend_totals"][-1] is None
     # 페이스선·가로선: 통합 예산(100+40=140) 기준, 말일에 수렴
     assert ctx["daily_pace"][-1] == 140.0
-    assert ctx["daily_budget"] == [140.0] * 19
+    assert ctx["daily_budget"] == [140.0] * 30
 
 
 def test_overview_context_no_budget_unconfigured(monkeypatch, tmp_path):
@@ -1369,8 +1352,7 @@ def test_insights_cache_rebuild_unique_sessions():
     _insert(conn, "2026-06-04T00:00:00Z", 1.0, session="s", cache_read=1000, input_t=10)
     _insert(conn, "2026-06-06T00:00:00Z", 1.0, session="s", cache_read=0, input_t=1000)
     _insert(conn, "2026-06-07T00:00:00Z", 1.0, session="s", cache_read=0, input_t=1000)
-    bd = burndown(conn, Budget(claude=0, codex=0), NOW, "claude")
-    cards = insights(conn, bd, NOW, None)
+    cards = insights(conn, NOW, None)
     # "캐시 재구축"으로 매칭(기존 캐시활용 경고는 "컨텍스트 재구축"이라 미충돌)
     rebuild = [c for c in cards if "캐시 재구축" in c.text]
     assert len(rebuild) == 1
@@ -1381,8 +1363,7 @@ def test_insights_no_rebuild_for_first_day_only():
     conn = connect(":memory:")
     # 첫 등장일만 — 캐시 빈약해도 is_continued=False라 제외
     _insert(conn, "2026-06-06T00:00:00Z", 1.0, session="s", cache_read=0, input_t=1000)
-    bd = burndown(conn, Budget(claude=0, codex=0), NOW, "claude")
-    cards = insights(conn, bd, NOW, None)
+    cards = insights(conn, NOW, None)
     assert not any("캐시 재구축" in c.text for c in cards)
 
 
@@ -1435,8 +1416,7 @@ def test_insights_unpriced_warning_uses_coverage_species_and_share():
     _insert(conn, TS, 1.0, model="claude-opus-4-8", input_t=100)         # priced
     _insert(conn, TS, 0.0, model="gpt-foo", input_t=100, priced=0)       # unpriced
     cov = pricing_coverage(conn, COV_PRICING)
-    bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
-    cards = insights(conn, bd, NOW, None, cov=cov)
+    cards = insights(conn, NOW, None, cov=cov)
     texts = [c.text for c in cards]
     # 모델 "종" 수(1) + 토큰 비중(50%) 형태, "설정에서 확인" 포함
     assert any("미식별 1종" in t and "50%" in t and "설정" in t for t in texts)
@@ -1446,8 +1426,7 @@ def test_insights_no_unpriced_warning_when_coverage_clean():
     conn = connect(":memory:")
     _insert(conn, TS, 1.0, model="claude-opus-4-8", input_t=100)
     cov = pricing_coverage(conn, COV_PRICING)
-    bd = burndown(conn, Budget(claude=100, codex=0), NOW, "claude")
-    cards = insights(conn, bd, NOW, None, cov=cov)
+    cards = insights(conn, NOW, None, cov=cov)
     assert not any("미식별" in c.text for c in cards)
 
 
@@ -1587,7 +1566,7 @@ def _ob(key, kind, used_usd, limit_usd, raw="r", unit="usd", util=0.0, resets=No
 
 def test_official_view_no_data_status():
     conn = connect(":memory:")
-    v = official_view(conn, "claude", NOW, Budget(claude=100, codex=50), 0.04)
+    v = official_view(conn, "claude", NOW, 0.04)
     assert isinstance(v, OfficialView)
     assert v.status == "no_data"
     assert v.buckets == []
@@ -1601,7 +1580,7 @@ def test_official_view_claude_monthly_period():
                  _ob("event", "event_credit", 125.0, 500.0, raw="cinder")],
         created_at="2026-06-10T09:00:00+09:00",
     )
-    v = official_view(conn, "claude", NOW, Budget(claude=100, codex=50), 0.04)
+    v = official_view(conn, "claude", NOW, 0.04)
     assert v.status == "ok"
     assert v.period_used_usd == 30.0 and v.period_limit_usd == 100.0
     assert {b["bucket_key"] for b in v.buckets} == {"monthly", "event"}
@@ -1622,20 +1601,20 @@ def test_official_view_codex_weekly_from_local():
         created_at="2026-06-10T09:00:00+09:00",
     )
     now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
-    v = official_view(conn, "codex", now, Budget(claude=100, codex=50), 0.04)
+    v = official_view(conn, "codex", now, 0.04)
     assert v.period_used_usd == 20.0 and v.period_limit_usd == 80.0  # 월간(공식)
     assert v.weekly_limit_usd == 20.0      # 공식 월 한도 80 ÷ 4
     assert v.weekly_used_usd == 12.0       # 로컬 윈도우 합(첫 사용 6/9~)
     assert v.weekly_estimated is True
 
 
-def test_official_view_codex_weekly_fallback_budget():
+def test_official_view_codex_weekly_no_budget_fallback():
     conn = connect(":memory:")
     _insert(conn, "2026-06-09T01:00:00Z", 5.0, provider="codex", session="a")
     now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
-    # 공식 없음 → 주간 한도 = budget.codex(50) ÷ 4 = 12.5, 월간은 no_data
-    v = official_view(conn, "codex", now, Budget(claude=100, codex=50), 0.04)
-    assert v.weekly_limit_usd == 12.5
+    # 공식 없음 → 주간 한도 없음(budget 폴백 제거), 월간은 no_data
+    v = official_view(conn, "codex", now, 0.04)
+    assert v.weekly_limit_usd is None      # 공식 period_limit 없음 → 주간 한도 없음
     assert v.weekly_used_usd == 5.0
     assert v.period_used_usd is None       # 공식 월간 없음
 
@@ -1649,7 +1628,7 @@ def test_official_view_lens_from_series():
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
                             buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")],
                             created_at="x")
-    v = official_view(conn, "claude", NOW, Budget(claude=100, codex=50), 0.04)
+    v = official_view(conn, "claude", NOW, 0.04)
     assert v.lens is not None
     assert v.lens.daily_rate_usd == 10.0   # (30-10) / 2 영업일
     assert v.active_key == "monthly"
@@ -1663,7 +1642,7 @@ def test_official_view_codex_has_no_lens():
                                          unit="credit", util=25.0)],
                             created_at="x")
     now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
-    v = official_view(conn, "codex", now, Budget(claude=100, codex=50), 0.04)
+    v = official_view(conn, "codex", now, 0.04)
     assert v.lens is None
 
 
@@ -1671,7 +1650,7 @@ def test_official_view_codex_idle_window_empty():
     conn = connect(":memory:")
     _insert(conn, "2026-06-01T01:00:00Z", 9.0, provider="codex", session="a")  # 마지막 사용
     now = datetime(2026, 6, 12, 12, 0, tzinfo=KST)  # 윈도우(6/1~6/8) 종료 후
-    v = official_view(conn, "codex", now, Budget(claude=100, codex=50), 0.04)
+    v = official_view(conn, "codex", now, 0.04)
     assert v.weekly_used_usd == 0.0
     assert v.weekly_window_end is None
 
@@ -1687,5 +1666,53 @@ def test_official_view_active_bucket_largest_diff():
                             buckets=[_ob("event", "event_credit", 102.0, 500.0, raw="cinder"),   # +2
                                      _ob("monthly", "monthly_limit", 40.0, 100.0, raw="spend")],  # +30
                             created_at="x")
-    v = official_view(conn, "claude", NOW, Budget(claude=100, codex=50), 0.04)
+    v = official_view(conn, "claude", NOW, 0.04)
     assert v.active_key == "monthly"   # 최근 차분 30 > 2 → tie-break(event 우선) 무시하고 monthly
+
+
+# ─── Task 3: 예산 분리 신규 테스트 ─────────────────────────────────────────────
+
+
+def _conn_with_official_codex_monthly(limit_usd: float):
+    """공식 Codex 월간 버킷이 있는 in-memory DB. official_view 테스트용."""
+    conn = connect(":memory:")
+    insert_official_buckets(
+        conn, provider="codex", fetched_at="2026-06-10T09:00:00+09:00",
+        buckets=[_ob("monthly", "codex_monthly", 20.0, limit_usd, raw="individual_limit",
+                     unit="credit", util=0.0)],
+        created_at="2026-06-10T09:00:00+09:00",
+    )
+    return conn
+
+
+def test_official_view_no_budget_arg():
+    conn = _conn_with_official_codex_monthly(limit_usd=80)
+    ov = official_view(conn, "codex", NOW, 0.04)
+    assert ov.weekly_limit_usd == 20.0   # period_limit 80 ÷ 4
+
+
+def test_daily_series_calendar_month():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-01T00:00:00Z", 1.0, session="s1")
+    _insert(conn, "2026-06-10T00:00:00Z", 2.0, session="s2")
+    pts = daily_series(conn, "claude", _NOW_STATUS)   # 6/1부터 달력 월 기준
+    assert pts[0].day == 1                           # 달력 월 1일 시작
+    assert pts[14].day == 15                         # _NOW_STATUS.day = 15
+    assert pts[14].cumulative_cost == 3.0            # 1.0 + 2.0 누적
+    assert pts[-1].day == 30 and pts[-1].cumulative_cost is None  # 미래 → None
+
+
+def test_month_spend_sums_current_month():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 4.0, session="jun")
+    _insert(conn, "2026-05-30T00:00:00Z", 9.0, session="may")   # 다른 달 제외
+    assert month_spend(conn, "claude", NOW) == 4.0
+
+
+def test_insights_no_budget_overrun_card():
+    conn = connect(":memory:")
+    cards = insights(conn, _NOW_STATUS, None, cov=None)
+    assert any(c.level == "info" for c in cards)   # 빈 신호 placeholder
+    # bd 인자 없음 — TypeError 안 나야 함(시그니처 확인)
+    texts = " ".join(c.text for c in cards)
+    assert "한도 초과" not in texts and "월말" not in texts

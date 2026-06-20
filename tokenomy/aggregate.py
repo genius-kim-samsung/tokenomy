@@ -192,6 +192,11 @@ def _month_rows(conn, provider: str | None, now_kst: datetime) -> list:
     return _range_rows(conn, provider, start, nxt)
 
 
+def month_spend(conn, provider: str | None, now_kst: datetime) -> float:
+    """provider(또는 None=전체)의 이번 달(KST) cost_usd 합. 번다운 없이 총지출만."""
+    return round(sum((r["cost_usd"] or 0) for r in _month_rows(conn, provider, now_kst)), 4)
+
+
 def _compute_burndown(provider: str, spent: float, limit: float,
                       unpriced: int, now_kst: datetime, *,
                       period_start: datetime | None = None,
@@ -430,12 +435,12 @@ def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
                         days_left_to_reset=days_left, dday_warning=dday)
 
 
-def official_view(conn, provider: str, now_kst: datetime, budget: Budget,
-                  credit_to_usd: float, *, budget_start: datetime | None = None) -> OfficialView:
+def official_view(conn, provider: str, now_kst: datetime,
+                  credit_to_usd: float) -> OfficialView:
     """공식 미러 패널 컨텍스트. 최신 스냅샷(공식) + 로컬 주간 윈도우(Codex)를 합친다.
 
     - period_used/limit = 월간 버킷(공식 ground truth). 없으면 None.
-    - Codex weekly_used = 로컬 CLI 첫-사용 7일 윈도우 합(추정), weekly_limit = 공식 월÷4 또는 budget.codex÷4.
+    - Codex weekly_used = 로컬 CLI 첫-사용 7일 윈도우 합(추정), weekly_limit = 공식 월÷4(있을 때만). 예산 폴백 없음.
       유휴 상태(마지막 사용 7일+ 경과로 윈도우가 닫힌 경우) weekly_used=0, weekly_window_end=None.
     - Claude 월 버킷 resets_at None은 다음 달 경계(KST)로 채운다.
     - 활성 버킷 선정(1차): 후보(monthly_limit/event_credit/codex_monthly 중 stale 제외)의
@@ -493,11 +498,9 @@ def official_view(conn, provider: str, now_kst: datetime, budget: Budget,
                 weekly_used = round(sum((r["cost_usd"] or 0) for r in wrows), 4)
                 weekly_estimated = True
                 weekly_end = we.date()
-        # 주간 한도 = 공식 월 한도÷4(있으면) 아니면 budget.codex÷4
+        # 주간 한도 = 공식 월 한도 ÷ 4(있을 때만). 예산 폴백 없음.
         if period_limit:
             weekly_limit = round(period_limit / 4, 4)
-        elif budget.codex:
-            weekly_limit = round(budget.codex / 4, 4)
 
     # 활성 버킷 + 렌즈
     # stale 제외: resets_at이 설정됐고 이미 과거면 후보에서 뺀다
@@ -982,8 +985,9 @@ class Insight:
     text: str
 
 
-def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None,
+def insights(conn, now_kst: datetime, provider: str | None,
              cov: "CoverageReport | None" = None) -> list[Insight]:
+    """효율 코치 카드. bd 인자 제거 — 예산 초과 카드 없음. unpriced는 rows에서 직접 계산."""
     rows = _month_rows(conn, provider, now_kst)
     cr = sum(r["cache_read"] or 0 for r in rows)
     den = sum((r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0) for r in rows)
@@ -1014,10 +1018,10 @@ def insights(conn, bd: "Burndown", now_kst: datetime, provider: str | None,
             "warn",
             f"단가 미식별 {cov.unpriced_count}종(토큰 {pct:.0f}%) — 비용 누락, 설정에서 확인",
         ))
-    elif cov is None and bd.unpriced_count:   # cov 미전달 시 하위호환(메시지 건수)
-        cards.append(Insight("warn", f"단가 미식별 {bd.unpriced_count}건 — 비용 누락 가능"))
-    if bd.limit > 0 and bd.projected_month > bd.limit:
-        cards.append(Insight("warn", f"현 추세 월말 ${bd.projected_month:.0f} 예상 — 한도 초과 가능"))
+    elif cov is None:
+        unpriced = sum(1 for r in rows if not r["priced"])
+        if unpriced:
+            cards.append(Insight("warn", f"단가 미식별 {unpriced}건 — 비용 누락 가능"))
 
     if not cards:
         cards.append(Insight("info", "특이 신호 없음"))
@@ -1092,15 +1096,13 @@ class DayPoint:
     cumulative_cost: float | None   # 미래(오늘 이후) 구간은 None → 차트에서 선이 끊김
 
 
-def daily_series(conn, provider: str | None, now_kst: datetime,
-                 *, budget_start: datetime | None = None) -> list[DayPoint]:
-    """일별 누적 비용 시계열. 기간 [effective_month_start, 말일].
+def daily_series(conn, provider: str | None, now_kst: datetime) -> list[DayPoint]:
+    """일별 누적 비용 시계열. 기간 [달력 월 1일, 말일].
 
     실제 누적값은 오늘까지만 채우고 이후 날은 None(미래 구간 — 차트에서 선이 끊김).
-    budget_start로 도입일을 clamp한다(번다운 카드와 동일). 미지정 시 달력 월 1일(하위호환).
+    달력 월 기준(1일 시작) — budget_start clamp 없음.
     """
-    period_start = effective_month_start(now_kst, budget_start)
-    _, period_end = month_bounds(now_kst)
+    period_start, period_end = month_bounds(now_kst)
     last_day = (period_end - timedelta(days=1)).day
     rows = _range_rows(conn, provider, period_start, period_end)
     per_day: dict = {}

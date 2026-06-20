@@ -79,8 +79,8 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
 
     # 공식 미러 패널(provider별) — USD 1차. Claude=버킷, Codex=월간+주간 2게이지.
     ctu = credit_to_usd(config)
-    claude_official = official_view(conn, "claude", now, budget, ctu, budget_start=bs)
-    codex_official = official_view(conn, "codex", now, budget, ctu, budget_start=bs)
+    claude_official = official_view(conn, "claude", now, ctu)
+    codex_official = official_view(conn, "codex", now, ctu)
 
     # 히어로 통합 사용률(총지출/총예산). 두 provider 모두 월 예산이 설정된 경우만 노출한다
     # (한쪽만이면 통합 분모가 불완전 → 금액만 표시). codex를 월간 Burndown으로 변환해
@@ -98,13 +98,13 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     # 효율 코치/추세는 전 AI 합산·달력 월 기준 유지(설계). Burndown 인자는 claude 카드 재사용.
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
     cov = pricing_coverage(conn, pricing)
-    coach = insights(conn, claude_bd, now, None, cov=cov)
-    daily = daily_series(conn, None, now, budget_start=bs)
+    coach = insights(conn, now, None, cov=cov)
+    daily = daily_series(conn, None, now)
 
     # 통합 추세: provider별 누적을 스택 밴드로. 데이터 있는 provider만 등록 순서대로.
     trend_providers = [p for p in _TREND_STYLE if _provider_has_data(conn, p)]
     bands = stacked_trend(
-        [(p, daily_series(conn, p, now, budget_start=bs)) for p in trend_providers]
+        [(p, daily_series(conn, p, now)) for p in trend_providers]
     )
     trend_series = [
         {"label": _TREND_STYLE[b["provider"]][0],
