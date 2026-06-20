@@ -13,6 +13,7 @@ from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
 from tokenomy.budget import budget_from_config, credit_to_usd as _credit_to_usd, load_config, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
+from tokenomy.official_fetch import fetch_provider
 from tokenomy.paths import resource_path
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
@@ -135,6 +136,21 @@ def do_ingest():
         cmd_ingest(conn)
     except Exception:
         return RedirectResponse("/?notice=ingest-failed", status_code=303)
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/official/refresh")
+def official_refresh(provider: str = Form("")):
+    """공식 사용량 자동 취득 트리거 — 결과 무관 redirect. 백오프 없음."""
+    conn = connect()
+    config = load_config()
+    now = datetime.now(KST)
+    targets = [provider] if provider in PROVIDERS else list(PROVIDERS)
+    for p in targets:
+        try:
+            fetch_provider(p, now_kst=now, config=config, conn=conn)
+        except Exception:
+            pass   # 결과 무관 — 상태는 fetch_state에 기록됨, 페이지에서 표시
     return RedirectResponse("/", status_code=303)
 
 

@@ -761,3 +761,35 @@ def test_settings_post_persists_credit_to_usd(tmp_path, monkeypatch):
     assert r.status_code == 303
     g = client.get("/settings")
     assert "0.05" in g.text
+
+
+# ── Task 4 TDD: official_refresh ──────────────────────────────────────────────────
+
+def test_official_refresh_calls_fetch_and_redirects(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(app_module, "fetch_provider",
+                        lambda p, **k: calls.append(p))
+    r = client.post("/official/refresh", data={}, follow_redirects=False)
+    assert r.status_code == 303
+    assert set(calls) == {"claude", "codex"}
+
+
+def test_official_refresh_scopes_single_provider(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(app_module, "fetch_provider",
+                        lambda p, **k: calls.append(p))
+    r = client.post("/official/refresh", data={"provider": "claude"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert calls == ["claude"]
+
+
+def test_official_refresh_redirects_even_on_fetch_error(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    def boom(p, **k):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(app_module, "fetch_provider", boom)
+    r = client.post("/official/refresh", data={}, follow_redirects=False)
+    assert r.status_code == 303   # 결과 무관 redirect(예외도 삼킴)
