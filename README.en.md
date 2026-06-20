@@ -1,17 +1,23 @@
 # Tokenomy
 
-A local "budget book" for your AI coding token spend. Tokenomy parses your
-**local** Claude Code / Codex CLI session logs, then shows monthly burndown
-against a budget you set, cost per project/session, and cache-efficiency
-signals — so pay-as-you-go users don't blow past their budget mid-month.
+A local ledger for your AI coding token spend. Tokenomy parses your
+**local** Claude Code / Codex CLI session logs and automatically reads the
+official usage API — showing official limit vs. remaining, spend forecasts,
+cost per project/session, and cache-efficiency signals.
 
 > Korean README: [README.md](README.md)
 
 ## Who it's for
 
-Pay-as-you-go (API-metered) users of Claude Code and/or Codex CLI who want to
-track and cap their own monthly spend. Subscription (Pro/Max/Plus) users can
-still track usage — costs show as *public-list-price estimates*.
+Anyone using Claude Code and/or Codex CLI who wants to track their usage and limits.
+
+- **Enterprise / pay-as-you-go**: the official API provides a USD limit, so you get a
+  live remaining-spend and depletion forecast immediately.
+- **Personal subscription**: flat-rate accounts have no USD budget, but the official API
+  returns a rate-window (5 h / 7 d utilisation %) — the key actionable signal.
+
+If official data is unavailable (no credentials, or `TOKENOMY_SKIP_OFFICIAL_FETCH` set),
+the app falls back to a **usage-only view** driven by local JSONL logs.
 
 ## Privacy
 
@@ -37,7 +43,7 @@ still track usage — costs show as *public-list-price estimates*.
 
 ```bash
 pip install -r requirements.txt
-cp config/tokenomy.config.example.json config/tokenomy.config.json   # then edit your budget
+cp config/tokenomy.config.example.json config/tokenomy.config.json
 python -m tokenomy.cli ingest
 python -m tokenomy.cli report
 python -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765
@@ -45,7 +51,7 @@ python -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765
 
 On Windows, double-click `start_tokenomy.bat` (ingest → dashboard → opens browser).
 
-## Configure your budget
+## Configuration
 
 Edit `config/tokenomy.config.json`, or use the **Settings** page in the
 dashboard (`/settings`):
@@ -53,19 +59,16 @@ dashboard (`/settings`):
 ```json
 {
   "user_label": "me",
-  "budget": { "claude": 100, "codex": 50 },
-  "budget_start": null,
+  "tracked_providers": ["claude", "codex"],
   "pricing_overrides": {}
 }
 ```
 
-- `budget.claude`: Claude **monthly** cap in USD. `0` = no cap (usage-only tracking).
-- `budget.codex`: Codex monthly cap — but Codex runs on a **weekly limit (monthly ÷ 4)**:
-  topped up every Monday, unused credit rolls over within the month (resets when the
-  month changes). The dashboard's Codex card shows what's available this week.
-- `budget_start`: budget start date (`YYYY-MM-DD`). When set, that month is computed
-  from the start date (earlier spend excluded). Leave `null` to use the 1st of each
-  month. One-off — only affects the first month.
+- `tracked_providers`: which AI tools to fetch official usage for and show on the
+  dashboard. Auto-seeded on first run from whichever credential files are present
+  (`~/.claude/.credentials.json`, `~/.codex/auth.json`).
+  Limits and remaining are sourced from the official API — enterprise/pay-as-you-go
+  accounts see a USD limit; personal subscription accounts see a rate-window (%).
 - `pricing_overrides`: override per-model rates if your billing differs from
   public list prices, or **add a new model** without waiting for an app update
   (takes effect on the next ingest):

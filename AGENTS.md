@@ -2,7 +2,7 @@
 
 ## 프로젝트 개요
 
-Tokenomy는 AI 코딩 토큰 지출용 로컬 가계부다. Claude Code / Codex CLI의 로컬 세션 로그(JSONL)를 파싱해 예산 대비 번다운, 프로젝트/세션별 비용, 캐시 효율을 보여준다.
+Tokenomy는 AI 코딩 토큰 지출용 로컬 가계부다. Claude Code / Codex CLI의 로컬 세션 로그(JSONL)를 파싱하고 공식 사용량 API를 자동 취득해 공식 한도·잔여·예측, 프로젝트/세션별 비용, 캐시 효율을 보여준다.
 
 프라이버시 경계가 핵심이다. DB에는 토큰 메타데이터와 세션 식별용 첫 프롬프트 발췌만 저장한다. 전체 대화 본문은 저장하지 않는다.
 
@@ -44,7 +44,7 @@ UsageRecord -> db.py(SQLite) -> aggregate.py -> cli.py / web/
 
 - `tokenomy/parser.py`, `tokenomy/codex_parser.py`: 도구별 로그를 공통 `UsageRecord`로 정규화한다.
 - `tokenomy/db.py`: SQLite 적재, 중복 제거, 스키마 마이그레이션을 담당한다. 스키마 변경은 `_MIGRATE_COLS`에 추가한다.
-- `tokenomy/aggregate.py`: 번다운, 프로젝트/세션/차원(모델·스킬·브랜치)별 집계, 토큰 구성비를 담당한다. 월 경계는 KST 기준이다.
+- `tokenomy/aggregate.py`: 공식 사용량 기반 예측(`official_view`+`lens`), 프로젝트/세션/차원(모델·스킬·브랜치)별 집계, 토큰 구성비를 담당한다. 월 경계는 KST 기준이다. 공식 데이터 없으면 사용량 전용 view로 폴백.
 - `tokenomy/pricing.py`, `config/pricing.json`: 모델명 매칭으로 토큰을 USD로 환산한다. `cost_usd`는 캐시값이라 단가가 바뀌면 `ingest`가 핑거프린트로 감지해 기존 행을 자동 재계산한다(`db.maybe_reprice`).
 - `tokenomy/web/app.py`: FastAPI 라우트. 얇게 유지하고 입력 검증과 라우팅만 둔다.
 - `tokenomy/web/views.py`: 화면 데이터 조립 로직을 둔다.
@@ -58,6 +58,7 @@ UsageRecord -> db.py(SQLite) -> aggregate.py -> cli.py / web/
 - `TOKENOMY_DATA`로 데이터 디렉터리 전체를 override할 수 있다.
 - `TOKENOMY_CONFIG`로 config 파일 경로를 override할 수 있다.
 - `TOKENOMY_SKIP_UPDATE_CHECK`가 설정되면 업데이트 네트워크 조회를 건너뛴다.
+- `TOKENOMY_SKIP_OFFICIAL_FETCH`가 설정되면 공식 사용량 라이브 취득을 항상 건너뛴다(오프라인/CI/테스트).
 
 ## 핵심 규칙
 
@@ -69,11 +70,12 @@ UsageRecord -> db.py(SQLite) -> aggregate.py -> cli.py / web/
 - 증분 파싱은 `scan_offsets`의 byte-offset 기반이다. append 로그 가정을 깨지 않는다.
 - dedup 키는 `(provider, message_id, request_id)` 의미를 유지한다. 리트라이는 별개 과금으로 보존한다.
 
-## 예산 로직
+## 공식 사용량·한도 로직
 
-- Claude는 월간 예산 기준이다.
-- Codex는 주간 누적(carryover) 기준이다. 월 예산을 4로 나눈 주간 한도가 매주 월요일 충전되고, 미사용분은 월 안에서 이월되며 월이 바뀌면 소멸한다.
-- `budget_start`가 있으면 도입 첫 달의 시작일을 해당 날짜로 clamp한다. 없으면 매월 1일 기준이다.
+- 한도와 리셋 주기의 정본은 공식 API 응답(`resets_at`, 버킷 잔여)이다. 수동 예산 입력·`budget_start` clamp는 없다.
+- Claude는 월간 리셋, Codex는 주간 리셋(매주 월요일). 리셋 시각은 공식 API가 제공한다.
+- `tracked_providers` 목록에 있는 provider만 공식 API 호출 대상이 된다. 첫 실행 시 크레덴셜 파일 존재로 자동 시드.
+- 공식 데이터가 없으면(취득 skip·미성공·한도 미제공 계정) **사용량 전용 view**로 폴백한다.
 - 날짜/월 경계 계산은 KST 기준으로 맞춘다. 저장 timestamp가 UTC라면 집계에서 변환한다.
 
 ## 프론트엔드
