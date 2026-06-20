@@ -16,6 +16,29 @@ KST = timezone(timedelta(hours=9))
 # 개인 구독 rate-limit 창의 안정 키(코드네임 아님 — 이름 매칭 허용).
 _RATE_WINDOW_PREFIXES = ("five_hour", "seven_day")
 
+# seven_day_<model> 접미사 → 표기명(공식 앱 라벨과 동형). 미지/회전 접미사는 타이틀케이스 폴백.
+_WINDOW_MODEL_NAMES = {"opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku"}
+
+
+def _rate_window_label(key: str) -> str:
+    """Claude rate-limit 창 키 → 서술 라벨(공식 앱 미러).
+
+    공식 앱의 "현재 세션 / 주간 한도(모든 모델·모델별)"와 동형으로 라벨링한다.
+    five_hour/seven_day는 안정 키라 이름 매칭하고, seven_day_<model>의 접미사는
+    모델 슬러그로 보아 표기명으로 환산하되 미지/회전 접미사는 타이틀케이스로 폴백한다.
+    """
+    if key.startswith("five_hour"):
+        return "현재 세션"
+    if key == "seven_day":
+        return "주간 · 모든 모델"
+    if key.startswith("seven_day_"):
+        slug = key[len("seven_day_"):]
+        name = _WINDOW_MODEL_NAMES.get(slug, slug.replace("_", " ").title())
+        return f"주간 · {name} 전용"
+    if key.startswith("seven_day"):
+        return "주간"
+    return "이용률 창"
+
 
 @dataclass
 class OfficialBucket:
@@ -97,7 +120,7 @@ def parse_claude(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
                 continue
             out.append(OfficialBucket(
                 bucket_key="rate_window", raw_key=key, bucket_kind="rate_window",
-                label="이용률 창", native_unit="percent",
+                label=_rate_window_label(key), native_unit="percent",
                 used_native=None, limit_native=None, remaining_native=None,
                 used_usd=None, limit_usd=None, remaining_usd=None,
                 utilization=round(float(win_util), 4), resets_at=_parse_iso(val.get("resets_at")),

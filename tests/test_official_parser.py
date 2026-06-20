@@ -53,6 +53,28 @@ def test_claude_personal_rate_windows():
         assert b.native_unit == "percent"
         assert b.used_usd is None       # % 창은 USD 없음
         assert b.utilization > 0
+    # 창별 서술 라벨(공식 앱 미러) — 세 창이 구분되어야 한다
+    labels = {b.raw_key: b.label for b in rw}
+    assert labels == {
+        "five_hour": "현재 세션",
+        "seven_day": "주간 · 모든 모델",
+        "seven_day_opus": "주간 · Opus 전용",
+    }
+
+
+def test_claude_rate_window_label_variants():
+    # 회전/미지 모델 접미사는 타이틀케이스로 폴백, 알려진 슬러그는 표기명 환산
+    raw = {
+        "five_hour": {"utilization": 5.0},
+        "seven_day": {"utilization": 5.0},
+        "seven_day_sonnet": {"utilization": 5.0},
+        "seven_day_some_new_model": {"utilization": 5.0},
+    }
+    labels = {b.raw_key: b.label for b in parse_claude(raw, credit_to_usd=0.04)}
+    assert labels["five_hour"] == "현재 세션"
+    assert labels["seven_day"] == "주간 · 모든 모델"
+    assert labels["seven_day_sonnet"] == "주간 · Sonnet 전용"
+    assert labels["seven_day_some_new_model"] == "주간 · Some New Model 전용"
 
 
 def test_codex_enterprise_credit_to_usd():
