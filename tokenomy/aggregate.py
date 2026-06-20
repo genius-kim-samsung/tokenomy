@@ -495,10 +495,11 @@ def official_view(conn, provider: str, now_kst: datetime, budget: Budget,
     - period_used/limit = 월간 버킷(공식 ground truth). 없으면 None.
     - Codex weekly_used = 로컬 CLI 첫-사용 7일 윈도우 합(추정), weekly_limit = 공식 월÷4 또는 budget.codex÷4.
     - Claude 월 버킷 resets_at None은 다음 달 경계(KST)로 채운다.
-    - 활성 버킷 = series 양의 차분이 가장 큰 것(동률은 [event,monthly] tie-break),
-      차분 없으면 차감 순서 remaining>0 첫 버킷. promo/rate_window/stale은 후보 제외.
+    - 활성 버킷 선정(1차): 후보(monthly_limit/event_credit/codex_monthly 중 stale 제외)의
+      series 최근 두 스냅샷 used 양의 차분이 가장 큰 버킷 — 동률은 tie-break(event<monthly).
+      (2차) 양의 차분이 없으면 remaining>0 첫 버킷; 없으면 첫 후보. promo/rate_window는 항상 제외.
     """
-    from tokenomy.db import latest_official_snapshot, get_fetch_state
+    from tokenomy.db import latest_official_snapshot, get_fetch_state, official_bucket_series
 
     rows = latest_official_snapshot(conn, provider)
     fetched_at = rows[0]["fetched_at"] if rows else None
@@ -522,12 +523,12 @@ def official_view(conn, provider: str, now_kst: datetime, budget: Budget,
         if dt is not None:
             stale_minutes = max(0, int((now_kst - dt).total_seconds() // 60))
 
-    # 상태
+    # 상태 (Fix 2: last_status가 DB-null인 경우 "no_data"로 보정)
     if rows:
         status = "ok"
     else:
         st = get_fetch_state(conn, provider)
-        status = st["last_status"] if st else "no_data"
+        status = (st["last_status"] if st else None) or "no_data"
 
     # Codex 주간(로컬 추정)
     weekly_used = weekly_limit = None
@@ -548,15 +549,40 @@ def official_view(conn, provider: str, now_kst: datetime, budget: Budget,
             weekly_limit = round(budget.codex / 4, 4)
 
     # 활성 버킷 + 렌즈
+    # stale 제외: resets_at이 설정됐고 이미 과거면 후보에서 뺀다
     active_key = None
     lens = None
-    candidates = [b for b in buckets if b["bucket_kind"] in
-                  ("monthly_limit", "event_credit", "codex_monthly")]
+    tie_order = {"event_credit": 0, "monthly_limit": 1, "codex_monthly": 1}
+    candidates = [
+        b for b in buckets
+        if b["bucket_kind"] in ("monthly_limit", "event_credit", "codex_monthly")
+        and not (b["resets_at"] and parse_ts(b["resets_at"]) is not None
+                 and parse_ts(b["resets_at"]) < now_kst)
+    ]
     if candidates:
-        # 차감 순서 tie-break: event 먼저, 그다음 monthly
-        order = {"event_credit": 0, "monthly_limit": 1, "codex_monthly": 1}
-        candidates.sort(key=lambda b: order.get(b["bucket_kind"], 9))
-        active = next((b for b in candidates if (b["remaining_usd"] or 0) > 0), candidates[0])
+        # 1차: series 최근 두 스냅샷의 양의 used 차분이 가장 큰 버킷
+        def _recent_diff(b: dict) -> float:
+            series = official_bucket_series(conn, provider, b["bucket_key"])
+            pts = [(r["fetched_at"], r["used_usd"]) for r in series if r["used_usd"] is not None]
+            if len(pts) < 2:
+                return 0.0
+            diff = pts[-1][1] - pts[-2][1]
+            return diff if diff > 0 else 0.0
+
+        diffs = {b["bucket_key"]: _recent_diff(b) for b in candidates}
+        max_diff = max(diffs.values())
+        if max_diff > 0:
+            # 최대 차분 후보 중 tie-break 순서가 가장 낮은 것
+            best = min(
+                (b for b in candidates if diffs[b["bucket_key"]] == max_diff),
+                key=lambda b: tie_order.get(b["bucket_kind"], 9),
+            )
+            active = best
+        else:
+            # 2차: tie-break 정렬 후 remaining>0 첫 버킷, 없으면 첫 후보
+            sorted_cands = sorted(candidates, key=lambda b: tie_order.get(b["bucket_kind"], 9))
+            active = next((b for b in sorted_cands if (b["remaining_usd"] or 0) > 0), sorted_cands[0])
+
         active_key = active["bucket_key"]
         reset_date = parse_ts(active["resets_at"]).date() if active["resets_at"] else None
         if provider == "codex":

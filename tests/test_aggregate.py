@@ -3,16 +3,22 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from tokenomy.aggregate import (
-    DayPoint, KST, add_business_days, burndown, business_days_between, by_day_session,
-    by_dimension, by_model, by_project, by_session, combined_burndown, daily_series, insights,
-    month_bounds, normalize_project, official_merged_burndown, OfficialMergedBurndown,
+    CodexBurndown, codex_burndown, codex_weekly_window,
+    DayPoint, DaySessionRow, KST,
+    add_business_days, burndown, business_days_between, by_day_session,
+    by_dimension, by_model, by_project, by_session, combined_burndown, daily_series,
+    effective_month_start, insights,
+    month_bounds, normalize_project, official_merged_burndown, official_view,
+    OfficialMergedBurndown, OfficialView,
     parse_ts, period_bounds, session_detail, sidechain_split,
     SidechainSplit, stacked_trend, token_composition, pricing_coverage, CoverageReport,
-    codex_weekly_window,
+    week_count,
 )
-from tokenomy.db import connect, insert_official_snapshot
+from tokenomy.db import connect, insert_official_buckets, insert_official_snapshot, ingest_records
 from tokenomy.budget import Budget
-from tokenomy.web.views import history_context, dimension_context, overview_context, session_context
+from tokenomy.official_parser import OfficialBucket
+from tokenomy.parser import UsageRecord
+from tokenomy.web.views import build_date_tree, history_context, dimension_context, overview_context, session_context
 
 # June 2026 has 30 days
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
@@ -979,8 +985,6 @@ def test_dimension_context_bad_dim_falls_back_to_model(monkeypatch, tmp_path):
 
 
 # ─── build_date_tree: 날짜→폴더→세션 2단 그룹핑 ───────────────────────────────
-from tokenomy.aggregate import DaySessionRow
-from tokenomy.web.views import build_date_tree
 
 
 def _dsr(date, sid, project, cost, msgs=1, cache_read=0, cache_den=0,
@@ -1056,8 +1060,6 @@ def test_build_date_tree_unknown_project():
 
 # ─── effective_month_start + week_count ────────────────────────────────────────
 
-from tokenomy.aggregate import effective_month_start, week_count
-
 
 def test_effective_month_start_clamps_to_budget_start():
     now = datetime(2026, 6, 15, 12, 0, tzinfo=KST)
@@ -1126,8 +1128,6 @@ def test_burndown_no_budget_start_is_unchanged():
 
 
 # ─── codex_burndown: 주간 누적(carryover) 모델 ────────────────────────────────
-
-from tokenomy.aggregate import CodexBurndown, codex_burndown
 
 
 def test_codex_burndown_carryover_denominator_and_remaining():
@@ -1240,9 +1240,6 @@ def test_dimension_context_week_period(monkeypatch, tmp_path):
 
 
 # ─── Task 5: 집계가 user_turns 사용 ──────────────────────────────────────────
-
-from tokenomy.db import ingest_records
-from tokenomy.parser import UsageRecord
 
 
 def _claude_rec(msg_id, session_id="s1", **kw):
@@ -1679,10 +1676,6 @@ def test_codex_weekly_window_none_without_usage():
 
 # --- Task 5: official_view (Claude 버킷 + Codex 2게이지 + 예측 렌즈) ---
 
-from tokenomy.aggregate import official_view, OfficialView
-from tokenomy.db import insert_official_buckets
-from tokenomy.official_parser import OfficialBucket
-
 
 def _ob(key, kind, used_usd, limit_usd, raw="r", unit="usd", util=0.0, resets=None):
     return OfficialBucket(
@@ -1763,3 +1756,18 @@ def test_official_view_lens_from_series():
     assert v.lens is not None
     assert v.lens.daily_rate_usd == 10.0   # (30-10) / 2 영업일
     assert v.active_key == "monthly"
+
+
+def test_official_view_active_bucket_largest_diff():
+    conn = connect(":memory:")
+    # Claude: event + monthly 둘 다 활성. monthly의 최근 차분이 더 커서 active=monthly(이벤트가 tie-break 우선임에도)
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-09T09:00:00+09:00",
+                            buckets=[_ob("event", "event_credit", 100.0, 500.0, raw="cinder"),
+                                     _ob("monthly", "monthly_limit", 10.0, 100.0, raw="spend")],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("event", "event_credit", 102.0, 500.0, raw="cinder"),   # +2
+                                     _ob("monthly", "monthly_limit", 40.0, 100.0, raw="spend")],  # +30
+                            created_at="x")
+    v = official_view(conn, "claude", NOW, Budget(claude=100, codex=50), 0.04)
+    assert v.active_key == "monthly"   # 최근 차분 30 > 2 → tie-break(event 우선) 무시하고 monthly
