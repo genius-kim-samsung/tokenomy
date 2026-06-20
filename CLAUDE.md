@@ -36,10 +36,16 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 ~/.codex/sessions/**/rollout-*     ─ codex_parser.py ─┤→ UsageRecord → db.py(SQLite) → aggregate.py ─┬→ cli.py (report)
                                                       │                                              └→ web/ (FastAPI+Jinja2)
                                                  archive.py (raw 30일 휘발 전 원문 보존)
+공식 사용량 API(옵트인) ── official_fetch.py(유일한 아웃바운드, ≤3s, 백오프 없음) ─ raw JSON ─ official_parser.py ─→ db.py(official_buckets)
 ```
 
 - **parser.py / codex_parser.py** — 각 도구 로그를 공통 `UsageRecord`로 정규화. 새 도구 추가는
   여기에 모듈 하나 더(README의 "Adding a parser" 참고).
+- **official_fetch.py** — 공식 사용량 라이브 취득(유일한 아웃바운드). 각 CLI의 로컬 OAuth 토큰을
+  **읽기 전용**으로 사용해 공식 API를 단발 GET(≤3s/provider, 백오프 없음). 옵트인(`official_fetch.enabled`
+  기본 false) + provider 토글 + throttle(`min_interval_minutes` 기본 5). 401→auth_error, 그 외 실패→http_error,
+  **마지막 스냅샷·last_success_at 보존**. PII(토큰/account_id) 미저장 — 헤더에 쓰고 버린다.
+  트리거: 웹 `POST /official/refresh`(1차) + `cmd_ingest` 데몬스레드 훅(보조, 비차단). 표준 라이브러리만.
 - **db.py** — SQLite 적재. `messages`(메시지별 토큰/비용, `dedup_key` UNIQUE로 중복 제거),
   `sessions`(메타 + 요약 + 턴수), `session_day_turns`(세션×날짜 턴 수), `scan_offsets`(증분 스캔용 byte-offset),
   `official_buckets`(공식 사용량 멀티버킷 USD 스냅샷), `official_fetch_state`(자동 취득 상태). 스키마 변경은 `_MIGRATE_COLS`에 ALTER 추가.
@@ -78,12 +84,18 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
   내역·차원별은 주/월 토글 + 사용자 지정 날짜 구간(`start`/`end`) 조회(`views._resolve_range`).
 - **CSS는 Tailwind(standalone CLI)로 빌드.** `static/src/input.css`(토큰+`@layer components`) → `static/app.css`(커밋). 런타임/exe는 무빌드 유지. htmx는 `static/vendor/`에 vendored(오프라인). Alpine은 실수요 시 추가(현재 미사용).
 - **공식 사용량은 멀티버킷(USD 통일) — Claude 버킷/Codex 월간+주간(월÷4, 로컬 첫-사용 앵커).** `credit_to_usd`(config, 기본 0.04)로 크레딧 환산, 토큰 cost 경로와 분리. 구 단일값 `official_usage` 테이블은 `_migrate`가 DROP(로컬 단일 사용자라 이관 없음).
+- **공식 사용량 취득은 옵트인·비차단.** `official_fetch.enabled` 기본 false면 네트워크 0. on이어도
+  `cmd_ingest`는 fetch를 **데몬 스레드**(자기 sqlite conn)로 분리해 起動(`launcher._safe_ingest`)을 막지 않는다.
+  타임아웃 ≤3s, **백오프 없음**(단발 시도, 실패 즉시 포기). throttle은 우리 호출 빈도만 제어(엔드포인트 quota는 CLI와 공유 — 충돌 못 막음).
+- **토큰은 읽기 전용, refresh 금지.** Claude `~/.claude/.credentials.json`, Codex `~/.codex/auth.json`을 읽기만.
+  Codex 401(토큰 만료)은 마지막 값 유지 + "Codex CLI 1회 실행" 안내(직접 refresh 안 함).
 
 ## 환경변수
 
 - `TOKENOMY_DATA` — 데이터 디렉토리 전체 override.
 - `TOKENOMY_CONFIG` — config 파일 경로 override(테스트 격리용).
 - `TOKENOMY_SKIP_UPDATE_CHECK` — 설정 시 업데이트 네트워크 조회 끔(테스트/CI/오프라인).
+- `TOKENOMY_SKIP_OFFICIAL_FETCH` — 설정 시 공식 사용량 라이브 취득을 항상 skip(오프라인/CI/테스트).
 
 ## 릴리스
 
