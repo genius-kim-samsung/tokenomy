@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup,
-    by_day_session, by_dimension, by_project, by_session, daily_series,
+    _provider_where, by_day_session, by_dimension, by_project, by_session, daily_series,
     insights, month_bounds, month_spend, official_view, parse_ts, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
@@ -273,18 +273,18 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
 def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[dict]:
     """대시보드 공식 사용량 그리드용 provider 카드 리스트.
 
-    표시 대상 = tracked ∪ 공식 스냅샷 있음 ∪ 로컬 데이터 있음. 그 외는 생략.
+    표시 대상 = **활성 AI**(tracked_providers)뿐. 끈 provider는 공식 스냅샷·로컬 데이터가
+    있어도 카드를 띄우지 않는다(데이터는 보존, 표시만 숨김 — ADR 0005). 활성 0개면 빈 리스트.
     순서는 PROVIDERS 고정(claude→codex→…). 새 provider는 PROVIDERS·_PROVIDER_META만 늘리면 된다.
     """
     now = now_kst or datetime.now(KST)
     ctu = credit_to_usd(config)
-    tracked = set(tracked_providers(config))
+    active = set(tracked_providers(config))
     cards: list[dict] = []
     for p in PROVIDERS:
-        view = official_view(conn, p, now, ctu)
-        has_official = view.status == "ok" and bool(view.buckets)
-        if p not in tracked and not has_official and not _provider_has_data(conn, p):
+        if p not in active:
             continue
+        view = official_view(conn, p, now, ctu)
         cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now))
     return cards
 
@@ -304,26 +304,23 @@ def official_section_context(conn, config: dict, now_kst: datetime | None = None
 def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     now = now_kst or datetime.now(KST)
     config = load_config()
-    tracked = tracked_providers(config)
+    # 활성 AI(ADR 0005) — 화면의 "전체"는 곧 활성 합산이다(DB 전체가 아니다).
+    active = tracked_providers(config)
 
-    # 공식 미러 패널(provider별) — USD 1차. 한도/잔여의 정본.
-    ctu = credit_to_usd(config)
-    claude_official = official_view(conn, "claude", now, ctu)
-    codex_official = official_view(conn, "codex", now, ctu)
+    month_total = month_spend(conn, None, now, providers=active)
 
-    month_total = month_spend(conn, None, now)
-
-    projects = by_project(conn, None, now)
+    projects = by_project(conn, None, now, providers=active)
     projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
     projects = projects[:10]
-    sessions = by_session(conn, None, now, limit_n=10)
+    sessions = by_session(conn, None, now, limit_n=10, providers=active)
 
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
-    cov = pricing_coverage(conn, pricing)
-    coach = insights(conn, now, None, cov=cov)
-    daily = daily_series(conn, None, now)
+    cov = pricing_coverage(conn, pricing, providers=active)
+    coach = insights(conn, now, None, cov=cov, providers=active)
+    daily = daily_series(conn, None, now, providers=active)
 
-    trend_providers = [p for p in _TREND_STYLE if _provider_has_data(conn, p)]
+    # 추세 밴드 = 활성 ∩ 데이터 있는 provider. stacked_trend·차트 JS는 무변경(N밴드 generic).
+    trend_providers = [p for p in _TREND_STYLE if p in active and _provider_has_data(conn, p)]
     bands = stacked_trend(
         [(p, daily_series(conn, p, now)) for p in trend_providers]
     )
@@ -336,17 +333,18 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     ]
     trend_totals = bands[-1]["top"] if bands else [None for _ in daily]
 
-    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    # has_data·last_ts도 활성 기준 — 끈 provider만 데이터 있으면 빈 상태로 안내(일관).
+    where, params = _provider_where(None, active)
+    last = conn.execute("SELECT MAX(ts) t FROM messages" + where, params).fetchone()
     has_data = last is not None and last["t"] is not None
-    token_comp = token_composition(conn, None, *month_bounds(now))
+    token_comp = token_composition(conn, None, *month_bounds(now), providers=active)
 
     return {
         "active_nav": "dashboard", "sort": sort,
         "user_label": user_label(config),
-        "tracked": tracked,
+        "tracked": active,
         "month": now.strftime("%Y-%m"),
         "month_total": month_total,
-        "claude_official": claude_official, "codex_official": codex_official,
         "official_cards": official_cards(conn, config, now),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
         "projects": projects, "sessions": sessions, "insights": coach,

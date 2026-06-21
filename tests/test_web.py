@@ -21,7 +21,11 @@ def _seed_official(conn, provider, fixture, parse):
 def _client(tmp_path, monkeypatch):
     """app.connect를 임시 DB로 교체한 TestClient."""
     db = tmp_path / "t.db"
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "cfg.json"))  # 개인 config 격리(미존재 → 예산 0)
+    cfg = tmp_path / "cfg.json"
+    # 활성 AI를 claude·codex 둘로 고정 — "전체=활성 합산"(ADR 0005)이라 테스트 결정성을 위해
+    # 명시한다(미지정 시 크레덴셜 존재로 시드돼 CI/머신별로 활성 집합이 갈린다).
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))  # 개인 config 격리
     monkeypatch.setenv("TOKENOMY_SKIP_UPDATE_CHECK", "1")  # 웹 테스트는 업데이트 네트워크 미사용
 
     def fake_connect(*a, **k):
@@ -619,12 +623,14 @@ def test_coverage_card_context_injected_pricing():
 # ── Task 6+7 TDD 신규 테스트 ──────────────────────────────────────────────────
 
 def test_overview_context_keys(tmp_path, monkeypatch):
-    """overview_context가 claude_official/codex_official을 반환하고 gauge/official_notes는 없어야 한다."""
+    """overview_context가 official_cards(활성 카드 리스트)를 반환하고, 미참조 키
+    (claude_official/codex_official)·옛 gauge/official_notes는 없어야 한다(ADR 0005)."""
     from tokenomy.web.views import overview_context
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
     ctx = overview_context(conn, "cost")
-    assert "claude_official" in ctx and "codex_official" in ctx
+    assert "official_cards" in ctx
+    assert "claude_official" not in ctx and "codex_official" not in ctx   # 템플릿 미참조 → 제거
     assert "gauge" not in ctx and "official_notes" not in ctx
 
 

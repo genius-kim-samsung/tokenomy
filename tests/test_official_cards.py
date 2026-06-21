@@ -216,3 +216,22 @@ def test_untracked_no_data_provider_omitted():
     _seed(conn, "claude", [_bucket()])
     cards = official_cards(conn, {"tracked_providers": ["claude"]}, NOW)
     assert [c["provider"] for c in cards] == ["claude"]   # codex는 생략
+
+
+# ── 활성 게이트(ADR 0005): 비활성 provider는 공식·로컬 데이터가 있어도 카드 없음 ──
+def test_inactive_provider_with_data_is_omitted():
+    conn = _conn()
+    _seed(conn, "claude", [_bucket()])
+    _seed(conn, "codex", [_bucket(bucket_kind="codex_monthly", label="월간 크레딧 한도")])
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','codex','s1','2026-06-20T10:00:00Z',3.0,1)")
+    conn.commit()
+    # codex는 공식 스냅샷 + 로컬 데이터 둘 다 있지만 활성이 아니므로 카드를 띄우지 않는다.
+    cards = official_cards(conn, {"tracked_providers": ["claude"]}, NOW)
+    assert [c["provider"] for c in cards] == ["claude"]
+
+
+def test_empty_active_yields_no_cards():
+    conn = _conn()
+    _seed(conn, "claude", [_bucket()])
+    assert official_cards(conn, {"tracked_providers": []}, NOW) == []

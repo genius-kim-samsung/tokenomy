@@ -340,7 +340,9 @@ def test_by_project_combines_providers_when_none():
 
 def test_overview_context_shape(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 40}}', encoding="utf-8")
+    # 활성=둘 고정 — "전체=활성 합산"(ADR 0005)이라 month_total 결정성을 위해 명시.
+    cfg.write_text('{"tracked_providers": ["claude", "codex"], "budget": {"claude": 100, "codex": 40}}',
+                   encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0, project="/p")
@@ -358,7 +360,9 @@ def test_overview_context_shape(monkeypatch, tmp_path):
 
 
 def test_overview_context_provider_without_data(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
@@ -369,7 +373,8 @@ def test_overview_context_provider_without_data(monkeypatch, tmp_path):
 def test_overview_context_ignores_legacy_budget_start(monkeypatch, tmp_path):
     """legacy budget_start JSON 키는 무시됨. overview_context는 항상 달력 월(month_spend) 기준."""
     cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
+    cfg.write_text('{"tracked_providers": ["claude", "codex"], '
+                   '"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
                    encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
@@ -383,7 +388,8 @@ def test_overview_context_ignores_legacy_budget_start(monkeypatch, tmp_path):
 
 def test_overview_context_trend_calendar_month_ignores_legacy_budget(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
+    cfg.write_text('{"tracked_providers": ["claude", "codex"], '
+                   '"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
                    encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
@@ -410,7 +416,9 @@ def test_overview_context_trend_calendar_month_ignores_legacy_budget(monkeypatch
 
 
 def test_overview_context_no_budget_unconfigured(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
@@ -1542,3 +1550,35 @@ def test_insights_providers_passthrough():
     cards = insights(conn, _NOW_STATUS, None, cov=None, providers=["claude"])
     texts = " ".join(c.text for c in cards)
     assert "캐시 활용" not in texts          # claude만 보면 캐시 0.9라 경고 없음
+
+
+# ─── Commit 3(활성 AI): overview_context 활성 threading ───────────────────────
+
+def test_overview_context_respects_active_subset(monkeypatch, tmp_path):
+    # 활성=claude만 → 총지출·프로젝트·추세·official_cards 모두 codex 제외(데이터는 보존, 표시만 숨김).
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0, project="/p")
+    _msg(conn, dedup_key="cx", provider="codex", ts="2026-06-11T10:00:00Z", cost_usd=4.0, project="/p")
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["month_total"] == 10.0                                  # 14가 아니라 claude만
+    assert [c["provider"] for c in ctx["official_cards"]] == ["claude"]
+    assert [s["label"] for s in ctx["trend_series"]] == ["Claude"]     # codex 밴드 없음
+    assert ctx["projects"][0].cost == 10.0                             # 프로젝트 합도 claude만
+    assert ctx["has_data"] is True
+
+
+def test_overview_context_empty_active_is_empty_state(monkeypatch, tmp_path):
+    # 활성 0개 → 데이터는 있어도 빈 상태(표시 대상 없음). 전체로 새지 않음.
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": []}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["has_data"] is False
+    assert ctx["month_total"] == 0.0
+    assert ctx["official_cards"] == []
+    assert ctx["trend_series"] == []
