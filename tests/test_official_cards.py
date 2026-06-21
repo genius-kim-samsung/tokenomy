@@ -153,6 +153,34 @@ def test_active_bucket_ghost_and_forecast():
     assert "리셋 전 소진" in (g["forecast"] or "")   # 고스트 의미를 텍스트로 명시
 
 
+# ── 5시간 한도(개인 구독) — sub에 분 단위 리셋 시각 + 잔여 카운트다운 ─────────────
+def test_five_hour_window_sub_has_time_and_countdown():
+    conn = _conn()
+    reset = NOW + timedelta(hours=2, minutes=35)   # 2026-06-21 14:35 KST
+    _seed(conn, "claude", [_bucket(
+        bucket_key="rate_window", raw_key="five_hour", bucket_kind="rate_window",
+        label="5시간 한도", native_unit="percent",
+        used_native=None, limit_native=None, remaining_native=None,
+        used_usd=None, limit_usd=None, remaining_usd=None,
+        utilization=42.0, resets_at=reset)])
+    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    g = next(x for x in card["gauges"] if x["label"] == "5시간 한도")
+    assert g["sub"] == "리셋 2026-06-21 14:35 · 2시간 35분 후"   # 날짜만으론 무의미 → 분+카운트다운
+
+
+def test_five_hour_window_sub_minutes_only_when_under_hour():
+    conn = _conn()
+    reset = NOW + timedelta(minutes=40)            # 1시간 미만 → "분 후"만
+    _seed(conn, "claude", [_bucket(
+        bucket_key="rate_window", raw_key="five_hour", bucket_kind="rate_window",
+        label="5시간 한도", native_unit="percent",
+        used_usd=None, limit_usd=None, remaining_usd=None,
+        utilization=10.0, resets_at=reset)])
+    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    g = next(x for x in card["gauges"] if x["label"] == "5시간 한도")
+    assert g["sub"] == "리셋 2026-06-21 12:40 · 40분 후"
+
+
 # ── 게이트: tracked도 아니고 데이터도 없으면 카드 없음 ─────────────────────────
 def test_untracked_no_data_provider_omitted():
     conn = _conn()

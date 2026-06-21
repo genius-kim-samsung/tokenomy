@@ -21,14 +21,16 @@ _WINDOW_MODEL_NAMES = {"opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku"}
 
 
 def _rate_window_label(key: str) -> str:
-    """Claude rate-limit 창 키 → 서술 라벨(공식 앱 미러).
+    """Claude rate-limit 창 키 → 서술 라벨.
 
-    공식 앱의 "현재 세션 / 주간 한도(모든 모델·모델별)"와 동형으로 라벨링한다.
+    주간 창은 공식 앱과 동형으로 라벨링한다. 단 five_hour는 공식 앱이 "현재 세션"으로
+    부르지만, 우리는 창 길이가 곧 드러나는 "5시간 한도"로 표기한다(리셋 시각·잔여를
+    분 단위로 병기하므로 "세션"보다 창 길이가 더 actionable하다 — views._reset_with_countdown).
     five_hour/seven_day는 안정 키라 이름 매칭하고, seven_day_<model>의 접미사는
     모델 슬러그로 보아 표기명으로 환산하되 미지/회전 접미사는 타이틀케이스로 폴백한다.
     """
     if key.startswith("five_hour"):
-        return "현재 세션"
+        return "5시간 한도"
     if key == "seven_day":
         return "주간 · 모든 모델"
     if key.startswith("seven_day_"):

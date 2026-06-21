@@ -53,10 +53,10 @@ def test_claude_personal_rate_windows():
         assert b.native_unit == "percent"
         assert b.used_usd is None       # % 창은 USD 없음
         assert b.utilization > 0
-    # 창별 서술 라벨(공식 앱 미러) — 세 창이 구분되어야 한다
+    # 창별 서술 라벨 — 세 창이 구분되어야 한다(five_hour는 창 길이 표기 "5시간 한도")
     labels = {b.raw_key: b.label for b in rw}
     assert labels == {
-        "five_hour": "현재 세션",
+        "five_hour": "5시간 한도",
         "seven_day": "주간 · 모든 모델",
         "seven_day_opus": "주간 · Opus 전용",
     }
@@ -71,7 +71,7 @@ def test_claude_rate_window_label_variants():
         "seven_day_some_new_model": {"utilization": 5.0},
     }
     labels = {b.raw_key: b.label for b in parse_claude(raw, credit_to_usd=0.04)}
-    assert labels["five_hour"] == "현재 세션"
+    assert labels["five_hour"] == "5시간 한도"
     assert labels["seven_day"] == "주간 · 모든 모델"
     assert labels["seven_day_sonnet"] == "주간 · Sonnet 전용"
     assert labels["seven_day_some_new_model"] == "주간 · Some New Model 전용"
