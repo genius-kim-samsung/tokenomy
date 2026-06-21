@@ -918,6 +918,33 @@ def test_analysis_provider_toggle_hidden_when_single_active(tmp_path, monkeypatc
     assert "provider=codex" not in r.text           # 활성 1개 → provider 토글 없음
 
 
+# ── Commit 5(활성 AI): settings 카드 분리 + 상태칩 제거 ───────────────────────────
+
+def test_settings_splits_active_ai_and_official_cards(tmp_path, monkeypatch):
+    """설정이 '활성 AI'(토글) / '공식 사용량'(간격) 두 카드로 분리되고, fetch 상태칩은 없다.
+
+    상태(신선도·토큰만료 등)는 대시보드 'AI별 사용량' 카드가 담당 — 설정은 구성만.
+    """
+    client, fake_connect = _client(tmp_path, monkeypatch)   # 활성=둘 고정
+    from tokenomy.db import upsert_fetch_state
+    conn = fake_connect()
+    upsert_fetch_state(conn, "codex", last_attempt_at="2026-06-10T09:00:00+09:00",
+                       last_success_at=None, last_status="auth_error", last_error="HTTP 401")
+    html = client.get("/settings").text
+    assert "활성 AI" in html and "공식 사용량" in html        # 두 카드
+    assert "토큰 만료" not in html and "갱신 안 함" not in html   # 상태칩 제거
+    assert "자동 갱신 간격" in html and 'name="min_interval"' in html
+
+
+def test_settings_toggles_reflect_active(tmp_path, monkeypatch):
+    import re
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    html = client.get("/settings").text
+    assert re.search(r'name="track_claude"[^>]*checked', html)        # 활성 → 체크
+    assert not re.search(r'name="track_codex"[^>]*checked', html)     # 비활성 → 해제
+
+
 def test_settings_get_has_provider_checkboxes(tmp_path, monkeypatch):
     client, _ = _client_with_config(tmp_path, monkeypatch)
     html = client.get("/settings").text

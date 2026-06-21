@@ -531,44 +531,16 @@ def _share_pct(x: float) -> str:
     return "<1%" if 0 < p < 1 else f"{p:.0f}%"
 
 
-def settings_official_rows(conn, config: dict, now_kst: datetime | None = None) -> list[dict]:
-    """설정 화면 'AI별' row 표시모델.
+def settings_provider_toggles(config: dict) -> list[dict]:
+    """설정 '활성 AI' 카드 토글 표시모델 — provider별 {key, label, on}.
 
-    한 줄 안에 [켜짐 토글 상태 · 마지막 갱신 상태칩 · 신선도 · 오류 안내]를 모은다.
-    상태칩 텍스트/레벨은 fetch_state.last_status를 사람말로 옮긴 것이고, 신선도·오류 안내는
-    대시보드 provider 카드와 동일 헬퍼(_fresh_label·_remediation)를 재사용한다.
+    on = 활성(tracked_providers) 포함 여부. **fetch 상태칩·신선도·remediation은 두지 않는다** —
+    그 상태는 대시보드 'AI별 사용량' 카드가 이미 보여주므로(ADR 0005) 설정은 구성(on/off)만 담당한다.
+    PROVIDERS 순회 — claude/codex 하드코딩 없음(3번째 AI 확장 대비).
     """
-    now = now_kst or datetime.now(KST)
-    ctu = credit_to_usd(config)
-    tracked = set(tracked_providers(config))
-    rows: list[dict] = []
-    for p in PROVIDERS:
-        meta = _PROVIDER_META.get(p, {"label": p.title()})
-        st = get_fetch_state(conn, p)
-        fs = st["last_status"] if st else None
-        on = p in tracked
-        if not on:
-            level, text = "off", "갱신 안 함"
-        elif fs == "ok":
-            level, text = "ok", "정상"
-        elif fs == "auth_error":
-            level, text = "warn", "토큰 만료"
-        elif fs == "http_error":
-            level, text = "warn", "취득 실패"
-        else:
-            level, text = "wait", "아직 못 받음"
-        fresh = fetched_at = None
-        if on and fs == "ok":
-            view = official_view(conn, p, now, ctu)
-            fresh = _fresh_label(view.stale_minutes)
-            fetched_at = view.fetched_at
-        rows.append({
-            "key": p, "label": meta["label"], "on": on,
-            "level": level, "status_text": text,
-            "fresh": fresh, "fetched_at": fetched_at,
-            "note": _remediation(p, fs) if on else None,
-        })
-    return rows
+    active = set(tracked_providers(config))
+    return [{"key": p, "label": _PROVIDER_META.get(p, {}).get("label", p.title()),
+             "on": p in active} for p in PROVIDERS]
 
 
 def coverage_card_context(conn, pricing: dict) -> dict:

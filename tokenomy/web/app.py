@@ -19,7 +19,7 @@ from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
 from tokenomy.web.views import (
     coverage_card_context, dimension_context, history_context, official_section_context,
-    overview_context, session_context, settings_official_rows, sidebar_freshness,
+    overview_context, session_context, settings_provider_toggles, sidebar_freshness,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -186,7 +186,7 @@ def settings_get(request: Request, saved: int = 0):
         {"tracked": tracked, "providers": list(PROVIDERS),
          "credit_to_usd": _credit_to_usd(config),
          "official_fetch": ofs,
-         "official_rows": settings_official_rows(conn, config),
+         "provider_toggles": settings_provider_toggles(config),
          "saved": bool(saved),
          "active_nav": "settings", "update_tag": check_update(conn),
          "last_ts": last["t"] if last and last["t"] else None,
