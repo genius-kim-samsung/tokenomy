@@ -44,7 +44,7 @@ def test_official_import_codex(tmp_path):
 
 def test_report_runs_without_budget(capsys, monkeypatch):
     """cmd_report가 budget/burndown 없이 동작하고 provider별 총지출을 출력한다."""
-    import tokenomy.budget as b
+    import tokenomy.config as b
     # tracked_providers가 ["claude"]만 반환하도록 패치(크레덴셜 파일 불필요)
     monkeypatch.setattr(b, "creds_present", lambda p: p == "claude")
 

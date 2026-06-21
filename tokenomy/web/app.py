@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
 from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
-from tokenomy.budget import credit_to_usd as _credit_to_usd, load_config, official_fetch_settings, tracked_providers, save_config
+from tokenomy.config import credit_to_usd as _credit_to_usd, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect, get_fetch_state
 from tokenomy.official_fetch import refresh_tracked

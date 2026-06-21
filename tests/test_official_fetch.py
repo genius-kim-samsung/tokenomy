@@ -207,7 +207,7 @@ def test_refresh_tracked_skips_when_no_tracked(monkeypatch):
     monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
     calls = []
     monkeypatch.setattr("tokenomy.official_fetch.fetch_provider", lambda p, **k: calls.append(p))
-    import tokenomy.budget as b
+    import tokenomy.config as b
     monkeypatch.setattr(b, "creds_present", lambda p: False)
     from tokenomy.official_fetch import refresh_tracked
     res = refresh_tracked({}, now_kst=_NOW, conn=connect(":memory:"))
