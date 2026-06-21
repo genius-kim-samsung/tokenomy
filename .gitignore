@@ -37,7 +37,8 @@ Thumbs.db
 .gstack/
 .claude/
 
-# 설계 메모(docs/) — 조직/개인 맥락 sanitize 완료(2026-06-16), 전체 버전관리.
+# 설계 메모(docs/) — 로컬 전용으로 전환(2026-06-21). 추적 제외, 디스크엔 보존.
+docs/
 
 # Tailwind standalone 바이너리 — dev 도구, 커밋 안 함(산출 app.css만 추적)
 tools/
