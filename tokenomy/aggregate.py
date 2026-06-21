@@ -234,28 +234,12 @@ def _row_to_bucket_dict(r) -> dict:
 def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
                       limit_usd: float | None, used_usd: float | None,
                       reset_date: date | None) -> OfficialLens | None:
-    """official_bucket_series의 단조 증가 차분으로 일일 소비속도·소진예상·리셋 D-day 산출.
+    """로컬 일일 소비속도(local_daily_rate)로 소진예상·리셋 D-day 산출.
 
-    음수 차분(리셋/만료)·30분 미만 간격은 버린다. 유효 차분이 없으면 daily_rate=None.
+    rate = 이번 달 로컬 소비 ÷ 경과 영업일. 소비가 없으면 daily_rate=None.
+    bucket_key는 반환값 식별용으로만 사용(rate 계산에 미사용).
     """
-    from tokenomy.db import official_bucket_series
-
-    series = official_bucket_series(conn, provider, bucket_key)
-    pts = []
-    for r in series:
-        dt = parse_ts(r["fetched_at"])
-        if dt is not None and r["used_usd"] is not None:
-            pts.append((dt, r["used_usd"]))
-    pts.sort(key=lambda x: x[0])
-
-    rate: float | None = None
-    if len(pts) >= 2:
-        first_dt, first_u = pts[0]
-        last_dt, last_u = pts[-1]
-        delta = last_u - first_u
-        bdays = business_days_between(first_dt.date(), last_dt.date())
-        if delta > 0 and bdays > 0 and (last_dt - first_dt) >= timedelta(minutes=30):
-            rate = round(delta / bdays, 4)
+    rate = local_daily_rate(conn, provider, now_kst)
 
     exhaust_date: date | None = None
     if rate and limit_usd and used_usd is not None and limit_usd > used_usd:
@@ -280,7 +264,7 @@ def official_view(conn, provider: str, now_kst: datetime,
     - 활성 버킷 선정(1차): 후보(monthly_limit/event_credit/codex_monthly 중 stale 제외)의
       series 최근 두 스냅샷 used 양의 차분이 가장 큰 버킷 — 동률은 tie-break(event<monthly).
       (2차) 양의 차분이 없으면 remaining>0 첫 버킷; 없으면 첫 후보. promo/rate_window는 항상 제외.
-    - 예측 렌즈(lens)는 Phase 1에서 Claude 전용. Codex는 주간/월간 게이지가 각자 리셋 표시를 담당하므로 lens=None.
+    - 예측 렌즈(lens)는 로컬 rate 기반으로 provider 공통 제공. 로컬 소비가 없으면 daily_rate=None.
     """
     from tokenomy.db import latest_official_snapshot, get_fetch_state, official_bucket_series
 
@@ -373,10 +357,9 @@ def official_view(conn, provider: str, now_kst: datetime,
 
         active_key = active["bucket_key"]
         reset_date = parse_ts(active["resets_at"]).date() if active["resets_at"] else None
-        # 렌즈는 Claude 전용(Phase 1). Codex는 주간/월간 게이지가 각자 리셋 표시를 담당.
-        if provider != "codex":
-            lens = _lens_from_series(conn, provider, active_key, now_kst,
-                                     active["limit_usd"], active["used_usd"], reset_date)
+        # 렌즈는 로컬 rate라 provider 공통(Claude/Codex 모두 적용).
+        lens = _lens_from_series(conn, provider, active_key, now_kst,
+                                 active["limit_usd"], active["used_usd"], reset_date)
 
     note = None if rows else "공식 미취득 — 로컬 추정(USD)"
     return OfficialView(
@@ -413,6 +396,13 @@ def _elapsed_business_days(now_kst: datetime) -> int:
     """이번 달(KST) 월초부터 오늘(포함)까지 경과한 영업일 수."""
     month_start, _ = month_bounds(now_kst)
     return business_days_between(month_start.date(), now_kst.date() + timedelta(days=1))
+
+
+def local_daily_rate(conn, provider: str, now_kst: datetime) -> float | None:
+    """provider의 이번 달 로컬 소비 ÷ 경과 영업일(USD/영업일). 소비/경과가 없으면 None."""
+    elapsed = _elapsed_business_days(now_kst)
+    spend = month_spend(conn, provider, now_kst)
+    return round(spend / elapsed, 4) if (elapsed > 0 and spend > 0) else None
 
 
 def combined_forecast(conn, views: list[OfficialView], now_kst: datetime) -> CombinedForecast | None:

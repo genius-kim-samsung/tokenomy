@@ -141,6 +141,14 @@ def test_card_fallback_uses_local_estimate_and_spark():
 # ── 고스트(예측) + forecast 텍스트 — active 버킷 2스냅샷 ───────────────────────
 def test_active_bucket_ghost_and_forecast():
     conn = _conn()
+    # 로컬 소비 시드: rate = 450 / 15영업일(6/1~6/21) = 30/일
+    # → 예상 used = 820 + 30×7(영업일 6/22~6/30) = 1030 > 1000 → 고스트
+    # → exhaust = ceil(180/30) = 6영업일 후 = 6/29 < 7/1 → dday_warning=True
+    conn.execute(
+        "INSERT INTO messages(dedup_key,provider,session_id,project,ts,model,"
+        "input_tokens,cache_creation,cache_read,cost_usd,priced) "
+        "VALUES('k','claude','s','/p','2026-06-15T01:00:00Z','claude-opus-4-8',0,0,0,450.0,1)")
+    conn.commit()
     reset = NOW + timedelta(days=10)
     old = (NOW - timedelta(days=5)).isoformat()
     new = NOW.isoformat()

@@ -1351,31 +1351,38 @@ def test_official_view_codex_weekly_no_budget_fallback():
     assert v.period_used_usd is None       # 공식 월간 없음
 
 
-def test_official_view_lens_from_series():
+def test_official_view_lens_uses_local_rate():
     conn = connect(":memory:")
-    # 두 스냅샷(차분 → 일일 소비속도). 6/8 used 10 → 6/10 used 30, 2영업일 차분 20 → 10/영업일
-    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-08T09:00:00+09:00",
-                            buckets=[_ob("monthly", "monthly_limit", 10.0, 100.0, raw="spend")],
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")],
                             created_at="x")
+    _insert(conn, "2026-06-05T01:00:00Z", 80.0, provider="claude", session="a")  # 80/8영업일 = 10/일
+    v = official_view(conn, "claude", NOW, 0.04)
+    assert v.lens is not None
+    assert v.lens.daily_rate_usd == 10.0
+    assert v.active_key == "monthly"
+
+
+def test_official_view_codex_now_has_lens():
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T01:00:00Z", 40.0, provider="codex", session="a")  # 40/8 = 5/일
+    insert_official_buckets(conn, provider="codex", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "codex_monthly", 20.0, 80.0, raw="individual_limit",
+                                         unit="credit", util=25.0)],
+                            created_at="x")
+    v = official_view(conn, "codex", NOW, 0.04)
+    assert v.lens is not None
+    assert v.lens.daily_rate_usd == 5.0
+
+
+def test_lens_none_rate_without_local_spend():
+    conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
                             buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")],
                             created_at="x")
     v = official_view(conn, "claude", NOW, 0.04)
     assert v.lens is not None
-    assert v.lens.daily_rate_usd == 10.0   # (30-10) / 2 영업일
-    assert v.active_key == "monthly"
-
-
-def test_official_view_codex_has_no_lens():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-09T01:00:00Z", 5.0, provider="codex", session="a")
-    insert_official_buckets(conn, provider="codex", fetched_at="2026-06-10T09:00:00+09:00",
-                            buckets=[_ob("monthly", "codex_monthly", 20.0, 80.0, raw="individual_limit",
-                                         unit="credit", util=25.0)],
-                            created_at="x")
-    now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
-    v = official_view(conn, "codex", now, 0.04)
-    assert v.lens is None
+    assert v.lens.daily_rate_usd is None
 
 
 def test_official_view_codex_idle_window_empty():
