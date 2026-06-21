@@ -1,8 +1,10 @@
 {
   "plan_type": "plus",
   "rate_limit": {
-    "primary_window": {"used_percent": 55.0, "window_minutes": 300, "resets_at": 1782864001},
-    "secondary_window": {"used_percent": 20.0, "window_minutes": 10080, "resets_at": 1783000000}
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {"used_percent": 55.0, "limit_window_seconds": 18000, "reset_after_seconds": 18000, "reset_at": 1782020924},
+    "secondary_window": {"used_percent": 20.0, "limit_window_seconds": 604800, "reset_after_seconds": 455071, "reset_at": 1782457995}
   },
   "spend_control": null,
   "credits": {"has_credits": false}
