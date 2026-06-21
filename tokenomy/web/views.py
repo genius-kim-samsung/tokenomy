@@ -234,12 +234,11 @@ def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
         if proj_util > util:
             ghost_pct = round(min(proj_util, 100), 1)
             ghost_warn = bool(lens.dday_warning) or proj_util >= 90
-            if ghost_warn:
-                forecast = "⚠ 이 속도면 리셋 전 소진"
-                if lens.exhaust_date:
-                    forecast += f" (예상 {lens.exhaust_date:%m-%d})"
+            if lens.exhaust_date and lens.dday_warning:
+                forecast = f"⚠ {lens.exhaust_date:%m-%d} 소진 예상"
             else:
-                forecast = f"이 속도면 리셋 시 ~{round(proj_util)}%"
+                surplus = round(limit - projected, 2)
+                forecast = f"이 속도면 리셋 시 ${surplus:,.0f} 여유"
 
     return {
         "label": b["label"],

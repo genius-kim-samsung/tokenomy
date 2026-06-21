@@ -162,7 +162,7 @@ def test_active_bucket_ghost_and_forecast():
     g = card["gauges"][0]
     assert g["ghost_pct"] is not None and g["ghost_pct"] > g["fill_pct"]
     assert g["ghost_warn"] is True                  # 82% + 리셋 전 소진 → 빨간 고스트
-    assert "리셋 전 소진" in (g["forecast"] or "")   # 고스트 의미를 텍스트로 명시
+    assert "소진 예상" in (g["forecast"] or "")   # 고스트 의미를 텍스트로 명시(여유/부족 통일)
 
 
 # ── 5시간 한도(개인 구독) — sub에 분 단위 리셋 시각 + 잔여 카운트다운 ─────────────
@@ -302,3 +302,20 @@ def test_forecast_chart_line_anchored_on_official_used():
     assert line[8] is None                 # 6/9(인덱스8) — 오늘 이전 → None
     assert line[9] == 40.0                 # 6/10(인덱스9=오늘) = 공식 used
     assert line[29] == 180.0               # 6/30(인덱스29=월말) = used + rate*14
+
+
+# ── 카드 forecast 텍스트: 여유 또는 소진 예상 ──────────────────────────────────
+def test_card_forecast_text_surplus_or_exhaust():
+    conn = _conn()
+    _seed(conn, "claude", [_bucket(used_usd=30.0, limit_usd=100.0, utilization=30.0)])
+    # 로컬 소비로 기울기 발생(작은 rate → 리셋 시 여유)
+    conn.execute(
+        "INSERT INTO messages(dedup_key,provider,session_id,project,ts,model,"
+        "input_tokens,cache_creation,cache_read,cost_usd,priced) "
+        "VALUES('k','claude','s','/p','2026-06-09T01:00:00Z','claude-opus-4-8',0,0,0,8.0,1)")
+    conn.commit()
+    cards = official_cards(conn, {}, now_kst=NOW6)
+    card = _card(cards, "claude")
+    fcs = [g.get("forecast") for g in card["gauges"] if g.get("forecast")]
+    assert fcs, "active 버킷에 forecast 텍스트가 있어야 한다"
+    assert ("여유" in fcs[0]) or ("소진 예상" in fcs[0])
