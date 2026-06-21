@@ -10,7 +10,7 @@ from tokenomy.aggregate import (
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
 )
-from tokenomy.budget import (
+from tokenomy.config import (
     credit_to_usd, load_config, official_fetch_settings, tracked_providers, user_label,
 )
 from tokenomy.db import get_fetch_state, get_meta

@@ -18,7 +18,7 @@ from tokenomy.archive import archive_tree
 from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns, maybe_reprice, insert_official_buckets
 from tokenomy.freshness import CLEANUP_DAYS, freshness, record_ingest
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
-from tokenomy.budget import load_config, user_label, credit_to_usd, tracked_providers
+from tokenomy.config import load_config, user_label, credit_to_usd, tracked_providers
 from tokenomy.official_parser import parse_claude, parse_codex
 
 CLAUDE_ROOT = Path.home() / ".claude" / "projects"

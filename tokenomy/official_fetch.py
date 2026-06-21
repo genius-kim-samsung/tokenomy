@@ -17,7 +17,7 @@ from pathlib import Path
 from tokenomy import paths
 from tokenomy.paths import CLAUDE_CREDS, CODEX_AUTH
 from tokenomy.aggregate import parse_ts
-from tokenomy.budget import credit_to_usd, official_fetch_settings, tracked_providers
+from tokenomy.config import credit_to_usd, official_fetch_settings, tracked_providers
 from tokenomy.db import get_fetch_state, insert_official_buckets, upsert_fetch_state
 from tokenomy.official_parser import parse_claude, parse_codex
 

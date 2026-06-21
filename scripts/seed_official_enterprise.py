@@ -76,7 +76,7 @@ def main() -> None:
     data_dir = str(Path(args.data_dir).expanduser())
     os.environ["TOKENOMY_DATA"] = data_dir
 
-    from tokenomy.budget import credit_to_usd, load_config
+    from tokenomy.config import credit_to_usd, load_config
     from tokenomy.db import connect
 
     ctu = credit_to_usd(load_config())

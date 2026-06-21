@@ -1,6 +1,6 @@
 import json
 
-from tokenomy.budget import (
+from tokenomy.config import (
     load_config,
     save_config,
     user_label,
@@ -40,13 +40,13 @@ def test_example_config_is_valid():
 
 
 def test_config_path_default_uses_paths(tmp_path, monkeypatch):
-    from tokenomy.budget import _config_path
+    from tokenomy.config import _config_path
     monkeypatch.delenv("TOKENOMY_CONFIG", raising=False)
     monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
     assert _config_path() == tmp_path / "config" / "tokenomy.config.json"
 
 
-from tokenomy.budget import credit_to_usd
+from tokenomy.config import credit_to_usd
 
 
 def test_credit_to_usd_default_when_missing():
@@ -63,7 +63,7 @@ def test_credit_to_usd_rejects_bad_values():
     assert credit_to_usd({"credit_to_usd": None}) == 0.04
 
 
-from tokenomy.budget import official_fetch_settings
+from tokenomy.config import official_fetch_settings
 
 
 def test_official_fetch_settings_defaults():
@@ -84,7 +84,7 @@ def test_load_config_default_auto_interval_is_10(tmp_path):
     assert cfg["official_fetch"]["min_interval_minutes"] == 10
 
 
-from tokenomy.budget import tracked_providers
+from tokenomy.config import tracked_providers
 from tokenomy import paths
 
 
@@ -104,7 +104,7 @@ def test_tracked_providers_explicit_list_wins():
 
 
 def test_tracked_providers_seeds_from_creds_when_absent(monkeypatch):
-    import tokenomy.budget as b
+    import tokenomy.config as b
     monkeypatch.setattr(b, "creds_present", lambda p: p == "claude")
     assert tracked_providers({}) == ["claude"]
     assert tracked_providers({"tracked_providers": []}) == ["claude"]   # 빈 리스트도 시드
