@@ -1549,6 +1549,62 @@ def test_combined_forecast_already_exhausted():
     assert fc.projected_used_usd is None            # 소진이면 전망 생략
 
 
+# --- 풀 집계: 월간 + 포함 크레딧 합산(ADR 0004 갱신) ---
+
+
+def test_official_view_pool_sums_monthly_and_credit():
+    # 전망 풀 기여 = 월간 + 포함 크레딧 합. 카드 게이지(period_*)는 월간만 유지.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 125.0, 500.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    v = official_view(conn, "claude", NOW, 0.04)
+    assert v.period_used_usd == 30.0 and v.period_limit_usd == 100.0   # 카드 게이지=월간만
+    assert v.pool_used_usd == 155.0 and v.pool_limit_usd == 600.0      # 풀=월간+크레딧
+
+
+def test_official_view_pool_excludes_expired_credit():
+    # 만료(resets_at 과거) 크레딧은 풀에서 제외(candidates stale 기준 공유).
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 125.0, 500.0, raw="cinder",
+                                         resets=datetime(2026, 5, 1, tzinfo=KST))],  # 과거 → 제외
+                            created_at="x")
+    v = official_view(conn, "claude", NOW, 0.04)
+    assert v.pool_used_usd == 30.0 and v.pool_limit_usd == 100.0
+
+
+def test_official_view_pool_none_without_usd_limit():
+    # USD 한도 버킷이 없으면(개인 구독 rate_window 등) 풀 기여 없음.
+    conn = connect(":memory:")
+    v = official_view(conn, "claude", NOW, 0.04)
+    assert v.pool_used_usd is None and v.pool_limit_usd is None
+
+
+def test_combined_forecast_includes_event_credit():
+    # 통합 풀이 Claude 포함 크레딧(실제 닳는 버킷)을 합산. 오버리지($0/$100)만 보던 회귀 방지.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 0.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 125.0, 500.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    insert_official_buckets(conn, provider="codex", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "codex_monthly", 20.0, 80.0,
+                                         raw="individual_limit", unit="credit", util=25.0)],
+                            created_at="x")
+    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
+    assert fc.used_usd == 145.0      # 0 + 125 + 20
+    assert fc.limit_usd == 680.0     # 100 + 500 + 80
+    assert fc.remaining_usd == 535.0
+    # per_provider도 풀(월간+크레딧) 합산을 반영
+    claude = next(p for p in fc.per_provider if p["provider"] == "claude")
+    assert claude["used_usd"] == 125.0 and claude["limit_usd"] == 600.0
+
+
 # ─── Commit 2(활성 AI): providers 필터(WHERE provider IN) ─────────────────────
 # provider=None(전체)일 때 키워드 providers로 활성 집합만 합산. 빈 집합은 빈 결과.
 

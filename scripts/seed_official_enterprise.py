@@ -101,6 +101,9 @@ def main() -> None:
     print(r'  $env:TOKENOMY_SKIP_OFFICIAL_FETCH = "1"')
     print(r'  .venv\Scripts\python -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765')
     print("  → 브라우저 http://127.0.0.1:8765")
+    print("\n주의(프리뷰 한정): 통합 추세에서 실제 누적선(로컬 실측)과 예상선(공식 fixture 기준)이")
+    print("  어긋나는 건 정상이다 — 로컬은 경식님 실제 사용, 공식은 가짜 시드라 스케일이 무관하다.")
+    print("  실제 enterprise 계정에선 공식 used가 로컬 추세를 따라가 격차가 줄어든다.")
 
 
 if __name__ == "__main__":

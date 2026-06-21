@@ -226,8 +226,10 @@ class OfficialView:
     buckets: list[dict]                 # 표시용(버킷 행 dict, 표시 순서)
     active_key: str | None
     lens: OfficialLens | None
-    period_used_usd: float | None       # 월간(공식). 없으면 None
+    period_used_usd: float | None       # 월간(공식). 카드 게이지용. 없으면 None
     period_limit_usd: float | None
+    pool_used_usd: float | None         # 통합 전망 풀 기여 = 월간+포함크레딧 등 USD 한도 버킷 used 합(ADR 0004)
+    pool_limit_usd: float | None        # 동 limit 합. USD 한도 버킷이 없으면 None
     weekly_used_usd: float | None       # Codex 주간(로컬 추정). Claude=None
     weekly_limit_usd: float | None
     weekly_estimated: bool
@@ -351,6 +353,11 @@ def official_view(conn, provider: str, now_kst: datetime,
         and not (b["resets_at"] and parse_ts(b["resets_at"]) is not None
                  and parse_ts(b["resets_at"]) < now_kst)
     ]
+    # 통합 전망 풀 기여 = candidates(stale 제외 USD 한도 버킷) 중 limit_usd 있는 것의 합.
+    # 카드 게이지(period_*)는 월간만 보지만, 전망은 포함 크레딧 등 실제 닳는 버킷까지 합산(ADR 0004).
+    pool_cands = [b for b in candidates if b["limit_usd"] is not None]
+    pool_used = round(sum(b["used_usd"] or 0.0 for b in pool_cands), 4) if pool_cands else None
+    pool_limit = round(sum(b["limit_usd"] for b in pool_cands), 4) if pool_cands else None
     if candidates:
         # 1차: series 최근 두 스냅샷의 양의 used 차분이 가장 큰 버킷
         def _recent_diff(b: dict) -> float:
@@ -385,6 +392,7 @@ def official_view(conn, provider: str, now_kst: datetime,
     return OfficialView(
         provider=provider, buckets=buckets, active_key=active_key, lens=lens,
         period_used_usd=period_used, period_limit_usd=period_limit,
+        pool_used_usd=pool_used, pool_limit_usd=pool_limit,
         weekly_used_usd=weekly_used, weekly_limit_usd=weekly_limit,
         weekly_estimated=weekly_estimated, weekly_window_end=weekly_end,
         fetched_at=fetched_at, stale_minutes=stale_minutes, status=status, note=note,
@@ -428,17 +436,21 @@ def local_daily_rate(conn, provider: str, now_kst: datetime) -> float | None:
 def combined_forecast(conn, views: list[OfficialView], now_kst: datetime) -> CombinedForecast | None:
     """공식 USD/크레딧 한도가 있는 provider를 한 풀로 합쳐 달력 월말 예상 잔여를 낸다.
 
-    풀 = period_limit_usd가 있는 view들. 없으면 None(히어로 숨김).
-    used/limit = 공식 period_*의 합(현재 위치). daily_rate = 풀 provider 로컬 월소비 합 ÷ 경과 영업일.
+    풀 = pool_limit_usd가 있는 view들. 없으면 None(히어로 숨김).
+    used/limit = 공식 pool_*의 합(현재 위치 — 월간+포함크레딧 등 USD 한도 버킷 합산, ADR 0004).
     예상 used = used + daily_rate × (오늘 이후 월말까지 남은 영업일). 음수 잔여면 소진 예상일 산출.
+    daily_rate = 풀 provider 로컬 월소비 합 ÷ 경과 영업일.
     이미 소진(used≥limit)이거나 로컬 소비가 없으면(daily_rate None) 전망은 생략(None)한다.
+
+    한계(ADR 0004): 포함 크레딧은 리셋 주기가 월간과 다를 수 있으나(예: 분기 만료),
+    v1.x는 달력 월말 지평으로 함께 본다 — "이번 달 이 속도면 가용 예산을 다 쓰나?" 질문에 답하기 위함.
     """
-    pool = [v for v in views if v.period_limit_usd]
+    pool = [v for v in views if v.pool_limit_usd]
     if not pool:
         return None
 
-    used = round(sum(v.period_used_usd or 0.0 for v in pool), 4)
-    limit = round(sum(v.period_limit_usd for v in pool), 4)
+    used = round(sum(v.pool_used_usd or 0.0 for v in pool), 4)
+    limit = round(sum(v.pool_limit_usd for v in pool), 4)
     remaining = round(limit - used, 4)
 
     _, next_month = month_bounds(now_kst)
@@ -464,8 +476,8 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime) -> Com
         daily_rate_usd=daily_rate, bdays_remaining=bdays_remaining,
         projected_used_usd=projected_used, projected_remaining_usd=projected_remaining,
         exhaust_date=exhaust_date, is_exhausted=is_exhausted,
-        per_provider=[{"provider": v.provider, "used_usd": v.period_used_usd or 0.0,
-                       "limit_usd": v.period_limit_usd} for v in pool],
+        per_provider=[{"provider": v.provider, "used_usd": v.pool_used_usd or 0.0,
+                       "limit_usd": v.pool_limit_usd} for v in pool],
         month_end=month_end,
     )
 
