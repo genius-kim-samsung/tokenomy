@@ -388,6 +388,78 @@ def official_view(conn, provider: str, now_kst: datetime,
     )
 
 
+@dataclass
+class CombinedForecast:
+    """통합 풀 월말 전망 — 한도 있는 provider 합산 + 로컬 소비속도 직선 연장.
+
+    위치(used/limit)는 공식 ground-truth, 기울기(daily_rate)는 로컬 JSONL 추정.
+    지평은 달력 월말(KST). projected_remaining 양수=여유 / 음수=부족.
+    """
+    providers: list[str]
+    used_usd: float
+    limit_usd: float
+    remaining_usd: float
+    daily_rate_usd: float | None
+    bdays_remaining: int
+    projected_used_usd: float | None
+    projected_remaining_usd: float | None
+    exhaust_date: date | None
+    is_exhausted: bool
+    per_provider: list[dict]
+    month_end: date
+
+
+def _elapsed_business_days(now_kst: datetime) -> int:
+    """이번 달(KST) 월초부터 오늘(포함)까지 경과한 영업일 수."""
+    month_start, _ = month_bounds(now_kst)
+    return business_days_between(month_start.date(), now_kst.date() + timedelta(days=1))
+
+
+def combined_forecast(conn, views: list[OfficialView], now_kst: datetime) -> CombinedForecast | None:
+    """공식 USD/크레딧 한도가 있는 provider를 한 풀로 합쳐 달력 월말 예상 잔여를 낸다.
+
+    풀 = period_limit_usd가 있는 view들. 없으면 None(히어로 숨김).
+    used/limit = 공식 period_*의 합(현재 위치). daily_rate = 풀 provider 로컬 월소비 합 ÷ 경과 영업일.
+    예상 used = used + daily_rate × (오늘 이후 월말까지 남은 영업일). 음수 잔여면 소진 예상일 산출.
+    이미 소진(used≥limit)이거나 로컬 소비가 없으면(daily_rate None) 전망은 생략(None)한다.
+    """
+    pool = [v for v in views if v.period_limit_usd]
+    if not pool:
+        return None
+
+    used = round(sum(v.period_used_usd or 0.0 for v in pool), 4)
+    limit = round(sum(v.period_limit_usd for v in pool), 4)
+    remaining = round(limit - used, 4)
+
+    _, next_month = month_bounds(now_kst)
+    month_end = (next_month - timedelta(days=1)).date()
+    elapsed = _elapsed_business_days(now_kst)
+    spend = sum(month_spend(conn, v.provider, now_kst) for v in pool)
+    daily_rate = round(spend / elapsed, 4) if (elapsed > 0 and spend > 0) else None
+    bdays_remaining = business_days_between(now_kst.date() + timedelta(days=1), next_month.date())
+
+    is_exhausted = used >= limit
+    projected_used = projected_remaining = None
+    exhaust_date = None
+    if daily_rate is not None and not is_exhausted:
+        projected_used = round(used + daily_rate * bdays_remaining, 4)
+        projected_remaining = round(limit - projected_used, 4)
+        if projected_used > limit and daily_rate > 0:
+            need = math.ceil((limit - used) / daily_rate)
+            exhaust_date = add_business_days(now_kst.date(), need)
+
+    return CombinedForecast(
+        providers=[v.provider for v in pool],
+        used_usd=used, limit_usd=limit, remaining_usd=remaining,
+        daily_rate_usd=daily_rate, bdays_remaining=bdays_remaining,
+        projected_used_usd=projected_used, projected_remaining_usd=projected_remaining,
+        exhaust_date=exhaust_date, is_exhausted=is_exhausted,
+        per_provider=[{"provider": v.provider, "used_usd": v.period_used_usd or 0.0,
+                       "limit_usd": v.period_limit_usd} for v in pool],
+        month_end=month_end,
+    )
+
+
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None,
                *, start: datetime | None = None, nxt: datetime | None = None) -> list[ProjectRow]:
     assert (start is None) == (nxt is None), "start/nxt는 함께 지정해야 한다"

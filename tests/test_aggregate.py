@@ -13,6 +13,7 @@ from tokenomy.aggregate import (
     parse_ts, period_bounds, session_detail, sidechain_split,
     SidechainSplit, stacked_trend, token_composition, pricing_coverage, CoverageReport,
     week_count,
+    combined_forecast, CombinedForecast, _elapsed_business_days,
 )
 from tokenomy.db import connect, insert_official_buckets, ingest_records
 from tokenomy.official_parser import OfficialBucket
@@ -1447,3 +1448,87 @@ def test_insights_no_budget_overrun_card():
     # bd 인자 없음 — TypeError 안 나야 함(시그니처 확인)
     texts = " ".join(c.text for c in cards)
     assert "한도 초과" not in texts and "월말" not in texts
+
+
+# --- 통합 월말 전망(combined_forecast) ---
+
+
+def _fc_views(conn, now):
+    return [official_view(conn, "claude", now, 0.04),
+            official_view(conn, "codex", now, 0.04)]
+
+
+def test_elapsed_business_days_june10():
+    # 6/1(월)~6/10(수) 포함 영업일 = 8
+    assert _elapsed_business_days(NOW) == 8
+
+
+def test_combined_forecast_empty_pool_none():
+    # 공식 한도 전무 → None(히어로 숨김)
+    conn = connect(":memory:")
+    assert combined_forecast(conn, _fc_views(conn, NOW), NOW) is None
+
+
+def test_combined_forecast_pool_sums_used_and_limit():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")],
+                            created_at="x")
+    insert_official_buckets(conn, provider="codex", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "codex_monthly", 20.0, 80.0,
+                                         raw="individual_limit", unit="credit", util=25.0)],
+                            created_at="x")
+    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
+    assert set(fc.providers) == {"claude", "codex"}
+    assert fc.used_usd == 50.0 and fc.limit_usd == 180.0
+    assert fc.remaining_usd == 130.0
+
+
+def test_combined_forecast_surplus():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 40.0, 200.0, raw="spend")],
+                            created_at="x")
+    _insert(conn, "2026-06-05T01:00:00Z", 80.0, provider="claude", session="a")  # 로컬 80 / 8영업일 = 10/일
+    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
+    assert fc.providers == ["claude"]
+    assert fc.daily_rate_usd == 10.0
+    assert fc.bdays_remaining == 14
+    assert fc.projected_used_usd == 180.0           # 40 + 10*14
+    assert fc.projected_remaining_usd == 20.0       # 200 - 180 → 여유
+    assert fc.exhaust_date is None
+    assert fc.is_exhausted is False
+
+
+def test_combined_forecast_shortfall_with_exhaust_date():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 40.0, 100.0, raw="spend")],
+                            created_at="x")
+    _insert(conn, "2026-06-05T01:00:00Z", 80.0, provider="claude", session="a")  # 10/일
+    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
+    assert fc.projected_used_usd == 180.0           # 40 + 10*14
+    assert fc.projected_remaining_usd == -80.0      # 부족
+    assert fc.exhaust_date == date(2026, 6, 18)     # 6 영업일분(=(100-40)/10) 후
+
+
+def test_combined_forecast_insufficient_no_local_spend():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 40.0, 200.0, raw="spend")],
+                            created_at="x")
+    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
+    assert fc.daily_rate_usd is None                # 로컬 소비 0 → 기울기 없음
+    assert fc.projected_remaining_usd is None
+    assert fc.remaining_usd == 160.0
+
+
+def test_combined_forecast_already_exhausted():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 100.0, 100.0, raw="spend")],
+                            created_at="x")
+    _insert(conn, "2026-06-05T01:00:00Z", 50.0, provider="claude", session="a")
+    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
+    assert fc.is_exhausted is True
+    assert fc.projected_used_usd is None            # 소진이면 전망 생략
