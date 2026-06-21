@@ -104,7 +104,15 @@ def test_tracked_providers_explicit_list_wins():
 
 
 def test_tracked_providers_seeds_from_creds_when_absent(monkeypatch):
+    # 키 자체가 없거나(None) 미설정이면 크레덴셜로 시드(무설정 첫 실행이 대개 정답).
     import tokenomy.config as b
     monkeypatch.setattr(b, "creds_present", lambda p: p == "claude")
     assert tracked_providers({}) == ["claude"]
-    assert tracked_providers({"tracked_providers": []}) == ["claude"]   # 빈 리스트도 시드
+    assert tracked_providers({"tracked_providers": None}) == ["claude"]
+
+
+def test_tracked_providers_empty_list_persists(monkeypatch):
+    # 명시적 빈 리스트는 "전부 끄기"의 영속 상태 — 크레덴셜이 있어도 재시드하지 않는다.
+    import tokenomy.config as b
+    monkeypatch.setattr(b, "creds_present", lambda p: True)
+    assert tracked_providers({"tracked_providers": []}) == []
