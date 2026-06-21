@@ -15,7 +15,7 @@
 {# 공식 미러 패널 — provider별 카드 그리드(ADR 0002). 색=임계 · 텍스처=공식/추정 #}
 <section class="card">
   <div class="card-head">
-    <h2>AI별 사용량 <span class="muted">· 공식 앱 미러 + 예측</span></h2>
+    <h2>AI별 사용량</h2>
   </div>
   <div class="official-grid">
     {% for c in official_cards %}
@@ -76,7 +76,7 @@
     <p class="muted">추적 중인 provider가 없습니다 — 설정에서 추가하면 공식 사용량을 자동으로 가져옵니다.</p>
     {% endfor %}
   </div>
-  <p class="disclaimer">ⓘ <span class="src-official">공식</span>=API ground truth · <span class="src-est">추정</span>=로컬 CLI 토큰단가</p>
+  <p class="disclaimer">ⓘ <span class="src-official">공식</span>=AI별 공식 API · <span class="src-est">추정</span>=로컬 사용 로그</p>
 </section>
 
 
