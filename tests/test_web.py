@@ -119,6 +119,29 @@ def test_trend_data_embedded(tmp_path, monkeypatch):
     assert "endLabels" in r.text            # 끝점 라벨 플러그인(상시 구성 표시)
 
 
+def test_overview_context_includes_forecast(tmp_path, monkeypatch):
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.db import connect, insert_official_buckets
+    from tokenomy.official_parser import OfficialBucket
+    from tokenomy.web.views import overview_context
+
+    conn = connect(":memory:")
+    insert_official_buckets(
+        conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+        buckets=[OfficialBucket(
+            bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit",
+            label="m", native_unit="usd", used_native=40.0, limit_native=200.0,
+            remaining_native=160.0, used_usd=40.0, limit_usd=200.0, remaining_usd=160.0,
+            utilization=20.0, resets_at=None)],
+        created_at="2026-06-10T09:00:00+09:00")
+    ctx = overview_context(conn, "cost", now_kst=datetime(2026, 6, 10, 12, tzinfo=KST))
+    assert ctx["forecast"] is not None
+    assert ctx["forecast"]["level"] in {"surplus", "shortfall", "exhausted", "insufficient"}
+    assert ctx["forecast_limit"] == 200.0
+    assert "forecast_line" in ctx
+
+
 def _client_with_config(tmp_path, monkeypatch):
     """_client(=config 격리됨) + 그 config 파일 경로를 함께 돌려준다."""
     client, _ = _client(tmp_path, monkeypatch)   # TOKENOMY_CONFIG → tmp_path/cfg.json

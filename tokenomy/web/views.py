@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup,
-    by_day_session, by_dimension, by_project, by_session, daily_series,
+    by_day_session, by_dimension, by_project, by_session, combined_forecast, daily_series,
     insights, month_bounds, month_spend, official_view, parse_ts, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
@@ -376,6 +376,10 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     cov = pricing_coverage(conn, pricing)
     coach = insights(conn, now, None, cov=cov)
     daily = daily_series(conn, None, now)
+    # 통합 월말 전망 — 이미 만든 OfficialView 재사용(추가 official_view 호출 없음).
+    forecast_obj = combined_forecast(conn, [claude_official, codex_official], now)
+    forecast = _forecast_hero(forecast_obj)
+    fc_chart = forecast_chart_data(forecast_obj, daily, now)
 
     trend_providers = [p for p in _TREND_STYLE if _provider_has_data(conn, p)]
     bands = stacked_trend(
@@ -400,6 +404,9 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "tracked": tracked,
         "month": now.strftime("%Y-%m"),
         "month_total": month_total,
+        "forecast": forecast,
+        "forecast_limit": fc_chart["limit"],
+        "forecast_line": fc_chart["line"],
         "claude_official": claude_official, "codex_official": codex_official,
         "official_cards": official_cards(conn, config, now),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],

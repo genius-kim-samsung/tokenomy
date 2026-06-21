@@ -2,6 +2,24 @@
 {% block body %}
 <h1 class="page-title">대시보드 <span class="muted">· {{ month }} (KST){% if user_label %} · {{ user_label }}{% endif %}</span></h1>
 
+{% if forecast %}
+<section class="card forecast-hero" data-level="{{ forecast.level }}">
+  <h2>이번 달 전망 <span class="muted">({{ forecast.providers_label }} 통합 · 추정)</span></h2>
+  {% if forecast.level == "surplus" %}
+    <p class="forecast-headline">이 속도면 월말 <strong>${{ '{:,.0f}'.format(forecast.surplus) }} 여유</strong></p>
+  {% elif forecast.level == "shortfall" %}
+    <p class="forecast-headline"><strong>{{ forecast.exhaust_date }} 소진 예상</strong> · 월말 ${{ '{:,.0f}'.format(forecast.shortfall_abs) }} 부족</p>
+  {% elif forecast.level == "exhausted" %}
+    <p class="forecast-headline">한도 소진됨</p>
+  {% else %}
+    <p class="forecast-headline">현재 잔여 ${{ '{:,.2f}'.format(forecast.remaining) }} <span class="muted">· 추세 데이터 부족</span></p>
+  {% endif %}
+  <p class="muted">현재 ${{ '{:,.2f}'.format(forecast.used) }} / ${{ '{:,.0f}'.format(forecast.limit) }} 사용 ({{ forecast.pct_now }}%)
+    {% if forecast.daily_rate %}· 하루 ${{ '{:,.2f}'.format(forecast.daily_rate) }}/영업일{% endif %}</p>
+  <p class="disclaimer">ⓘ 현재 사용량은 공식 · 전망은 로컬 추세 기반 추정</p>
+</section>
+{% endif %}
+
 <section class="card">
   <h2>이번 달 총지출 <span class="muted">(전 AI 합산)</span></h2>
   {% if not has_data %}
