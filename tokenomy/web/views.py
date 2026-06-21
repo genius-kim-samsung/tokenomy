@@ -66,6 +66,36 @@ _PROVIDER_META = {
 }
 
 
+def _forecast_hero(fc) -> dict | None:
+    """CombinedForecast → 최상단 히어로 표시 dict. fc가 None이면 None(히어로 숨김).
+
+    level: surplus(여유) / shortfall(부족, 소진예상일) / exhausted(이미 소진) / insufficient(추세 데이터 부족).
+    """
+    if fc is None:
+        return None
+    labels = " + ".join(
+        _PROVIDER_META.get(p, {"label": p.title()})["label"] for p in fc.providers
+    )
+    base = {
+        "providers_label": labels,
+        "used": fc.used_usd, "limit": fc.limit_usd, "remaining": fc.remaining_usd,
+        "daily_rate": fc.daily_rate_usd,
+        "pct_now": round(fc.used_usd / fc.limit_usd * 100) if fc.limit_usd else 0,
+        "exhaust_date": fc.exhaust_date.strftime("%m-%d") if fc.exhaust_date else None,
+    }
+    if fc.is_exhausted:
+        base["level"] = "exhausted"
+    elif fc.daily_rate_usd is None:
+        base["level"] = "insufficient"
+    elif fc.projected_remaining_usd is not None and fc.projected_remaining_usd < 0:
+        base["level"] = "shortfall"
+        base["shortfall_abs"] = round(-fc.projected_remaining_usd, 2)
+    else:
+        base["level"] = "surplus"
+        base["surplus"] = round(fc.projected_remaining_usd, 2)
+    return base
+
+
 def _gauge_level(util: float | None) -> str:
     """utilization(%) → 임계 클래스. 100%가 사실상 상한이라 경계를 당겨 적색을 살린다.
 

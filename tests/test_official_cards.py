@@ -7,6 +7,9 @@ from tokenomy.official_parser import OfficialBucket
 from tokenomy.web.views import (
     _fresh_label, _gauge_level, _sparkline_points, official_cards,
 )
+from tokenomy.aggregate import CombinedForecast
+from tokenomy.web.views import _forecast_hero
+from datetime import date as _date
 
 NOW = datetime(2026, 6, 21, 12, 0, tzinfo=KST)
 
@@ -216,3 +219,53 @@ def test_untracked_no_data_provider_omitted():
     _seed(conn, "claude", [_bucket()])
     cards = official_cards(conn, {"tracked_providers": ["claude"]}, NOW)
     assert [c["provider"] for c in cards] == ["claude"]   # codex는 생략
+
+
+# ── 통합 월말 전망 히어로 ─────────────────────────────────────────────────────
+def _fc(**kw) -> CombinedForecast:
+    base = dict(
+        providers=["claude"], used_usd=40.0, limit_usd=200.0, remaining_usd=160.0,
+        daily_rate_usd=10.0, bdays_remaining=14, projected_used_usd=180.0,
+        projected_remaining_usd=20.0, exhaust_date=None, is_exhausted=False,
+        per_provider=[{"provider": "claude", "used_usd": 40.0, "limit_usd": 200.0}],
+        month_end=_date(2026, 6, 30),
+    )
+    base.update(kw)
+    return CombinedForecast(**base)
+
+
+def test_forecast_hero_none_passthrough():
+    assert _forecast_hero(None) is None
+
+
+def test_forecast_hero_surplus():
+    h = _forecast_hero(_fc())
+    assert h["level"] == "surplus"
+    assert h["surplus"] == 20.0
+    assert h["pct_now"] == 20          # 40/200
+    assert h["providers_label"] == "Claude"
+
+
+def test_forecast_hero_shortfall():
+    h = _forecast_hero(_fc(limit_usd=100.0, remaining_usd=60.0, projected_used_usd=180.0,
+                           projected_remaining_usd=-80.0, exhaust_date=_date(2026, 6, 18)))
+    assert h["level"] == "shortfall"
+    assert h["shortfall_abs"] == 80.0
+    assert h["exhaust_date"] == "06-18"
+
+
+def test_forecast_hero_exhausted():
+    h = _forecast_hero(_fc(used_usd=100.0, limit_usd=100.0, remaining_usd=0.0, is_exhausted=True,
+                           projected_used_usd=None, projected_remaining_usd=None))
+    assert h["level"] == "exhausted"
+
+
+def test_forecast_hero_insufficient():
+    h = _forecast_hero(_fc(daily_rate_usd=None, projected_used_usd=None, projected_remaining_usd=None))
+    assert h["level"] == "insufficient"
+    assert h["remaining"] == 160.0
+
+
+def test_forecast_hero_multi_provider_label():
+    h = _forecast_hero(_fc(providers=["claude", "codex"]))
+    assert h["providers_label"] == "Claude + Codex"
