@@ -19,7 +19,7 @@ from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
 from tokenomy.web.views import (
     coverage_card_context, dimension_context, history_context, official_section_context,
-    overview_context, session_context, settings_official_rows, sidebar_freshness,
+    overview_context, session_context, settings_provider_toggles, sidebar_freshness,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -186,7 +186,7 @@ def settings_get(request: Request, saved: int = 0):
         {"tracked": tracked, "providers": list(PROVIDERS),
          "credit_to_usd": _credit_to_usd(config),
          "official_fetch": ofs,
-         "official_rows": settings_official_rows(conn, config),
+         "provider_toggles": settings_provider_toggles(config),
          "saved": bool(saved),
          "active_nav": "settings", "update_tag": check_update(conn),
          "last_ts": last["t"] if last and last["t"] else None,
@@ -203,14 +203,16 @@ def _to_float(value: str | None) -> float:
 
 
 @app.post("/settings")
-def settings_post(track_claude: str = Form(""), track_codex: str = Form(""),
-                  credit_to_usd: str = Form(""), min_interval: str = Form("")):
+async def settings_post(request: Request):
+    # 동적 파싱 — track_<provider> 체크박스를 PROVIDERS 순회로 수집(claude/codex 하드코딩 제거,
+    # 3번째 AI 추가 시 폼·파서 무수정). 전부 미체크 → 빈 집합 영속(Commit 1이 재시드 차단).
+    form = await request.form()
     config = load_config()
-    sel = [p for p, v in (("claude", track_claude), ("codex", track_codex)) if v]
+    sel = [p for p in PROVIDERS if form.get(f"track_{p}")]
     config["tracked_providers"] = sel
-    ctu = _to_float(credit_to_usd)
+    ctu = _to_float(form.get("credit_to_usd"))
     config["credit_to_usd"] = ctu if ctu > 0 else 0.04
-    mi = int(_to_float(min_interval))
+    mi = int(_to_float(form.get("min_interval")))
     config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 10}
     # 레거시 키 정리(있으면 제거 — config를 깔끔하게 다시 쓴다)
     for k in ("budget", "budget_start"):

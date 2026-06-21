@@ -314,8 +314,27 @@ def test_card_forecast_text_surplus_or_exhaust():
         "input_tokens,cache_creation,cache_read,cost_usd,priced) "
         "VALUES('k','claude','s','/p','2026-06-09T01:00:00Z','claude-opus-4-8',0,0,0,8.0,1)")
     conn.commit()
-    cards = official_cards(conn, {}, now_kst=NOW6)
+    cards = official_cards(conn, {"tracked_providers": ["claude"]}, now_kst=NOW6)
     card = _card(cards, "claude")
     fcs = [g.get("forecast") for g in card["gauges"] if g.get("forecast")]
     assert fcs, "active 버킷에 forecast 텍스트가 있어야 한다"
     assert ("여유" in fcs[0]) or ("소진 예상" in fcs[0])
+
+
+# ── 활성 게이트(ADR 0005): 비활성 provider는 공식·로컬 데이터가 있어도 카드 없음 ──
+def test_inactive_provider_with_data_is_omitted():
+    conn = _conn()
+    _seed(conn, "claude", [_bucket()])
+    _seed(conn, "codex", [_bucket(bucket_kind="codex_monthly", label="월간 크레딧 한도")])
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','codex','s1','2026-06-20T10:00:00Z',3.0,1)")
+    conn.commit()
+    # codex는 공식 스냅샷 + 로컬 데이터 둘 다 있지만 활성이 아니므로 카드를 띄우지 않는다.
+    cards = official_cards(conn, {"tracked_providers": ["claude"]}, NOW)
+    assert [c["provider"] for c in cards] == ["claude"]
+
+
+def test_empty_active_yields_no_cards():
+    conn = _conn()
+    _seed(conn, "claude", [_bucket()])
+    assert official_cards(conn, {"tracked_providers": []}, NOW) == []

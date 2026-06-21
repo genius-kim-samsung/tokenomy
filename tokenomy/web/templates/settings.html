@@ -4,28 +4,32 @@
 
 {% if saved %}<div class="banner saved" role="status">✓ 저장됨</div>{% endif %}
 
-{# ── Tier 1: 편집하는 설정 ── #}
+{# ── Tier 1: 편집하는 설정 — 한 폼, 두 카드, 하단 단일 저장 ── #}
 <form method="post" action="/settings">
+<section class="card set-card">
+  <h2>활성 AI</h2>
+  <p class="set-sub">켠 AI만 대시보드·내역·차원별 등 <strong>모든 화면</strong>에 표시됩니다.
+    끄면 숨겨지되 데이터는 보존돼 다시 켜면 복원됩니다. 취득 상태(신선도·오류)는 대시보드 ‘AI별 사용량’ 카드에서 확인하세요.</p>
+
+  <div class="ai-list">
+    {% for t in provider_toggles %}
+    <div class="ai-row{% if not t.on %} off{% endif %}">
+      <div class="ai-row-head">
+        <span class="ai-name">{{ t.label }}</span>
+        <label class="switch" title="{{ t.label }} 표시">
+          <input type="checkbox" name="track_{{ t.key }}" {% if t.on %}checked{% endif %}>
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
 <section class="card set-card">
   <h2>공식 사용량</h2>
   <p class="set-sub">켠 AI의 공식 사용량을 받아와 대시보드에 보여줍니다.
     각 AI의 로컬 토큰을 <strong>읽기 전용</strong>으로 쓰며, 사용량 수치만 저장합니다(토큰·계정 식별자 미저장).</p>
-
-  <div class="ai-list">
-    {% for r in official_rows %}
-    <div class="ai-row{% if not r.on %} off{% endif %}">
-      <div class="ai-row-head">
-        <span class="ai-name">{{ r.label }}</span>
-        <span class="chip chip-{{ r.level }}">{{ r.status_text }}{% if r.fresh %} · <time class="rel-time" data-ts="{{ r.fetched_at }}">{{ r.fresh }}</time>{% endif %}</span>
-        <label class="switch" title="{{ r.label }} 공식 사용량 가져오기">
-          <input type="checkbox" name="track_{{ r.key }}" {% if r.on %}checked{% endif %}>
-          <span class="switch-track"><span class="switch-thumb"></span></span>
-        </label>
-      </div>
-      {% if r.note %}<p class="ai-note">⚠ {{ r.note }}</p>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
 
   <div class="field">
     <label class="field-label" for="min_interval">자동 갱신 간격</label>

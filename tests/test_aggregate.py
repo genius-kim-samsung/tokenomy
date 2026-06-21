@@ -341,7 +341,9 @@ def test_by_project_combines_providers_when_none():
 
 def test_overview_context_shape(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 40}}', encoding="utf-8")
+    # 활성=둘 고정 — "전체=활성 합산"(ADR 0005)이라 month_total 결정성을 위해 명시.
+    cfg.write_text('{"tracked_providers": ["claude", "codex"], "budget": {"claude": 100, "codex": 40}}',
+                   encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0, project="/p")
@@ -359,7 +361,9 @@ def test_overview_context_shape(monkeypatch, tmp_path):
 
 
 def test_overview_context_provider_without_data(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
@@ -370,7 +374,8 @@ def test_overview_context_provider_without_data(monkeypatch, tmp_path):
 def test_overview_context_ignores_legacy_budget_start(monkeypatch, tmp_path):
     """legacy budget_start JSON 키는 무시됨. overview_context는 항상 달력 월(month_spend) 기준."""
     cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
+    cfg.write_text('{"tracked_providers": ["claude", "codex"], '
+                   '"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
                    encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
@@ -384,7 +389,8 @@ def test_overview_context_ignores_legacy_budget_start(monkeypatch, tmp_path):
 
 def test_overview_context_trend_calendar_month_ignores_legacy_budget(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg.json"
-    cfg.write_text('{"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
+    cfg.write_text('{"tracked_providers": ["claude", "codex"], '
+                   '"budget": {"claude": 100, "codex": 40}, "budget_start": "2026-06-12"}',
                    encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
@@ -411,7 +417,9 @@ def test_overview_context_trend_calendar_month_ignores_legacy_budget(monkeypatch
 
 
 def test_overview_context_no_budget_unconfigured(monkeypatch, tmp_path):
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "none.json"))
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     conn = connect(":memory:")
     _msg(conn, dedup_key="a", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
     ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
@@ -1539,3 +1547,211 @@ def test_combined_forecast_already_exhausted():
     fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
     assert fc.is_exhausted is True
     assert fc.projected_used_usd is None            # 소진이면 전망 생략
+
+
+# ─── Commit 2(활성 AI): providers 필터(WHERE provider IN) ─────────────────────
+# provider=None(전체)일 때 키워드 providers로 활성 집합만 합산. 빈 집합은 빈 결과.
+
+def _seed_two_providers(conn):
+    """claude $5 + codex $7(같은 달). 활성 필터 동치/빈집합/가중평균 검증용."""
+    _insert(conn, "2026-06-05T00:00:00Z", 5.0, session="c", provider="claude",
+            input_t=50, cache_read=50, model="claude-opus-4-8")
+    _insert(conn, "2026-06-06T00:00:00Z", 7.0, session="x", provider="codex",
+            input_t=70, cache_read=30, model="gpt-5-codex")
+
+
+def test_month_spend_providers_single_equals_positional():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    # providers=["claude"]는 단일 positional provider="claude"와 동치
+    assert month_spend(conn, None, NOW, providers=["claude"]) == month_spend(conn, "claude", NOW)
+    assert month_spend(conn, None, NOW, providers=["claude"]) == 5.0
+
+
+def test_month_spend_providers_all_equals_none():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    # DB가 두 provider뿐이므로 활성=둘 == None(전체)
+    assert month_spend(conn, None, NOW, providers=["claude", "codex"]) == month_spend(conn, None, NOW)
+    assert month_spend(conn, None, NOW, providers=["claude", "codex"]) == 12.0
+
+
+def test_month_spend_empty_providers_is_zero():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    # 활성 0개 → 빈 결과(전체로 새지 않음 — 빈 상태가 깨지지 않게)
+    assert month_spend(conn, None, NOW, providers=[]) == 0.0
+
+
+def test_aggregations_empty_providers_are_empty():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    start, nxt = month_bounds(NOW)
+    assert by_project(conn, None, NOW, providers=[]) == []
+    assert by_session(conn, None, NOW, providers=[]) == []
+    assert token_composition(conn, None, start, nxt, providers=[]).total == 0
+    assert by_dimension(conn, None, start, nxt, "model", providers=[]) == []
+    assert sidechain_split(conn, None, start, nxt, providers=[]).total_cost == 0.0
+
+
+def test_by_dimension_providers_weighted_ratio_claude_only():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    start, nxt = month_bounds(NOW)
+    rows = by_dimension(conn, None, start, nxt, "model", providers=["claude"])
+    # claude 행만 — cache_ratio = 50/(50+0+50)=0.5, codex 분모가 섞이지 않음(뷰 재합산 대비 정밀)
+    assert [r.key for r in rows] == ["claude-opus-4-8"]
+    assert rows[0].cache_ratio == 0.5
+
+
+def test_token_composition_providers_single():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    start, nxt = month_bounds(NOW)
+    tc = token_composition(conn, None, start, nxt, providers=["codex"])
+    assert tc.total == 100                       # codex만: input 70 + cache_read 30
+    assert tc.input_tokens == 70 and tc.cache_read == 30
+
+
+def test_sidechain_split_providers_single():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    start, nxt = month_bounds(NOW)
+    assert sidechain_split(conn, None, start, nxt, providers=["claude"]).total_cost == 5.0
+
+
+def test_pricing_coverage_providers_filter():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    full = pricing_coverage(conn, _PRICING)
+    claude_only = pricing_coverage(conn, _PRICING, providers=["claude"])
+    empty = pricing_coverage(conn, _PRICING, providers=[])
+    assert {m.provider for m in full.models} == {"claude", "codex"}
+    assert {m.provider for m in claude_only.models} == {"claude"}
+    assert claude_only.models[0].model == "claude-opus-4-8"
+    assert empty.models == [] and empty.total_tokens == 0
+
+
+def test_insights_providers_passthrough():
+    conn = connect(":memory:")
+    # claude 캐시 충분(0.9), codex 캐시 낮음(0.1). 활성=claude면 codex의 낮은 캐시 신호가 안 떠야 함.
+    _msg(conn, dedup_key="cl", provider="claude", ts="2026-06-10T10:00:00Z",
+         cost_usd=1.0, input_tokens=10, cache_read=90)
+    _msg(conn, dedup_key="cx", provider="codex", ts="2026-06-10T10:00:00Z",
+         cost_usd=1.0, input_tokens=90, cache_read=10)
+    cards = insights(conn, _NOW_STATUS, None, cov=None, providers=["claude"])
+    texts = " ".join(c.text for c in cards)
+    assert "캐시 활용" not in texts          # claude만 보면 캐시 0.9라 경고 없음
+
+
+# ─── Commit 3(활성 AI): overview_context 활성 threading ───────────────────────
+
+def test_overview_context_respects_active_subset(monkeypatch, tmp_path):
+    # 활성=claude만 → 총지출·프로젝트·추세·official_cards 모두 codex 제외(데이터는 보존, 표시만 숨김).
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0, project="/p")
+    _msg(conn, dedup_key="cx", provider="codex", ts="2026-06-11T10:00:00Z", cost_usd=4.0, project="/p")
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["month_total"] == 10.0                                  # 14가 아니라 claude만
+    assert [c["provider"] for c in ctx["official_cards"]] == ["claude"]
+    assert [s["label"] for s in ctx["trend_series"]] == ["Claude"]     # codex 밴드 없음
+    assert ctx["projects"][0].cost == 10.0                             # 프로젝트 합도 claude만
+    assert ctx["has_data"] is True
+
+
+def test_overview_context_empty_active_is_empty_state(monkeypatch, tmp_path):
+    # 활성 0개 → 데이터는 있어도 빈 상태(표시 대상 없음). 전체로 새지 않음.
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": []}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["has_data"] is False
+    assert ctx["month_total"] == 0.0
+    assert ctx["official_cards"] == []
+    assert ctx["trend_series"] == []
+
+
+# ─── Commit 4(활성 AI): history/analysis 활성 필터 + 필터 옵션 파생 ─────────────
+
+def test_history_context_inactive_provider_falls_back_to_active(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", provider="claude", session_id="s1", ts="2026-06-13T01:00:00Z", cost_usd=2.0)
+    _msg(conn, dedup_key="cx", provider="codex", session_id="s2", ts="2026-06-13T01:00:00Z", cost_usd=9.0)
+    # provider=codex 요청이지만 codex가 비활성 → 전체(활성=claude)로 폴백, codex 행 안 뜸
+    ctx = history_context(conn, _ANCHOR_613, "codex", "date_desc", now_kst=_NOW_613)
+    assert ctx["provider"] == ""
+    assert ctx["total"] == 2.0
+
+
+def test_history_context_filter_single_active_hidden(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    ctx = history_context(conn, _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
+    assert ctx["show_filter"] is False
+    assert [p["key"] for p in ctx["filter_providers"]] == ["claude"]
+
+
+def test_history_context_filter_multi_active_shown(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    ctx = history_context(conn, _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
+    assert ctx["show_filter"] is True
+    assert [p["key"] for p in ctx["filter_providers"]] == ["claude", "codex"]
+    assert [p["label"] for p in ctx["filter_providers"]] == ["Claude", "Codex"]
+
+
+def test_dimension_context_inactive_provider_falls_back(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", model="claude-opus-4-8", provider="claude",
+         ts="2026-06-10T10:00:00Z", cost_usd=8.0)
+    _msg(conn, dedup_key="cx", model="gpt-5", provider="codex",
+         ts="2026-06-10T10:00:00Z", cost_usd=2.0)
+    ctx = dimension_context(conn, _ANCHOR_613, "codex", dim="model", now_kst=_NOW_613)
+    assert ctx["provider"] == ""           # 비활성 codex → 전체 폴백
+    assert ctx["total"] == 8.0             # claude만
+    assert ctx["show_filter"] is False     # 활성 1개
+
+
+# ─── Commit 6(활성 AI): 라벨 적응 + 빈 상태 플래그 ─────────────────────────────
+
+def _ctx_with_active(monkeypatch, tmp_path, providers_json):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ' + providers_json + '}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
+    return overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+
+
+def test_overview_context_label_flags_single(monkeypatch, tmp_path):
+    ctx = _ctx_with_active(monkeypatch, tmp_path, '["claude"]')
+    assert ctx["combined"] is False
+    assert ctx["solo_label"] == "Claude"   # 활성 1개 → provider명
+    assert ctx["active_empty"] is False
+
+
+def test_overview_context_label_flags_multi(monkeypatch, tmp_path):
+    ctx = _ctx_with_active(monkeypatch, tmp_path, '["claude", "codex"]')
+    assert ctx["combined"] is True         # 활성 ≥2 → 통합/전 AI 합산
+    assert ctx["active_empty"] is False
+
+
+def test_overview_context_active_empty_flag(monkeypatch, tmp_path):
+    ctx = _ctx_with_active(monkeypatch, tmp_path, '[]')
+    assert ctx["active_empty"] is True
+    assert ctx["combined"] is False

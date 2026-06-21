@@ -2,6 +2,10 @@
 {% block body %}
 <h1 class="page-title">차원별</h1>
 
+{% if active_empty %}
+<p class="muted">표시할 AI가 없습니다 — <a href="/settings">설정</a>에서 켜세요.</p>
+{% endif %}
+
 <section class="card">
   <div class="card-head">
     <div class="period-nav">
@@ -24,11 +28,14 @@
         <button class="btn" type="submit">조회</button>
       </span>
     </form>
+    {% if show_filter %}
     <nav class="toggle small">
-      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if provider == '' }}">전체</a>
-      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=claude" class="{{ 'on' if provider == 'claude' }}">Claude</a>
-      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=codex" class="{{ 'on' if provider == 'codex' }}">Codex</a>
+      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=" class="{{ 'on' if provider == '' }}">전체</a>
+      {% for fp in filter_providers %}
+      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider={{ fp.key }}" class="{{ 'on' if provider == fp.key }}">{{ fp.label }}</a>
+      {% endfor %}
     </nav>
+    {% endif %}
   </div>
 
   <nav class="toggle small" aria-label="차원 선택">

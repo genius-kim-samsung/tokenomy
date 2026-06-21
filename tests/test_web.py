@@ -21,7 +21,11 @@ def _seed_official(conn, provider, fixture, parse):
 def _client(tmp_path, monkeypatch):
     """app.connect를 임시 DB로 교체한 TestClient."""
     db = tmp_path / "t.db"
-    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "cfg.json"))  # 개인 config 격리(미존재 → 예산 0)
+    cfg = tmp_path / "cfg.json"
+    # 활성 AI를 claude·codex 둘로 고정 — "전체=활성 합산"(ADR 0005)이라 테스트 결정성을 위해
+    # 명시한다(미지정 시 크레덴셜 존재로 시드돼 CI/머신별로 활성 집합이 갈린다).
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))  # 개인 config 격리
     monkeypatch.setenv("TOKENOMY_SKIP_UPDATE_CHECK", "1")  # 웹 테스트는 업데이트 네트워크 미사용
 
     def fake_connect(*a, **k):
@@ -125,6 +129,11 @@ def test_overview_context_includes_forecast(tmp_path, monkeypatch):
     from tokenomy.db import connect, insert_official_buckets
     from tokenomy.official_parser import OfficialBucket
     from tokenomy.web.views import overview_context
+
+    # 활성 AI(ADR 0005) 고정 — forecast 풀은 활성 provider 기준이므로 결정적으로 만든다.
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
 
     conn = connect(":memory:")
     insert_official_buckets(
@@ -642,12 +651,14 @@ def test_coverage_card_context_injected_pricing():
 # ── Task 6+7 TDD 신규 테스트 ──────────────────────────────────────────────────
 
 def test_overview_context_keys(tmp_path, monkeypatch):
-    """overview_context가 claude_official/codex_official을 반환하고 gauge/official_notes는 없어야 한다."""
+    """overview_context가 official_cards(활성 카드 리스트)를 반환하고, 미참조 키
+    (claude_official/codex_official)·옛 gauge/official_notes는 없어야 한다(ADR 0005)."""
     from tokenomy.web.views import overview_context
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
     ctx = overview_context(conn, "cost")
-    assert "claude_official" in ctx and "codex_official" in ctx
+    assert "official_cards" in ctx
+    assert "claude_official" not in ctx and "codex_official" not in ctx   # 템플릿 미참조 → 제거
     assert "gauge" not in ctx and "official_notes" not in ctx
 
 
@@ -885,6 +896,125 @@ def test_settings_post_writes_tracked_providers(tmp_path, monkeypatch):
     assert saved["tracked_providers"] == ["claude"]
     assert saved["official_fetch"]["min_interval_minutes"] == 7
     assert "budget" not in saved
+
+
+# ── Commit 4(활성 AI): settings POST 동적 파싱 + 필터 UI 활성 파생 ────────────────
+
+def test_settings_post_unchecking_all_persists_empty(tmp_path, monkeypatch):
+    """track_* 전부 미체크 → 빈 집합 저장(Commit 1이 영속 보장 — 재시드 안 함)."""
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"min_interval": "10", "credit_to_usd": "0.04"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["tracked_providers"] == []
+
+
+def test_settings_post_dynamic_collects_each_provider(tmp_path, monkeypatch):
+    """폼 파싱이 PROVIDERS를 순회 — 3번째 AI 추가 대비(track_<new>도 수집, 하드코딩 없음)."""
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "PROVIDERS", ("claude", "codex", "gemini"))
+    r = client.post("/settings", data={"track_claude": "on", "track_gemini": "on",
+                                       "min_interval": "10", "credit_to_usd": "0.04"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["tracked_providers"] == ["claude", "gemini"]   # track_codex 미체크 → 제외
+
+
+def test_history_provider_filter_hidden_when_single_active(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    r = client.get("/history")
+    assert r.status_code == 200
+    assert 'id="provider-filter"' not in r.text     # 활성 1개 → AI 필터 숨김
+
+
+def test_history_provider_filter_shows_active_only(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    r = client.get("/history")
+    assert 'id="provider-filter"' in r.text
+    assert ">Claude<" in r.text and ">Codex<" in r.text
+
+
+def test_analysis_provider_toggle_hidden_when_single_active(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    r = client.get("/analysis")
+    assert r.status_code == 200
+    assert "provider=codex" not in r.text           # 활성 1개 → provider 토글 없음
+
+
+# ── Commit 5(활성 AI): settings 카드 분리 + 상태칩 제거 ───────────────────────────
+
+def test_settings_splits_active_ai_and_official_cards(tmp_path, monkeypatch):
+    """설정이 '활성 AI'(토글) / '공식 사용량'(간격) 두 카드로 분리되고, fetch 상태칩은 없다.
+
+    상태(신선도·토큰만료 등)는 대시보드 'AI별 사용량' 카드가 담당 — 설정은 구성만.
+    """
+    client, fake_connect = _client(tmp_path, monkeypatch)   # 활성=둘 고정
+    from tokenomy.db import upsert_fetch_state
+    conn = fake_connect()
+    upsert_fetch_state(conn, "codex", last_attempt_at="2026-06-10T09:00:00+09:00",
+                       last_success_at=None, last_status="auth_error", last_error="HTTP 401")
+    html = client.get("/settings").text
+    assert "활성 AI" in html and "공식 사용량" in html        # 두 카드
+    assert "토큰 만료" not in html and "갱신 안 함" not in html   # 상태칩 제거
+    assert "자동 갱신 간격" in html and 'name="min_interval"' in html
+
+
+def test_settings_toggles_reflect_active(tmp_path, monkeypatch):
+    import re
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    html = client.get("/settings").text
+    assert re.search(r'name="track_claude"[^>]*checked', html)        # 활성 → 체크
+    assert not re.search(r'name="track_codex"[^>]*checked', html)     # 비활성 → 해제
+
+
+# ── Commit 6(활성 AI): 라벨 적응 + 빈 상태 ───────────────────────────────────────
+
+def test_dashboard_heading_uses_provider_name_when_single_active(tmp_path, monkeypatch):
+    client, fake_connect = _client(tmp_path, monkeypatch)
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    conn = fake_connect()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','p','2026-06-10T10:00:00Z','claude-opus-4-8',5.0,1)")
+    conn.commit()
+    html = client.get("/").text
+    assert "(Claude)" in html                # 활성 1개 → provider명
+    assert "전 AI 합산" not in html           # "통합/전 AI" 수식어 제거
+    assert "통합 추세" not in html
+    assert "통합 효율 코치" not in html
+
+
+def test_dashboard_empty_active_shows_settings_prompt(tmp_path, monkeypatch):
+    client, fake_connect = _client(tmp_path, monkeypatch)
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": []}', encoding="utf-8")
+    conn = fake_connect()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','p','2026-06-10T10:00:00Z','claude-opus-4-8',5.0,1)")
+    conn.commit()
+    html = client.get("/").text
+    assert "표시할 AI가 없습니다" in html      # 데이터는 있어도 활성 0개 → 빈 상태 안내
+    assert "/settings" in html
+
+
+def test_history_empty_active_shows_notice(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": []}', encoding="utf-8")
+    html = client.get("/history").text
+    assert "표시할 AI가 없습니다" in html
+
+
+def test_analysis_empty_active_shows_notice(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": []}', encoding="utf-8")
+    html = client.get("/analysis").text
+    assert "표시할 AI가 없습니다" in html
 
 
 def test_settings_get_has_provider_checkboxes(tmp_path, monkeypatch):

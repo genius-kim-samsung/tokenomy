@@ -5,7 +5,8 @@ from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup,
-    by_day_session, by_dimension, by_project, by_session, combined_forecast, daily_series,
+    _provider_where, by_day_session, by_dimension, by_project, by_session,
+    combined_forecast, daily_series,
     insights, month_bounds, month_spend, official_view, parse_ts, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
@@ -46,6 +47,16 @@ def _provider_has_data(conn, provider: str) -> bool:
         "SELECT MAX(ts) t FROM messages WHERE provider=?", (provider,)
     ).fetchone()
     return row is not None and row["t"] is not None
+
+
+def _filter_options(active: list[str]) -> list[dict]:
+    """화면별 provider 필터(전체/<AI>) 항목. 활성 집합에서 파생 — claude/codex 하드코딩 없음."""
+    return [{"key": p, "label": _PROVIDER_META.get(p, {}).get("label", p.title())} for p in active]
+
+
+def _active_provider(provider: str, active: list[str]) -> str:
+    """요청 provider를 활성 집합으로 검증. 활성에 없으면 ""(전체)로 폴백."""
+    return provider if provider in active else ""
 
 
 def sidebar_freshness(conn) -> str | None:
@@ -326,18 +337,18 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
 def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[dict]:
     """대시보드 공식 사용량 그리드용 provider 카드 리스트.
 
-    표시 대상 = tracked ∪ 공식 스냅샷 있음 ∪ 로컬 데이터 있음. 그 외는 생략.
+    표시 대상 = **활성 AI**(tracked_providers)뿐. 끈 provider는 공식 스냅샷·로컬 데이터가
+    있어도 카드를 띄우지 않는다(데이터는 보존, 표시만 숨김 — ADR 0005). 활성 0개면 빈 리스트.
     순서는 PROVIDERS 고정(claude→codex→…). 새 provider는 PROVIDERS·_PROVIDER_META만 늘리면 된다.
     """
     now = now_kst or datetime.now(KST)
     ctu = credit_to_usd(config)
-    tracked = set(tracked_providers(config))
+    active = set(tracked_providers(config))
     cards: list[dict] = []
     for p in PROVIDERS:
-        view = official_view(conn, p, now, ctu)
-        has_official = view.status == "ok" and bool(view.buckets)
-        if p not in tracked and not has_official and not _provider_has_data(conn, p):
+        if p not in active:
             continue
+        view = official_view(conn, p, now, ctu)
         cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now))
     return cards
 
@@ -357,30 +368,30 @@ def official_section_context(conn, config: dict, now_kst: datetime | None = None
 def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     now = now_kst or datetime.now(KST)
     config = load_config()
-    tracked = tracked_providers(config)
+    # 활성 AI(ADR 0005) — 화면의 "전체"는 곧 활성 합산이다(DB 전체가 아니다).
+    active = tracked_providers(config)
 
-    # 공식 미러 패널(provider별) — USD 1차. 한도/잔여의 정본.
-    ctu = credit_to_usd(config)
-    claude_official = official_view(conn, "claude", now, ctu)
-    codex_official = official_view(conn, "codex", now, ctu)
+    month_total = month_spend(conn, None, now, providers=active)
 
-    month_total = month_spend(conn, None, now)
-
-    projects = by_project(conn, None, now)
+    projects = by_project(conn, None, now, providers=active)
     projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
     projects = projects[:10]
-    sessions = by_session(conn, None, now, limit_n=10)
+    sessions = by_session(conn, None, now, limit_n=10, providers=active)
 
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
-    cov = pricing_coverage(conn, pricing)
-    coach = insights(conn, now, None, cov=cov)
-    daily = daily_series(conn, None, now)
-    # 통합 월말 전망 — 이미 만든 OfficialView 재사용(추가 official_view 호출 없음).
-    forecast_obj = combined_forecast(conn, [claude_official, codex_official], now)
+    cov = pricing_coverage(conn, pricing, providers=active)
+    coach = insights(conn, now, None, cov=cov, providers=active)
+    daily = daily_series(conn, None, now, providers=active)
+    # 통합 월말 전망 — 활성(ADR 0005) provider의 공식 뷰로 통합 풀 구성.
+    # 화면의 "전체"가 곧 활성 합산이므로 forecast 풀도 활성만 본다(combined_forecast가 한도 보유분만 필터).
+    ctu = credit_to_usd(config)
+    forecast_views = [official_view(conn, p, now, ctu) for p in active]
+    forecast_obj = combined_forecast(conn, forecast_views, now)
     forecast = _forecast_hero(forecast_obj)
     fc_chart = forecast_chart_data(forecast_obj, daily, now)
 
-    trend_providers = [p for p in _TREND_STYLE if _provider_has_data(conn, p)]
+    # 추세 밴드 = 활성 ∩ 데이터 있는 provider. stacked_trend·차트 JS는 무변경(N밴드 generic).
+    trend_providers = [p for p in _TREND_STYLE if p in active and _provider_has_data(conn, p)]
     bands = stacked_trend(
         [(p, daily_series(conn, p, now)) for p in trend_providers]
     )
@@ -393,20 +404,27 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     ]
     trend_totals = bands[-1]["top"] if bands else [None for _ in daily]
 
-    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    # has_data·last_ts도 활성 기준 — 끈 provider만 데이터 있으면 빈 상태로 안내(일관).
+    where, params = _provider_where(None, active)
+    last = conn.execute("SELECT MAX(ts) t FROM messages" + where, params).fetchone()
     has_data = last is not None and last["t"] is not None
-    token_comp = token_composition(conn, None, *month_bounds(now))
+    token_comp = token_composition(conn, None, *month_bounds(now), providers=active)
+
+    # 라벨 적응(ADR 0005): 활성 ≥2면 "통합/전 AI 합산", 1개면 수식어 떼고 provider명.
+    combined = len(active) >= 2
+    solo_label = (_PROVIDER_META.get(active[0], {}).get("label", active[0].title())
+                  if len(active) == 1 else None)
 
     return {
         "active_nav": "dashboard", "sort": sort,
         "user_label": user_label(config),
-        "tracked": tracked,
+        "tracked": active,
+        "combined": combined, "solo_label": solo_label, "active_empty": not active,
         "month": now.strftime("%Y-%m"),
         "month_total": month_total,
         "forecast": forecast,
         "forecast_limit": fc_chart["limit"],
         "forecast_line": fc_chart["line"],
-        "claude_official": claude_official, "codex_official": codex_official,
         "official_cards": official_cards(conn, config, now),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
         "projects": projects, "sessions": sessions, "insights": coach,
@@ -467,8 +485,11 @@ def dimension_context(conn, anchor_kst: datetime, provider: str, *,
     dim = dim if dim in DIM_COLUMNS else "model"
     now = now_kst or datetime.now(KST)
     config = load_config()
+    active = tracked_providers(config)
+    provider = _active_provider(provider, active)   # 비활성 provider 요청 → 전체 폴백
     s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
-    rows = by_dimension(conn, provider or None, s, nxt, dim)
+    pfilter = None if provider else active          # "" → 활성 합산, 단일 → 그 provider
+    rows = by_dimension(conn, provider or None, s, nxt, dim, providers=pfilter)
     total = round(sum(r.cost for r in rows), 4)
     null_label = _NULL_BUCKET[dim]
     table = [
@@ -479,11 +500,13 @@ def dimension_context(conn, anchor_kst: datetime, provider: str, *,
          "cache_creation": r.cache_creation, "cache_read": r.cache_read}
         for r in rows
     ]
-    split = sidechain_split(conn, provider or None, s, nxt)
+    split = sidechain_split(conn, provider or None, s, nxt, providers=pfilter)
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     return {
         "active_nav": "analysis", "user_label": user_label(config),
         "provider": provider, "dim": dim, "dim_label": DIM_LABELS[dim],
+        "filter_providers": _filter_options(active), "show_filter": len(active) >= 2,
+        "active_empty": not active,
         "claude_only": dim in ("skill", "branch"), "split": split,
         "rows": table, "count": len(table), "total": total,
         "period": period, "custom": custom, "period_label": label,
@@ -579,44 +602,16 @@ def _share_pct(x: float) -> str:
     return "<1%" if 0 < p < 1 else f"{p:.0f}%"
 
 
-def settings_official_rows(conn, config: dict, now_kst: datetime | None = None) -> list[dict]:
-    """설정 화면 'AI별' row 표시모델.
+def settings_provider_toggles(config: dict) -> list[dict]:
+    """설정 '활성 AI' 카드 토글 표시모델 — provider별 {key, label, on}.
 
-    한 줄 안에 [켜짐 토글 상태 · 마지막 갱신 상태칩 · 신선도 · 오류 안내]를 모은다.
-    상태칩 텍스트/레벨은 fetch_state.last_status를 사람말로 옮긴 것이고, 신선도·오류 안내는
-    대시보드 provider 카드와 동일 헬퍼(_fresh_label·_remediation)를 재사용한다.
+    on = 활성(tracked_providers) 포함 여부. **fetch 상태칩·신선도·remediation은 두지 않는다** —
+    그 상태는 대시보드 'AI별 사용량' 카드가 이미 보여주므로(ADR 0005) 설정은 구성(on/off)만 담당한다.
+    PROVIDERS 순회 — claude/codex 하드코딩 없음(3번째 AI 확장 대비).
     """
-    now = now_kst or datetime.now(KST)
-    ctu = credit_to_usd(config)
-    tracked = set(tracked_providers(config))
-    rows: list[dict] = []
-    for p in PROVIDERS:
-        meta = _PROVIDER_META.get(p, {"label": p.title()})
-        st = get_fetch_state(conn, p)
-        fs = st["last_status"] if st else None
-        on = p in tracked
-        if not on:
-            level, text = "off", "갱신 안 함"
-        elif fs == "ok":
-            level, text = "ok", "정상"
-        elif fs == "auth_error":
-            level, text = "warn", "토큰 만료"
-        elif fs == "http_error":
-            level, text = "warn", "취득 실패"
-        else:
-            level, text = "wait", "아직 못 받음"
-        fresh = fetched_at = None
-        if on and fs == "ok":
-            view = official_view(conn, p, now, ctu)
-            fresh = _fresh_label(view.stale_minutes)
-            fetched_at = view.fetched_at
-        rows.append({
-            "key": p, "label": meta["label"], "on": on,
-            "level": level, "status_text": text,
-            "fresh": fresh, "fetched_at": fetched_at,
-            "note": _remediation(p, fs) if on else None,
-        })
-    return rows
+    active = set(tracked_providers(config))
+    return [{"key": p, "label": _PROVIDER_META.get(p, {}).get("label", p.title()),
+             "on": p in active} for p in PROVIDERS]
 
 
 def coverage_card_context(conn, pricing: dict) -> dict:
@@ -680,14 +675,20 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
     """내역 — 날짜→폴더→세션 트리. 주/월 기간 또는 사용자 지정 [start, end]."""
     now = now_kst or datetime.now(KST)
     config = load_config()
+    active = tracked_providers(config)
+    provider = _active_provider(provider, active)   # 비활성 provider 요청 → 전체 폴백
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
-    rows = by_day_session(conn, provider or None, start=s, nxt=nxt)
+    # provider 지정 → 단일, "" → 활성 합산(providers=active)
+    rows = by_day_session(conn, provider or None, start=s, nxt=nxt,
+                          providers=(None if provider else active))
     tree = build_date_tree(rows, sort)
     return {
         "active_nav": "history",
         "user_label": user_label(config),
         "provider": provider, "sort": sort,
+        "filter_providers": _filter_options(active), "show_filter": len(active) >= 2,
+        "active_empty": not active,
         "period": period, "custom": custom,
         "anchor": anchor_kst.strftime("%Y-%m-%d"),
         "start": start or "", "end": end or "",
