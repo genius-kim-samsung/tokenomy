@@ -92,11 +92,29 @@ def test_codex_enterprise_credit_to_usd():
 
 def test_codex_personal_rate_windows():
     buckets = parse_codex(_load("codex_personal.json"), credit_to_usd=0.04)
-    kinds = {b.raw_key for b in buckets}
-    assert kinds == {"primary_window", "secondary_window"}
+    labels = {b.raw_key: b.label for b in buckets}
+    # Claude 5시간 창 라벨과 통일: 5시간 창=5시간 한도, 7일 창=주간 한도.
+    assert labels == {"primary_window": "5시간 한도", "secondary_window": "주간 한도"}
     for b in buckets:
         assert b.bucket_kind == "rate_window" and b.native_unit == "percent"
         assert b.used_usd is None
+
+
+def test_codex_rate_window_label_variants():
+    # 안정 키 매칭 우선, 미지 키는 window_minutes로 길이 도출, 둘 다 없으면 폴백.
+    raw = {"rate_limit": {
+        "primary_window": {"used_percent": 5.0, "window_minutes": 300},
+        "secondary_window": {"used_percent": 5.0, "window_minutes": 10080},
+        "mystery_short": {"used_percent": 5.0, "window_minutes": 60},      # ≤6h
+        "mystery_long": {"used_percent": 5.0, "window_minutes": 20160},    # ≥6d
+        "no_minutes": {"used_percent": 5.0},                              # 폴백
+    }}
+    labels = {b.raw_key: b.label for b in parse_codex(raw, credit_to_usd=0.04)}
+    assert labels["primary_window"] == "5시간 한도"
+    assert labels["secondary_window"] == "주간 한도"
+    assert labels["mystery_short"] == "5시간 한도"
+    assert labels["mystery_long"] == "주간 한도"
+    assert labels["no_minutes"] == "이용률 창"
 
 
 def test_no_pii_extracted():

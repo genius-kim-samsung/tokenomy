@@ -42,6 +42,32 @@ def _rate_window_label(key: str) -> str:
     return "이용률 창"
 
 
+# Codex rate-limit 창의 안정 키 → 표기. five_hour/seven_day처럼 회전 코드네임이 아니다.
+# Claude five_hour와 라벨을 통일한다(같은 5시간 창인데 표현이 갈리지 않게).
+_CODEX_WINDOW_LABELS = {"primary_window": "5시간 한도", "secondary_window": "주간 한도"}
+
+
+def _codex_rate_window_label(key: str, window_minutes) -> str:
+    """Codex rate-limit 창 → 서술 라벨.
+
+    공식 앱(Codex CLI/ChatGPT)은 5시간 창을 "현재 세션"이라 부르지만, Claude의 5시간 창
+    라벨(_rate_window_label의 "5시간 한도")과 통일해 창 길이가 드러나는 "5시간 한도"·"주간
+    한도"로 표기한다. primary_window/secondary_window는 안정 키라 이름 매칭하고, 미지/회전
+    키는 응답의 window_minutes로 창 길이를 도출(≤6h→5시간 한도, ≥6d→주간 한도)해 폴백한다.
+    둘 다 실패하면 "이용률 창"(코드 라벨일 뿐 — CONTEXT.md의 rate-window 참조).
+    """
+    label = _CODEX_WINDOW_LABELS.get(key)
+    if label:
+        return label
+    wm = _to_float(window_minutes)
+    if wm is not None:
+        if wm <= 6 * 60:
+            return "5시간 한도"
+        if wm >= 6 * 24 * 60:
+            return "주간 한도"
+    return "이용률 창"
+
+
 @dataclass
 class OfficialBucket:
     """공식 앱 막대 1개에 대응하는 정규화 버킷. USD는 환산 결과를 함께 보관한다."""
@@ -185,7 +211,8 @@ def parse_codex(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
                 continue
             out.append(OfficialBucket(
                 bucket_key="rate_window", raw_key=key, bucket_kind="rate_window",
-                label="이용률 창", native_unit="percent",
+                label=_codex_rate_window_label(key, val.get("window_minutes")),
+                native_unit="percent",
                 used_native=None, limit_native=None, remaining_native=None,
                 used_usd=None, limit_usd=None, remaining_usd=None,
                 utilization=round(float(val["used_percent"]), 4),
