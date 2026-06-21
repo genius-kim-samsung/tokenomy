@@ -117,10 +117,11 @@ def _gauge_caption(used_usd: float | None, limit_usd: float | None, *,
 
 
 def _reset_with_countdown(resets_at: str, now_kst: datetime) -> str:
-    """단시간 창(5시간 한도)의 리셋을 'KST 분 단위 시각 + 잔여 시간'으로 표기.
+    """rate-limit 창(5시간·주간 등)의 리셋을 'KST 분 단위 시각 + 잔여 시간'으로 표기.
 
-    예: '리셋 2026-06-21 11:20 · 2시간 35분 후'. 5시간 창은 날짜만 보여주면 정보가 없으므로
-    분까지 찍고, 며칠 뒤가 아니라 몇 시간 몇 분 뒤인지가 actionable이라 카운트다운을 병기한다.
+    예: '리셋 2026-06-21 11:20 · 2시간 35분 후', '리셋 2026-06-25 09:00 · 3일 23시간 후'.
+    rate 창은 날짜만 보여주면 정보가 빈약하므로 분까지 찍고, 남은 시간을 일/시/분으로 병기한다.
+    잔여가 하루 이상이면 분은 노이즈라 일·시까지만, 하루 미만이면 시·분으로 좁혀 보여준다.
     resets_at(UTC ISO)은 parse_ts로 KST 변환. 파싱 실패/이미 지난 경우는 시각만 보여준다.
     """
     dt = parse_ts(resets_at)
@@ -130,8 +131,14 @@ def _reset_with_countdown(resets_at: str, now_kst: datetime) -> str:
     mins = int((dt - now_kst).total_seconds() // 60)
     if mins <= 0:
         return f"리셋 {stamp}"
-    h, m = divmod(mins, 60)
-    rel = f"{h}시간 {m}분 후" if h else f"{m}분 후"
+    d, rem = divmod(mins, 1440)
+    h, m = divmod(rem, 60)
+    if d:
+        rel = f"{d}일 {h}시간 후" if h else f"{d}일 후"
+    elif h:
+        rel = f"{h}시간 {m}분 후" if m else f"{h}시간 후"
+    else:
+        rel = f"{m}분 후"
     return f"리셋 {stamp} · {rel}"
 
 
@@ -140,10 +147,10 @@ def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
     util = b["utilization"] or 0.0
     used, limit = b["used_usd"], b["limit_usd"]
     # 리셋/만료 날짜는 모두 sub 한 자리에 표시(정렬 일관). event_credit은 '만료', 그 외는 '리셋'.
-    # 단 5시간 한도(five_hour)는 날짜만으론 무의미 — 분 단위 시각 + 잔여 시간을 병기한다.
+    # rate 창(5시간·주간 등)은 날짜만으론 무의미 — 분 단위 시각 + 잔여 시간을 병기한다.
     sub = None
     if b["resets_at"]:
-        if b["raw_key"].startswith("five_hour"):
+        if b["bucket_kind"] == "rate_window":
             sub = _reset_with_countdown(b["resets_at"], now_kst)
         else:
             d = b["resets_at"][:10]

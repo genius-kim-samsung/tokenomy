@@ -181,6 +181,20 @@ def test_five_hour_window_sub_minutes_only_when_under_hour():
     assert g["sub"] == "리셋 2026-06-21 12:40 · 40분 후"
 
 
+def test_weekly_window_sub_has_time_and_day_countdown():
+    # 주간 모델 창도 rate_window라 동일 처리 — 잔여가 하루 이상이면 '일·시'로 좁혀 표기
+    conn = _conn()
+    reset = NOW + timedelta(days=3, hours=23, minutes=12)   # 2026-06-25 11:12 KST
+    _seed(conn, "claude", [_bucket(
+        bucket_key="rate_window", raw_key="seven_day_opus", bucket_kind="rate_window",
+        label="주간 · Opus 전용", native_unit="percent",
+        used_usd=None, limit_usd=None, remaining_usd=None,
+        utilization=30.0, resets_at=reset)])
+    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    g = next(x for x in card["gauges"] if x["label"] == "주간 · Opus 전용")
+    assert g["sub"] == "리셋 2026-06-25 11:12 · 3일 23시간 후"   # 분은 노이즈라 생략
+
+
 # ── 게이트: tracked도 아니고 데이터도 없으면 카드 없음 ─────────────────────────
 def test_untracked_no_data_provider_omitted():
     conn = _conn()
