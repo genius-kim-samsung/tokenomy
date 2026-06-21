@@ -519,14 +519,57 @@ def _share_pct(x: float) -> str:
     return "<1%" if 0 < p < 1 else f"{p:.0f}%"
 
 
+def settings_official_rows(conn, config: dict, now_kst: datetime | None = None) -> list[dict]:
+    """설정 화면 'AI별' row 표시모델.
+
+    한 줄 안에 [켜짐 토글 상태 · 마지막 갱신 상태칩 · 신선도 · 오류 안내]를 모은다.
+    상태칩 텍스트/레벨은 fetch_state.last_status를 사람말로 옮긴 것이고, 신선도·오류 안내는
+    대시보드 provider 카드와 동일 헬퍼(_fresh_label·_remediation)를 재사용한다.
+    """
+    now = now_kst or datetime.now(KST)
+    ctu = credit_to_usd(config)
+    tracked = set(tracked_providers(config))
+    rows: list[dict] = []
+    for p in PROVIDERS:
+        meta = _PROVIDER_META.get(p, {"label": p.title()})
+        st = get_fetch_state(conn, p)
+        fs = st["last_status"] if st else None
+        on = p in tracked
+        if not on:
+            level, text = "off", "갱신 안 함"
+        elif fs == "ok":
+            level, text = "ok", "정상"
+        elif fs == "auth_error":
+            level, text = "warn", "토큰 만료"
+        elif fs == "http_error":
+            level, text = "warn", "취득 실패"
+        else:
+            level, text = "wait", "아직 못 받음"
+        fresh = fetched_at = None
+        if on and fs == "ok":
+            view = official_view(conn, p, now, ctu)
+            fresh = _fresh_label(view.stale_minutes)
+            fetched_at = view.fetched_at
+        rows.append({
+            "key": p, "label": meta["label"], "on": on,
+            "level": level, "status_text": text,
+            "fresh": fresh, "fetched_at": fetched_at,
+            "note": _remediation(p, fs) if on else None,
+        })
+    return rows
+
+
 def coverage_card_context(conn, pricing: dict) -> dict:
     """settings 단가 커버리지 카드용 컨텍스트.
 
     pricing 항목(match[]) 기준 역방향 그룹핑(항목 → 매칭 모델들) + 미식별 별도 묶음.
     거친 매칭은 한 그룹에 모델이 여러 행으로 나타나 자연히 드러난다.
     pricing은 호출부(settings_get)가 overrides 적용해 주입한다(테스트 격리 용이).
+    표시·집계는 실제 사용(토큰>0) 모델만 본다 — synthetic·phantom 같은 0토큰 노이즈는 숨겨
+    건강 상태 한 줄과 펼친 표가 어긋나지 않게 한다.
     """
     cov = pricing_coverage(conn, pricing)
+    used = [m for m in cov.models if m.tokens > 0]
 
     def _row(m):
         return {"model": m.model, "status": m.status,
@@ -534,7 +577,7 @@ def coverage_card_context(conn, pricing: dict) -> dict:
 
     order = [e.get("contains") for e in pricing.get("match", [])]
     grouped: dict[str, list] = {}
-    for m in cov.models:
+    for m in used:
         if m.matched_contains is not None:
             grouped.setdefault(m.matched_contains, []).append(m)
     groups = []
@@ -549,13 +592,15 @@ def coverage_card_context(conn, pricing: dict) -> dict:
             "rows": [_row(m) for m in ms],
         })
 
-    unpriced_rows = [_row(m) for m in cov.models if m.status == "unpriced"]
-    suspects = [m.model for m in cov.models if m.status == "suspect"]
+    unpriced_rows = [_row(m) for m in used if m.status == "unpriced"]
+    suspects = [m.model for m in used if m.status == "suspect"]
+    n_unpriced = sum(1 for m in used if m.status == "unpriced")
+    n_suspect = sum(1 for m in used if m.status == "suspect")
 
-    if cov.unpriced_count:
-        status = ("warn", f"미식별 {cov.unpriced_count}종")
-    elif cov.suspect_count:
-        status = ("info", f"확인 필요 {cov.suspect_count}종")
+    if n_unpriced:
+        status = ("warn", f"미식별 {n_unpriced}종")
+    elif n_suspect:
+        status = ("info", f"확인 필요 {n_suspect}종")
     else:
         status = ("ok", "모든 모델 단가 식별됨")
 
@@ -564,6 +609,7 @@ def coverage_card_context(conn, pricing: dict) -> dict:
         "coverage_unpriced": unpriced_rows,
         "coverage_suspects": suspects,
         "coverage_status": status,   # (level, label)
+        "coverage_has_detail": bool(groups or unpriced_rows),
     }
 
 

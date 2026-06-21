@@ -271,6 +271,82 @@
   /* 출처 범례(disclaimer) — 게이지 텍스처를 작게 재현해 가르친다 */
   .src-official { @apply font-semibold text-body; }
   .src-est { @apply font-semibold text-muted; border-bottom: 1px dashed var(--color-muted); }
+
+  /* ── 설정 화면 재구성 ──
+     Tier 1(편집 카드: AI row+토글+상태칩 / 필드 / 고급 접기 / 저장)
+     Tier 2(정보·진단: 조용한 카드 — 커버리지 건강줄+자세히, 프라이버시 ✓/✗). */
+
+  /* 저장 확인 배너 */
+  .banner.saved { background: #e3f1e8; color: #1f7a3d; border-color: #bfe0c9; }
+
+  /* 편집 카드 */
+  .set-card h2 { @apply mb-0.5; }
+  .set-sub { @apply text-muted text-[13px] mt-0.5 mb-3 max-w-[64ch] leading-relaxed; }
+
+  /* AI별 row: [이름] [상태칩] ──── [토글] */
+  .ai-list { @apply flex flex-col; }
+  .ai-row { @apply py-2.5 border-b border-line; }
+  .ai-row:last-child { @apply border-b-0; }
+  .ai-row.off { @apply opacity-60; }
+  .ai-row-head { @apply flex items-center gap-2; }
+  .ai-name { @apply font-semibold; }
+  .ai-row-head .switch { @apply ml-auto; }
+  .ai-note { @apply text-[12px] text-exceeds mt-1; }
+
+  /* 토글 스위치(순수 CSS — Alpine 없음) */
+  .switch { position: relative; display: inline-flex; flex: none; cursor: pointer; }
+  .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+  .switch-track { display: block; width: 36px; height: 20px; border-radius: 9999px; background: var(--color-line); transition: background-color .15s; }
+  .switch-thumb { display: block; width: 16px; height: 16px; margin: 2px; border-radius: 9999px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+  .switch input:checked ~ .switch-track { background: var(--color-primary); }
+  .switch input:checked ~ .switch-track .switch-thumb { transform: translateX(16px); }
+  .switch input:focus-visible ~ .switch-track { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+  /* 상태 칩 변형(.chip 기본은 기존 정의) */
+  .chip-ok { color: #1f7a3d; background: #e3f1e8; }
+  .chip-wait { @apply bg-card text-muted; }
+  .chip-off { @apply bg-card text-muted; }
+
+  /* 라벨 + 입력 + 단위 + 도움말 한 묶음 */
+  .field { @apply mt-3.5; }
+  .field-label { @apply block font-medium mb-1; }
+  .field-input { @apply inline-flex items-center gap-1.5; }
+  .field-input input { @apply bg-elev border border-line rounded-md px-2 py-1.5 text-fg w-24; }
+  .field-unit { @apply text-muted text-[13px]; }
+  .field-help { @apply text-[12px] text-muted mt-1.5 max-w-[52ch] leading-relaxed; }
+
+  /* 고급 접기 */
+  .advanced { @apply mt-3.5 border-t border-line pt-2.5; }
+  .advanced > summary { @apply cursor-pointer select-none text-muted text-[13px]; list-style: none; }
+  .advanced > summary::-webkit-details-marker { display: none; }
+  .advanced > summary::before { content: "\25B8  "; }
+  .advanced[open] > summary::before { content: "\25BE  "; }
+
+  /* 저장 풋: 편집 영역을 닫는다 */
+  .set-foot { @apply flex justify-end mt-4 pt-3 border-t border-line; }
+
+  /* Tier 2 구분 헤더 */
+  .tier-head { @apply text-[13px] font-semibold tracking-wide text-muted mt-6 mb-1.5; font-family: inherit; }
+
+  /* 정보·진단 카드(편집 카드보다 한 단계 조용하게) */
+  .info-card { @apply shadow-none bg-transparent; }
+  .info-card h3 { @apply text-[14px] font-semibold m-0; font-family: inherit; }
+  .info-head { @apply flex items-center gap-2.5 mb-1; }
+  .cov-status { @apply ml-auto text-[13px] font-semibold; }
+
+  /* '자세히' 접기 */
+  .more { @apply mt-2.5; }
+  .more > summary { @apply cursor-pointer select-none text-accent text-[13px]; list-style: none; }
+  .more > summary::-webkit-details-marker { display: none; }
+  .more > summary::before { content: "\25B8  "; }
+  .more[open] > summary::before { content: "\25BE  "; }
+
+  /* 프라이버시 ✓/✗ 항목 */
+  .priv-list { @apply list-none m-0 mt-1.5 p-0 flex flex-col gap-1.5; }
+  .priv-list li { @apply relative pl-[22px] text-[13px] text-body; }
+  .priv-list li::before { @apply absolute left-0 font-bold; }
+  .priv-list li.yes::before { content: "\2713"; color: var(--color-ok); }
+  .priv-list li.no::before { content: "\2715"; color: var(--color-muted); }
 }
 
 /* ── 세션 표(.sess) 반응형: 기존 동작 그대로 이식(원시 CSS) ── */

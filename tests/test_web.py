@@ -803,7 +803,9 @@ def test_settings_shows_official_fetch_section(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/settings")
     assert r.status_code == 200
-    assert "공식 사용량 자동 취득" in r.text
+    # '사용하는 AI'+'자동 취득'을 '공식 사용량' 카드 하나로 병합(설정 UI 재구성)
+    assert "공식 사용량" in r.text
+    assert "자동 갱신 간격" in r.text
     assert 'name="min_interval"' in r.text
 
 

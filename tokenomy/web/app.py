@@ -12,14 +12,14 @@ from tokenomy import __version__
 from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
 from tokenomy.config import credit_to_usd as _credit_to_usd, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
-from tokenomy.db import connect, get_fetch_state
+from tokenomy.db import connect
 from tokenomy.official_fetch import refresh_tracked
 from tokenomy.paths import resource_path
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
 from tokenomy.web.views import (
     coverage_card_context, dimension_context, history_context, official_section_context,
-    overview_context, session_context, sidebar_freshness,
+    overview_context, session_context, settings_official_rows, sidebar_freshness,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -174,20 +174,20 @@ def official_section(request: Request):
 
 
 @app.get("/settings")
-def settings_get(request: Request):
+def settings_get(request: Request, saved: int = 0):
     config = load_config()
     conn = connect()
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
     ofs = official_fetch_settings(config)
     tracked = tracked_providers(config)
-    official_states = {p: (dict(st) if (st := get_fetch_state(conn, p)) else None)
-                       for p in PROVIDERS}
     return templates.TemplateResponse(
         request, "settings.html",
         {"tracked": tracked, "providers": list(PROVIDERS),
          "credit_to_usd": _credit_to_usd(config),
-         "official_fetch": ofs, "official_states": official_states,
+         "official_fetch": ofs,
+         "official_rows": settings_official_rows(conn, config),
+         "saved": bool(saved),
          "active_nav": "settings", "update_tag": check_update(conn),
          "last_ts": last["t"] if last and last["t"] else None,
          "last_ingest_at": sidebar_freshness(conn),
@@ -216,6 +216,6 @@ def settings_post(track_claude: str = Form(""), track_codex: str = Form(""),
     for k in ("budget", "budget_start"):
         config.pop(k, None)
     save_config(config)
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
