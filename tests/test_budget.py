@@ -67,14 +67,21 @@ from tokenomy.budget import official_fetch_settings
 
 
 def test_official_fetch_settings_defaults():
+    # 자동 갱신 간격 기본 10분(quota를 CLI와 공유 → 보수적)
     s = official_fetch_settings({})
-    assert s == {"min_interval_minutes": 5}
+    assert s == {"min_interval_minutes": 10}
 
 
 def test_official_fetch_settings_bad_interval_falls_back():
-    assert official_fetch_settings({"official_fetch": {"min_interval_minutes": "x"}})["min_interval_minutes"] == 5
-    assert official_fetch_settings({"official_fetch": {"min_interval_minutes": -3}})["min_interval_minutes"] == 5
+    assert official_fetch_settings({"official_fetch": {"min_interval_minutes": "x"}})["min_interval_minutes"] == 10
+    assert official_fetch_settings({"official_fetch": {"min_interval_minutes": -3}})["min_interval_minutes"] == 10
     assert official_fetch_settings({"official_fetch": {"min_interval_minutes": 9}})["min_interval_minutes"] == 9
+
+
+def test_load_config_default_auto_interval_is_10(tmp_path):
+    # 파일 없을 때 기본 자동 갱신 간격 10분
+    cfg = load_config(tmp_path / "nope.json")
+    assert cfg["official_fetch"]["min_interval_minutes"] == 10
 
 
 from tokenomy.budget import tracked_providers

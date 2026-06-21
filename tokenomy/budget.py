@@ -31,7 +31,7 @@ def load_config(path: str | Path | None = None) -> dict:
     base = {"user_label": _default_label(),
             "tracked_providers": None,           # None → 첫 호출 시 크레덴셜로 시드
             "credit_to_usd": 0.04,
-            "official_fetch": {"min_interval_minutes": 5},
+            "official_fetch": {"min_interval_minutes": 10},
             "pricing_overrides": {}}
     p = _config_path(path)
     if not p.exists():
@@ -66,14 +66,15 @@ def credit_to_usd(config: dict) -> float:
 
 
 def official_fetch_settings(config: dict) -> dict:
-    """공식 사용량 자동 취득 설정. 현재는 throttle 간격만 — on/off·provider 게이트는
-    tracked_providers가 담당한다. 누락·오설정은 기본 5분으로 폴백한다."""
+    """공식 사용량 갱신 설정. min_interval_minutes는 '자동 갱신 간격' — 창이 열린 동안
+    갱신을 자동 폴링하는 주기이자 자동 호출의 최소 간격(수동 갱신은 무시한다).
+    on/off·provider 게이트는 tracked_providers가 담당한다. 누락·오설정은 기본 10분으로 폴백한다."""
     raw = config.get("official_fetch") or {}
     try:
-        mi = int(raw.get("min_interval_minutes", 5))
+        mi = int(raw.get("min_interval_minutes", 10))
     except (TypeError, ValueError):
-        mi = 5
-    return {"min_interval_minutes": mi if mi > 0 else 5}
+        mi = 10
+    return {"min_interval_minutes": mi if mi > 0 else 10}
 
 
 def tracked_providers(config: dict) -> list[str]:

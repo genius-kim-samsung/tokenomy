@@ -5,79 +5,18 @@
 <section class="card">
   <h2>이번 달 총지출 <span class="muted">(전 AI 합산)</span></h2>
   {% if not has_data %}
-    <p class="muted">데이터 없음 · 사이드바 [↻ 새로고침]을 누르세요</p>
+    <p class="muted">데이터 없음 · 사이드바 [↻ 수집]을 누르세요</p>
   {% else %}
     <p class="total-num serif">${{ '{:,.2f}'.format(month_total) }}</p>
     <p class="disclaimer">ⓘ 공개 API 단가 기준 추정 · 이 머신 데이터만</p>
   {% endif %}
 </section>
 
-{# 공식 미러 패널 — provider별 카드 그리드(ADR 0002). 색=임계 · 텍스처=공식/추정 #}
-<section class="card">
-  <div class="card-head">
-    <h2>AI별 사용량</h2>
-  </div>
-  <div class="official-grid">
-    {% for c in official_cards %}
-    <article class="provider-card" data-status="{{ c.status }}" style="--accent: {{ c.accent }}">
-      <header class="provider-head">
-        <span class="provider-mark"></span>
-        <span class="provider-name">{{ c.label }}</span>
-        <span class="provider-actions">
-          {% if c.status == "error" %}
-            <span class="chip chip-warn">⚠ 갱신 실패{% if c.fresh %} · {{ c.fresh }}{% endif %}</span>
-          {% elif c.fresh %}
-            <span class="provider-fresh">{{ c.fresh }}</span>
-          {% endif %}
-          <form method="post" action="/official/refresh" class="provider-refresh-form">
-            <input type="hidden" name="provider" value="{{ c.provider }}">
-            <button class="provider-refresh" type="submit"
-                    title="{{ c.label }} 공식 사용량만 새로고침" aria-label="{{ c.label }} 새로고침">↻</button>
-          </form>
-        </span>
-      </header>
-
-      {% for g in c.gauges %}
-      <div class="gauge-row">
-        <div class="gauge-line">
-          <span class="gauge-label">{{ g.label }}</span>
-          <span class="gauge-pct lvl-{{ g.level }}">{{ g.util }}%{% if g.exhausted %} 소진{% endif %}</span>
-          <span class="chip {{ 'chip-est' if g.estimated else 'chip-official' }}">{{ '추정' if g.estimated else '공식' }}</span>
-        </div>
-        <span class="gauge{% if g.estimated %} gauge-est{% endif %}">
-          {% if g.ghost_pct %}<span class="gauge-ghost{% if g.ghost_warn %} ghost-warn{% endif %}" style="width: {{ g.ghost_pct }}%"></span>{% endif %}
-          <span class="gauge-fill s-{{ g.level }}{% if g.estimated %} est{% endif %}" style="width: {{ g.fill_pct }}%"></span>
-        </span>
-        {% if g.caption or g.sub %}
-        <div class="gauge-meta">
-          {% if g.caption %}<span class="gauge-caption">{{ g.caption }}</span>{% else %}<span></span>{% endif %}
-          {% if g.sub %}<span class="gauge-sub">{{ g.sub }}</span>{% endif %}
-        </div>
-        {% endif %}
-        {% if g.forecast %}<div class="gauge-forecast{% if g.ghost_warn %} warn{% endif %}">{{ g.forecast }}</div>{% endif %}
-      </div>
-      {% endfor %}
-
-      {% if c.fallback %}
-      <div class="fallback">
-        <p class="fallback-num serif">${{ '{:,.2f}'.format(c.fallback.estimate_usd) }} <span class="chip chip-est">추정</span></p>
-        {% if c.fallback.spark %}
-        <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true">
-          <polyline points="{{ c.fallback.spark }}"></polyline>
-        </svg>
-        {% endif %}
-        <p class="muted">공식 미취득 · 로컬 추정</p>
-      </div>
-      {% endif %}
-
-      {% if c.note %}<p class="provider-note">⚠ {{ c.note }}</p>{% endif %}
-    </article>
-    {% else %}
-    <p class="muted">추적 중인 provider가 없습니다 — 설정에서 추가하면 공식 사용량을 자동으로 가져옵니다.</p>
-    {% endfor %}
-  </div>
-  <p class="disclaimer">ⓘ <span class="src-official">공식</span>=AI별 공식 API · <span class="src-est">추정</span>=로컬 사용 로그</p>
-</section>
+{# 'AI별 사용량' — wrapper가 자동 폴링(load=起動 갱신, every=자동 갱신 간격), 내부는 partial(ADR 0003). #}
+<div id="official-section" hx-get="/official/section"
+     hx-trigger="load delay:300ms, every {{ official_interval }}m" hx-swap="innerHTML">
+  {% include "_official_section.html" %}
+</div>
 
 
 {% if has_data %}

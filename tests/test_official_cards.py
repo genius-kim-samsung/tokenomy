@@ -195,6 +195,21 @@ def test_weekly_window_sub_has_time_and_day_countdown():
     assert g["sub"] == "리셋 2026-06-25 11:12 · 3일 23시간 후"   # 분은 노이즈라 생략
 
 
+# ── 사이드바 신선도: 마지막 수집 실행 시각(최신 메시지 ts 아님) ─────────────────
+def test_sidebar_freshness_returns_last_ingest_time():
+    from tokenomy.freshness import record_ingest
+    from tokenomy.web.views import sidebar_freshness
+    conn = _conn()
+    record_ingest(conn, NOW)
+    assert sidebar_freshness(conn) == NOW.isoformat()
+
+
+def test_sidebar_freshness_none_when_never_ingested():
+    from tokenomy.web.views import sidebar_freshness
+    conn = _conn()
+    assert sidebar_freshness(conn) is None
+
+
 # ── 게이트: tracked도 아니고 데이터도 없으면 카드 없음 ─────────────────────────
 def test_untracked_no_data_provider_omitted():
     conn = _conn()

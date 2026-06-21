@@ -13,12 +13,13 @@ from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
 from tokenomy.budget import credit_to_usd as _credit_to_usd, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect, get_fetch_state
-from tokenomy.official_fetch import fetch_provider
+from tokenomy.official_fetch import refresh_tracked
 from tokenomy.paths import resource_path
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
 from tokenomy.web.views import (
-    coverage_card_context, dimension_context, history_context, overview_context, session_context,
+    coverage_card_context, dimension_context, history_context, official_section_context,
+    overview_context, session_context, sidebar_freshness,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -139,20 +140,37 @@ def do_ingest():
     return RedirectResponse("/", status_code=303)
 
 
+def _official_section_response(request: Request, conn, config, now):
+    """'AI별 사용량' 섹션 조각(partial) 렌더 — 수동 HX 갱신·자동 폴링 공용."""
+    return templates.TemplateResponse(
+        request, "_official_section.html",
+        official_section_context(conn, config, now))
+
+
 @app.post("/official/refresh")
-def official_refresh(provider: str = Form("")):
-    """공식 사용량 자동 취득 트리거 — 결과 무관 redirect. 백오프 없음."""
+def official_refresh(request: Request, provider: str = Form("")):
+    """수동 갱신 — throttle을 건너뛴다(manual). provider 지정 시 그 카드만, 아니면 전체.
+
+    HX 요청이면 'AI별 사용량' 섹션을 부분교체로 돌려주고(JS 개입), 아니면 전체 리로드 폴백(303).
+    """
     conn = connect()
     config = load_config()
     now = datetime.now(KST)
-    targets = ([provider] if provider in PROVIDERS
-               else list(tracked_providers(config)))
-    for p in targets:
-        try:
-            fetch_provider(p, now_kst=now, config=config, conn=conn)
-        except Exception:
-            pass   # 결과 무관 — 상태는 fetch_state에 기록됨, 페이지에서 표시
+    targets = [provider] if provider in PROVIDERS else None
+    refresh_tracked(config, now_kst=now, conn=conn, manual=True, providers=targets)
+    if request.headers.get("HX-Request"):
+        return _official_section_response(request, conn, config, now)
     return RedirectResponse("/", status_code=303)
+
+
+@app.get("/official/section")
+def official_section(request: Request):
+    """자동 폴링(hx-trigger load·every) — 자동 갱신(throttle 적용) 후 섹션 조각 렌더."""
+    conn = connect()
+    config = load_config()
+    now = datetime.now(KST)
+    refresh_tracked(config, now_kst=now, conn=conn, manual=False)
+    return _official_section_response(request, conn, config, now)
 
 
 @app.get("/settings")
@@ -172,6 +190,7 @@ def settings_get(request: Request):
          "official_fetch": ofs, "official_states": official_states,
          "active_nav": "settings", "update_tag": check_update(conn),
          "last_ts": last["t"] if last and last["t"] else None,
+         "last_ingest_at": sidebar_freshness(conn),
          **coverage_card_context(conn, pricing)},
     )
 
@@ -192,7 +211,7 @@ def settings_post(track_claude: str = Form(""), track_codex: str = Form(""),
     ctu = _to_float(credit_to_usd)
     config["credit_to_usd"] = ctu if ctu > 0 else 0.04
     mi = int(_to_float(min_interval))
-    config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 5}
+    config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 10}
     # 레거시 키 정리(있으면 제거 — config를 깔끔하게 다시 쓴다)
     for k in ("budget", "budget_start"):
         config.pop(k, None)

@@ -2,51 +2,11 @@
 from __future__ import annotations
 
 import json
-import tokenomy.cli as cli_module
 from datetime import datetime
 
 from tokenomy.aggregate import KST
 from tokenomy.cli import cmd_official_import, cmd_report
 from tokenomy.db import connect, latest_official_snapshot
-
-
-# ── _official_fetch_worker 테스트 ──────────────────────────────────────────
-
-
-def test_official_worker_skips_when_no_tracked_providers(monkeypatch):
-    """tracked_providers 없음 → fetch_provider 미호출(네트워크 0)."""
-    called = []
-    monkeypatch.setattr(cli_module, "fetch_provider",
-                        lambda p, **k: called.append(p))
-    # creds_present가 False를 반환하도록 패치 → tracked_providers가 []를 반환
-    import tokenomy.budget as b
-    monkeypatch.setattr(b, "creds_present", lambda p: False)
-    cli_module._official_fetch_worker({}, datetime(2026, 6, 10, 9, tzinfo=KST))
-    assert called == []
-
-
-def test_official_worker_fetches_tracked_providers(monkeypatch):
-    """tracked_providers = ["claude"] → claude만 fetch."""
-    called = []
-    monkeypatch.setattr(cli_module, "fetch_provider",
-                        lambda p, **k: called.append(p))
-    cfg = {"tracked_providers": ["claude"]}
-    cli_module._official_fetch_worker(
-        cfg, datetime(2026, 6, 10, 9, tzinfo=KST),
-        connect_fn=lambda: connect(":memory:"))
-    assert called == ["claude"]
-
-
-def test_official_worker_swallows_exceptions(monkeypatch):
-    """fetch_provider 예외 발생 시 worker가 삼켜 종료되지 않는다."""
-    def boom(p, **k):
-        raise RuntimeError("down")
-    monkeypatch.setattr(cli_module, "fetch_provider", boom)
-    cfg = {"tracked_providers": ["claude"]}
-    # 예외를 삼켜 worker가 깨지지 않는다
-    cli_module._official_fetch_worker(
-        cfg, datetime(2026, 6, 10, 9, tzinfo=KST),
-        connect_fn=lambda: connect(":memory:"))
 
 
 def test_official_import_claude(tmp_path):

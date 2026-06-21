@@ -98,10 +98,12 @@ def _http_get_json(url: str, headers: dict, urlopen) -> dict:
 
 
 def fetch_provider(provider: str, *, now_kst, config, conn,
-                   urlopen=urllib.request.urlopen) -> FetchResult:
+                   urlopen=urllib.request.urlopen, manual=False) -> FetchResult:
     """공식 사용량 1회 취득(비차단·단발). 결과 FetchResult.
 
     게이트 순서: env-skip → tracked_providers 미포함 → 크레덴셜 부재 → throttle → GET(≤3s) → 파서 → 적재.
+    manual=True(사용자가 직접 누른 갱신)면 throttle 게이트를 건너뛴다 — 명시적 의사 우선.
+    자동(起動·폴링)은 manual=False라 throttle('자동 갱신 간격')을 거친다.
     실패(AuthError/HTTP/네트워크/파싱)는 예외를 삼켜 state에 기록하고 마지막 스냅샷을 유지한다.
     urlopen은 테스트에서 stub 주입(기본 urllib.request.urlopen).
     """
@@ -115,9 +117,10 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
         # 선언했지만 로그인 안 된 상태 — 거짓 auth_error를 남기지 않고 조용히 skip
         return FetchResult(provider, "disabled", "creds_absent")
 
-    # 2) throttle — 직전 시도가 윈도우 안이면 state를 갱신하지 않고 반환
+    # 2) throttle — 직전 시도가 윈도우 안이면 state를 갱신하지 않고 반환.
+    #    manual(수동 갱신)은 사용자 명시 의사라 throttle을 건너뛴다.
     state = get_fetch_state(conn, provider)
-    if _throttled(state, now_kst, settings["min_interval_minutes"]):
+    if not manual and _throttled(state, now_kst, settings["min_interval_minutes"]):
         return FetchResult(provider, "throttled")
 
     # 3) 토큰읽기 + 네트워크 + 파싱 — 실패는 여기서만 catch
@@ -160,3 +163,23 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
     upsert_fetch_state(conn, provider, last_attempt_at=ts, last_success_at=ts,
                        last_status="ok", last_error=None)
     return FetchResult(provider, "ok", bucket_count=n)
+
+
+def refresh_tracked(config, *, now_kst, conn, manual=False, providers=None):
+    """providers(없으면 tracked 전체)를 1회 갱신(자동 폴링·起動 hx-load·수동 갱신 공용).
+
+    각 provider를 fetch_provider로 호출하고 결과 FetchResult 리스트를 반환한다.
+    개별 fetch가 실패를 자체적으로 삼키지만(state 기록), 안전망으로 여기서도 예외를
+    삼켜 한 provider가 터져도 나머지를 막지 않는다(비차단).
+    providers를 명시하면 카드별 개별 갱신(예: ["claude"])에 쓰고, 없으면 전체 갱신이다.
+    manual은 fetch_provider로 전달 — 수동 갱신이면 throttle을 건너뛴다.
+    """
+    targets = providers if providers is not None else tracked_providers(config)
+    results = []
+    for p in targets:
+        try:
+            results.append(fetch_provider(p, now_kst=now_kst, config=config,
+                                          conn=conn, manual=manual))
+        except Exception:
+            pass
+    return results

@@ -198,6 +198,73 @@ def test_fetch_throttled_keeps_window(monkeypatch, tmp_path):
     assert get_fetch_state(conn, "claude")["last_attempt_at"] == prev
 
 
+# ---------------------------------------------------------------------------
+# refresh_tracked — tracked 전체 자동 갱신 헬퍼(起動 hx-load·폴링·수동 전체갱신 공용)
+# ---------------------------------------------------------------------------
+
+def test_refresh_tracked_skips_when_no_tracked(monkeypatch):
+    """tracked_providers 없음 → fetch 미호출, 빈 결과."""
+    monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
+    calls = []
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider", lambda p, **k: calls.append(p))
+    import tokenomy.budget as b
+    monkeypatch.setattr(b, "creds_present", lambda p: False)
+    from tokenomy.official_fetch import refresh_tracked
+    res = refresh_tracked({}, now_kst=_NOW, conn=connect(":memory:"))
+    assert res == [] and calls == []
+
+
+def test_refresh_tracked_fetches_each_tracked(monkeypatch):
+    """tracked=[claude] → claude만 fetch, FetchResult 리스트 반환."""
+    calls = []
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider",
+                        lambda p, **k: (calls.append((p, k.get("manual"))) or FetchResult(p, "ok")))
+    from tokenomy.official_fetch import refresh_tracked
+    res = refresh_tracked({"tracked_providers": ["claude"]}, now_kst=_NOW,
+                          conn=connect(":memory:"), manual=True)
+    assert calls == [("claude", True)]                # manual 인자 전달
+    assert [r.provider for r in res] == ["claude"]
+
+
+def test_refresh_tracked_explicit_providers_override(monkeypatch):
+    """providers를 명시하면 tracked 대신 그 집합만 갱신한다(카드별 개별 갱신용)."""
+    calls = []
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider",
+                        lambda p, **k: (calls.append(p) or FetchResult(p, "ok")))
+    from tokenomy.official_fetch import refresh_tracked
+    refresh_tracked({"tracked_providers": ["claude", "codex"]}, now_kst=_NOW,
+                    conn=connect(":memory:"), providers=["claude"])
+    assert calls == ["claude"]
+
+
+def test_refresh_tracked_swallows_exceptions(monkeypatch):
+    """한 provider fetch가 터져도 전체가 죽지 않는다(비차단)."""
+    def boom(p, **k):
+        raise RuntimeError("down")
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider", boom)
+    from tokenomy.official_fetch import refresh_tracked
+    # 예외 없이 반환되어야 한다
+    refresh_tracked({"tracked_providers": ["claude"]}, now_kst=_NOW, conn=connect(":memory:"))
+
+
+def test_fetch_manual_bypasses_throttle(monkeypatch, tmp_path):
+    """수동 갱신(manual=True)은 throttle 윈도우 안이어도 실제 호출한다 — 사용자 명시 의사 우선."""
+    monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
+    _patch_creds(monkeypatch, tmp_path)
+    conn = connect(":memory:")
+    from tokenomy.db import upsert_fetch_state
+    prev = (_NOW - timedelta(minutes=2)).isoformat()   # 5분 미달 → 자동이면 throttled
+    upsert_fetch_state(conn, "claude", last_attempt_at=prev, last_success_at=prev,
+                       last_status="ok", last_error=None)
+    op = _opener(payload=_CLAUDE_RAW)
+    r = fetch_provider("claude", now_kst=_NOW, config=_CFG_ON, conn=conn,
+                       urlopen=op, manual=True)
+    assert r.status == "ok"            # throttle 무시하고 실제 취득
+    assert op.calls                    # 네트워크가 실제로 호출됨
+    # 수동 시도도 last_attempt_at을 갱신(이후 자동 폴링의 throttle 기준이 됨)
+    assert get_fetch_state(conn, "claude")["last_attempt_at"] == _NOW.isoformat()
+
+
 def test_fetch_401_is_auth_error_preserves_success(monkeypatch, tmp_path):
     monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
     _patch_creds(monkeypatch, tmp_path)

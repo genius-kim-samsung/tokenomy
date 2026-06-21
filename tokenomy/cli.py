@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import sys
-import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -20,27 +19,9 @@ from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns, 
 from tokenomy.freshness import CLEANUP_DAYS, freshness, record_ingest
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.budget import load_config, user_label, credit_to_usd, tracked_providers
-from tokenomy.official_fetch import fetch_provider
 from tokenomy.official_parser import parse_claude, parse_codex
 
 CLAUDE_ROOT = Path.home() / ".claude" / "projects"
-
-
-def _official_fetch_worker(config: dict, now_kst, *, connect_fn=connect) -> None:
-    """공식 사용량 취득(자기 conn). 모든 예외 삼킴 — 起動/ingest 비차단용.
-
-    cmd_ingest에서 데몬 스레드로 호출된다. 스레드는 자기 sqlite conn을 연다
-    (sqlite conn은 스레드 간 공유 금지). tracked_providers가 비면 즉시 반환(네트워크 없음).
-    """
-    providers = tracked_providers(config)
-    if not providers:
-        return
-    try:
-        conn = connect_fn()
-        for p in providers:
-            fetch_provider(p, now_kst=now_kst, config=config, conn=conn)
-    except Exception as e:   # 자동 취득 실패는 치명적이지 않음
-        print(f"[official] 자동 취득 건너뜀: {e}")
 
 
 def cmd_ingest(conn) -> None:
@@ -63,12 +44,8 @@ def cmd_ingest(conn) -> None:
     if repriced:
         msg += f"\n[reprice] 단가 변경 감지 — 기존 {repriced}행 비용 재계산"
     print(msg)
-    # 공식 사용량 자동 취득 — 데몬 스레드로 분리해 起動/ingest를 블록하지 않는다.
-    # tracked_providers가 없으면 _official_fetch_worker가 즉시 반환(네트워크 없음).
-    threading.Thread(
-        target=_official_fetch_worker, args=(config, datetime.now(KST)),
-        daemon=True,
-    ).start()
+    # 수집은 순수 — 공식 갱신은 트리거하지 않는다(웹 대시보드 로드 시 hx-trigger="load"가 첫 갱신,
+    # 이후 '자동 갱신 간격'마다 폴링 / 수동 갱신 버튼 / 설정 변경이 담당).
 
 
 def cmd_official_import(conn, provider: str, path: str, *, now_kst=None,

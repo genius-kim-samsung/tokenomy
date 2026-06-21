@@ -11,9 +11,10 @@ from tokenomy.aggregate import (
     token_composition,
 )
 from tokenomy.budget import (
-    credit_to_usd, load_config, tracked_providers, user_label,
+    credit_to_usd, load_config, official_fetch_settings, tracked_providers, user_label,
 )
-from tokenomy.db import get_fetch_state
+from tokenomy.db import get_fetch_state, get_meta
+from tokenomy.freshness import LAST_INGEST_KEY
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 
 _SORT_KEYS = {
@@ -45,6 +46,15 @@ def _provider_has_data(conn, provider: str) -> bool:
         "SELECT MAX(ts) t FROM messages WHERE provider=?", (provider,)
     ).fetchone()
     return row is not None and row["t"] is not None
+
+
+def sidebar_freshness(conn) -> str | None:
+    """사이드바 '수집: N분 전'용 마지막 수집 실행 시각(ISO). 없으면 None.
+
+    최신 메시지 ts(MAX(ts))가 아니라 record_ingest가 남긴 시각이다 — 갱신 카드의
+    '마지막 갱신 시각'과 대칭을 맞춰, '방금 수집했다'가 정확히 반영되게 한다.
+    """
+    return get_meta(conn, LAST_INGEST_KEY)
 
 
 # ── 공식 사용량 provider 카드 조립(ADR 0002) ───────────────────────────────────
@@ -252,7 +262,8 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
         "label": meta["label"],
         "accent": meta["accent"],
         "status": status,
-        "fresh": _fresh_label(view.stale_minutes),
+        "fresh": _fresh_label(view.stale_minutes),   # JS 미실행 시 서버 초기 텍스트(폴백)
+        "fetched_at": view.fetched_at,                # 절대 ISO — JS rel-time tick의 기준
         "note": note,
         "gauges": gauges,
         "fallback": fallback,
@@ -276,6 +287,18 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[
             continue
         cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now))
     return cards
+
+
+def official_section_context(conn, config: dict, now_kst: datetime | None = None) -> dict:
+    """'AI별 사용량' 섹션 조각(partial)용 컨텍스트 — provider 카드 + 자동 갱신 간격(분).
+
+    수동 HX 갱신(POST /official/refresh)과 자동 폴링(GET /official/section)이 공유한다.
+    """
+    now = now_kst or datetime.now(KST)
+    return {
+        "official_cards": official_cards(conn, config, now),
+        "official_interval": official_fetch_settings(config)["min_interval_minutes"],
+    }
 
 
 def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
@@ -325,11 +348,13 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "month_total": month_total,
         "claude_official": claude_official, "codex_official": codex_official,
         "official_cards": official_cards(conn, config, now),
+        "official_interval": official_fetch_settings(config)["min_interval_minutes"],
         "projects": projects, "sessions": sessions, "insights": coach,
         "daily_labels": [p.day for p in daily],
         "trend_series": trend_series,
         "trend_totals": trend_totals,
         "last_ts": last["t"] if has_data else None,
+        "last_ingest_at": sidebar_freshness(conn),
         "token_comp": token_comp,
         "has_data": has_data,
     }
@@ -339,7 +364,8 @@ def session_context(conn, session_id: str) -> dict | None:
     detail = session_detail(conn, session_id)
     if detail is None:
         return None
-    return {"detail": detail, "active_nav": "history"}
+    return {"detail": detail, "active_nav": "history",
+            "last_ingest_at": sidebar_freshness(conn)}
 
 
 def _parse_date(value: str | None) -> datetime | None:
@@ -408,6 +434,7 @@ def dimension_context(conn, anchor_kst: datetime, provider: str, *,
         "has_next": nxt <= now,
         "month": now.strftime("%Y-%m"),
         "last_ts": last["t"] if last and last["t"] else None,
+        "last_ingest_at": sidebar_freshness(conn),
     }
 
 
@@ -560,6 +587,7 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
         "start": start or "", "end": end or "",
         "month": now.strftime("%Y-%m"),
         "last_ts": last["t"] if last and last["t"] else None,
+        "last_ingest_at": sidebar_freshness(conn),
         "period_label": label,
         "prev_anchor": (s - timedelta(days=1)).strftime("%Y-%m-%d"),
         "next_anchor": nxt.strftime("%Y-%m-%d"),

@@ -24,7 +24,9 @@ status: accepted
 
 ## 결과
 
-- `cmd_ingest`의 데몬 갱신 훅을 떼어 수집을 순수화한다. 起動 자동 갱신은 `launcher`로 옮긴다. CLI `ingest`(터미널)는 네트워크를 건드리지 않는 수집만 한다.
-- `fetch_provider`에 manual 경로를 두어 수동 트리거는 throttle 게이트를 건너뛴다. 자동(起動·폴링)만 게이트를 거친다.
+- `cmd_ingest`의 데몬 갱신 훅을 떼어 수집을 순수화한다. CLI `ingest`(터미널)도 네트워크를 건드리지 않는 수집만 한다.
+- 起動 자동 갱신은 별도 데몬 스레드 대신 **대시보드 로드 시 자동 폴링의 첫 tick**(`hx-trigger="load"`)이 겸한다 — 창이 뜨면 "/"가 로드되며 갱신이 1회 일어나고, 이후 '자동 갱신 간격'마다 폴링한다. `launcher`는 수집만 동기 실행하고 무변경(起動 스레드를 늘리지 않아 단순).
+- tracked 전체 갱신 로직은 `official_fetch.refresh_tracked`로 모아 자동 폴링 라우트가 재사용한다.
+- `fetch_provider`에 manual 경로를 두어 수동 트리거는 throttle 게이트를 건너뛴다. 자동(load·폴링)만 게이트를 거친다.
 - 웹 경로: `POST /ingest`(수집만) · `POST /official/refresh`(수동 갱신, bypass) · 자동 폴링용 "AI별 사용량" 섹션 partial 라우트(throttle 적용, htmx 부분교체).
 - 신선도 헬퍼·템플릿·설정 라벨·상대시간 tick JS가 이 모델을 따라 갱신된다.

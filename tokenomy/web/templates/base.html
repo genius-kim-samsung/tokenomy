@@ -11,13 +11,14 @@
     {% include "_sidebar.html" %}
     <main class="content">
       {% if notice == "ingest-failed" %}
-      <div class="banner error">새로고침(ingest) 중 오류 — 기존 데이터를 표시합니다.</div>
+      <div class="banner error">수집 중 오류 — 기존 데이터를 표시합니다.</div>
       {% endif %}
       {% block body %}{% endblock %}
     </main>
   </div>
   <script src="/static/vendor/htmx.min.js"></script>
   <script src="/static/tree.js"></script>
+  <script src="/static/rel-time.js"></script>
   {% block scripts %}{% endblock %}
   <script>
     // 외부 링크(비 localhost http/https)는 네이티브 창 대신 기본 브라우저로.

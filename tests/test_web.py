@@ -294,15 +294,19 @@ def test_history_partial_returns_fragment_only(tmp_path, monkeypatch):
 
 
 def test_history_shows_data_freshness(tmp_path, monkeypatch):
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.freshness import record_ingest
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
+    record_ingest(conn, datetime(2026, 6, 10, 12, tzinfo=KST))   # 마지막 수집 시각 기록
     conn.execute(
         "INSERT INTO messages (dedup_key,provider,session_id,project,ts,cost_usd,priced) "
         "VALUES ('a','claude','s1','myproj','2026-06-10T01:00:00Z',1.0,1)"
     )
     conn.commit()
     r = client.get("/history?anchor=2026-06-10")
-    assert "데이터 최신" in r.text
+    assert "수집:" in r.text          # 사이드바 신선도 = 마지막 수집 시각(데이터 최신 메시지 ts 아님)
 
 
 def test_history_renders_signal_markers(tmp_path, monkeypatch):
@@ -721,22 +725,23 @@ def test_settings_post_persists_credit_to_usd(tmp_path, monkeypatch):
 
 # ── Task 4 TDD: official_refresh ──────────────────────────────────────────────────
 
-def test_official_refresh_calls_fetch_and_redirects(tmp_path, monkeypatch):
-    # tracked_providers를 명시 설정해 크레덴셜 파일 유무와 무관하게 결정론적으로 동작
+def test_official_refresh_manual_fetches_and_redirects_without_hx(tmp_path, monkeypatch):
+    # HX 요청이 아니면(JS 미개입) 전체 리로드 폴백(303). 수동이라 manual=True 전달.
     client, cfg_path = _client_with_config(tmp_path, monkeypatch)
     cfg_path.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
     calls = []
-    monkeypatch.setattr(app_module, "fetch_provider",
-                        lambda p, **k: calls.append(p))
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider",
+                        lambda p, **k: calls.append((p, k.get("manual"))))
     r = client.post("/official/refresh", data={}, follow_redirects=False)
     assert r.status_code == 303
-    assert set(calls) == {"claude", "codex"}
+    assert {p for p, _ in calls} == {"claude", "codex"}
+    assert all(manual is True for _, manual in calls)   # 수동 = throttle bypass
 
 
 def test_official_refresh_scopes_single_provider(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     calls = []
-    monkeypatch.setattr(app_module, "fetch_provider",
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider",
                         lambda p, **k: calls.append(p))
     r = client.post("/official/refresh", data={"provider": "claude"},
                     follow_redirects=False)
@@ -745,12 +750,51 @@ def test_official_refresh_scopes_single_provider(tmp_path, monkeypatch):
 
 
 def test_official_refresh_redirects_even_on_fetch_error(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch)
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
     def boom(p, **k):
         raise RuntimeError("network down")
-    monkeypatch.setattr(app_module, "fetch_provider", boom)
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider", boom)
     r = client.post("/official/refresh", data={}, follow_redirects=False)
     assert r.status_code == 303   # 결과 무관 redirect(예외도 삼킴)
+
+
+def test_official_refresh_hx_returns_section_partial(tmp_path, monkeypatch):
+    """HX 요청이면 'AI별 사용량' 섹션 조각만 반환(부분교체)."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider", lambda p, **k: None)
+    r = client.post("/official/refresh", data={"provider": "claude"},
+                    headers={"HX-Request": "true"})
+    assert r.status_code == 200
+    assert "<!doctype html>" not in r.text.lower()
+    assert 'class="sidebar"' not in r.text
+    assert "AI별 사용량" in r.text
+
+
+def test_official_section_polls_with_auto_throttle(tmp_path, monkeypatch):
+    """자동 폴링 라우트 GET /official/section → 섹션 조각 + manual=False(throttle 적용)."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    calls = []
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider",
+                        lambda p, **k: calls.append(k.get("manual")))
+    r = client.get("/official/section")
+    assert r.status_code == 200
+    assert "AI별 사용량" in r.text
+    assert "<!doctype html>" not in r.text.lower()
+    assert calls == [False]   # 자동 = throttle 적용
+
+
+def test_overview_section_has_polling_trigger(tmp_path, monkeypatch):
+    """대시보드 섹션이 load(起動 갱신) + every Nm(자동 폴링) 트리거를 가진다."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"], '
+                   '"official_fetch": {"min_interval_minutes": 10}}', encoding="utf-8")
+    r = client.get("/")
+    assert 'hx-get="/official/section"' in r.text
+    assert "load" in r.text
+    assert "every 10m" in r.text
 
 
 # ── Task 5 TDD: 설정 UI — 공식 자동 취득 토글 지속 ──────────────────────────────
@@ -788,7 +832,7 @@ def test_overview_has_per_provider_refresh_buttons(tmp_path, monkeypatch):
     cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
     r = client.get("/")
     assert r.status_code == 200
-    assert 'action="/official/refresh"' in r.text
+    assert 'hx-post="/official/refresh"' in r.text          # htmx 부분교체
     assert 'name="provider" value="claude"' in r.text
     assert 'name="provider" value="codex"' in r.text
 
