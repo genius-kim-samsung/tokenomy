@@ -78,17 +78,17 @@ def official_fetch_settings(config: dict) -> dict:
 
 
 def tracked_providers(config: dict) -> list[str]:
-    """사용자가 쓴다고 선언한 provider 목록. 없거나 비면 크레덴셜 존재로 시드한다.
+    """사용자가 앱에서 보기로 켠 provider(=활성 AI) 목록.
 
-    config['tracked_providers']가 유효한 리스트면 PROVIDERS 순서로 정규화(알 수 없는 값 제거).
-    비었거나 None이면 크레덴셜 파일이 있는 provider로 시드(무설정 첫 실행이 대개 정답).
+    config['tracked_providers']가 리스트면 PROVIDERS 순서로 정규화(알 수 없는 값 제거).
+    이때 **빈 리스트는 빈 집합으로 그대로 보존**한다 — "전부 끄기"는 사용자가 명시한
+    영속 상태이므로 재시드하지 않는다(다시 켜기 전까지 전 화면에서 모두 숨김).
+    키 자체가 없거나 None(미설정)이면 크레덴셜 파일이 있는 provider로 시드한다
+    (무설정 첫 실행이 대개 정답). 전부 끄기를 원하면 UI에서 모두 해제하면 된다.
     """
     from tokenomy.aggregate import PROVIDERS
     raw = config.get("tracked_providers")
-    if isinstance(raw, list):
-        sel = [p for p in PROVIDERS if p in raw]
-        if sel:
-            return sel
-    # 빈 리스트·None → 크레덴셜 파일 존재 기반 시드(UI에서 전체 체크 해제 시 자동 복구).
-    # 공식 취득 완전 비활성화는 TOKENOMY_SKIP_OFFICIAL_FETCH 환경변수 사용.
+    if isinstance(raw, list):                          # 명시 설정(빈 리스트 포함) → 그대로 정규화
+        return [p for p in PROVIDERS if p in raw]       # [] → [] 영속(재시드 안 함)
+    # None(미설정) → 크레덴셜 파일 존재 기반 시드. 공식 취득 전체 차단은 TOKENOMY_SKIP_OFFICIAL_FETCH.
     return [p for p in PROVIDERS if creds_present(p)]

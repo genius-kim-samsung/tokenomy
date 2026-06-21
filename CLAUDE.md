@@ -45,7 +45,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 
 - **parser.py / codex_parser.py** — 각 도구 로그를 공통 `UsageRecord`로 정규화. 새 도구 추가는
   여기에 모듈 하나 더(README의 "Adding a parser" 참고).
-- **official_fetch.py** — 공식 사용량 라이브 취득(유일한 아웃바운드). **tracked_providers** 목록에 포함된 provider만 호출한다. 각 CLI의 로컬 OAuth 토큰을
+- **official_fetch.py** — 공식 사용량 라이브 취득(유일한 아웃바운드). **tracked_providers**(=활성 AI; 앱 전반 표시 게이트, ADR 0005) 목록에 포함된 provider만 호출한다. 각 CLI의 로컬 OAuth 토큰을
   **읽기 전용**으로 사용해 공식 API를 단발 GET(≤3s/provider, 백오프 없음). 엔드포인트: Claude `https://api.anthropic.com/api/oauth/usage`, Codex `https://chatgpt.com/backend-api/wham/usage`. default-on + throttle(`min_interval_minutes`="자동 갱신 간격", 기본 10). 401→auth_error, 그 외 실패→http_error,
   **마지막 스냅샷·last_success_at 보존**. PII(토큰/account_id) 미저장 — 헤더에 쓰고 버린다.
   `refresh_tracked(config, providers=None, manual=False)`가 tracked(또는 지정 providers) 전체를 1회 갱신(예외 삼킴)한다.
@@ -53,7 +53,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **db.py** — SQLite 적재. `messages`(메시지별 토큰/비용, `dedup_key` UNIQUE로 중복 제거),
   `sessions`(메타 + 요약 + 턴수), `session_day_turns`(세션×날짜 턴 수), `scan_offsets`(증분 스캔용 byte-offset),
   `official_buckets`(공식 사용량 멀티버킷 USD 스냅샷), `official_fetch_state`(자동 취득 상태). 스키마 변경은 `_MIGRATE_COLS`에 ALTER 추가.
-- **aggregate.py** — 공식 사용량 기반 예측(`official_view`+`lens`) · 프로젝트별/세션별 집계 · 사용량 전용 폴백. 월 경계는 **KST** 기준(ts는 UTC라 변환). 공식 데이터가 없으면 로컬 JSONL 기반 사용량 전용 view로 자동 폴백.
+- **aggregate.py** — 공식 사용량 기반 예측(`official_view`+`lens`) · 프로젝트별/세션별 집계 · 사용량 전용 폴백. 월 경계는 **KST** 기준(ts는 UTC라 변환). 공식 데이터가 없으면 로컬 JSONL 기반 사용량 전용 view로 자동 폴백. 집계 함수는 `provider:str|None`(None=DB전체) 외에 키워드 `providers:list[str]|None`(=**활성 AI** 집합)을 받는다 — `provider=None and providers!=None`이면 `WHERE provider IN (...)`로 합산, 빈 집합 `[]`은 `WHERE 0`(빈 결과). 뷰 경계가 활성 집합을 주입하므로 화면의 "전체"는 **DB 전체가 아니라 활성 AI 합산**이다(ADR 0005).
 - **pricing.py + config/pricing.json** — 모델명 매칭으로 토큰→USD. `pricing_overrides`로 사용자 단가 override.
   `cost_usd`는 (토큰×단가)의 **캐시값** — 단가(pricing.json/overrides)가 바뀌면 `ingest`가 단가
   핑거프린트로 감지해 기존 행을 **자동 재계산**(`db.maybe_reprice`). 1h 캐시 분리는 `cache_creation_1h`
@@ -62,7 +62,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **launcher.py** — exe 진입점. ingest 1회 → 빈 포트 탐색 → uvicorn(127.0.0.1) → pywebview 창(없으면 브라우저 fallback).
 - **paths.py** — 경로 중앙 해석. 데이터 위치가 실행 형태로 갈린다(아래 게시).
 - **config.py** — 설정 모델(`config/tokenomy.config.json` 로더). `load_config`/`save_config` ·
-  `tracked_providers`(빈값이면 크레덴셜 존재로 시드) · `credit_to_usd`(기본 0.04) ·
+  `tracked_providers`(=**활성 AI**; 미설정/None이면 크레덴셜 존재로 시드, 명시적 `[]`는 빈 집합 영속 — 재시드 안 함) · `credit_to_usd`(기본 0.04) ·
   `official_fetch_settings`(min_interval_minutes) · `pricing_overrides`. **config 키를 찾으면 여기다**
   (`TOKENOMY_CONFIG`로 경로 override). (구 `budget.py`에서 리네임 — 예산 로직은 제거됨.)
 - **freshness.py** — 수집 신선도. 마지막 ingest 경과 + 디스크상 최고령 raw 파일 나이(vs 30일 cleanup) →
