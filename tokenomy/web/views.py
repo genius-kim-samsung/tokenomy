@@ -96,6 +96,30 @@ def _forecast_hero(fc) -> dict | None:
     return base
 
 
+def forecast_chart_data(fc, daily, now_kst: datetime) -> dict:
+    """통합 추세 차트용 — 통합 한도(수평선) + 월말까지 예상 used 라인.
+
+    line은 daily와 같은 길이. 오늘 이전은 None, 오늘 인덱스는 공식 used로 앵커하고
+    이후 calendar day를 돌며 영업일마다 daily_rate씩 누적한다(주말엔 그대로). 그래서 라인이
+    한도선과 만나는 지점이 히어로의 소진 예상일과 일치한다. fc 없음/rate 없음/소진이면 line은 None.
+    """
+    if fc is None:
+        return {"limit": None, "line": None}
+    if fc.daily_rate_usd is None or fc.is_exhausted:
+        return {"limit": fc.limit_usd, "line": None}
+    n = len(daily)
+    line = [None] * n
+    today_idx = now_kst.day - 1
+    if 0 <= today_idx < n:
+        line[today_idx] = fc.used_usd
+        bd = 0
+        for i in range(today_idx + 1, n):
+            if date(now_kst.year, now_kst.month, daily[i].day).weekday() < 5:
+                bd += 1
+            line[i] = round(fc.used_usd + fc.daily_rate_usd * bd, 4)
+    return {"limit": fc.limit_usd, "line": line}
+
+
 def _gauge_level(util: float | None) -> str:
     """utilization(%) → 임계 클래스. 100%가 사실상 상한이라 경계를 당겨 적색을 살린다.
 

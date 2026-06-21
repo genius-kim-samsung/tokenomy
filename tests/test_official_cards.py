@@ -8,10 +8,11 @@ from tokenomy.web.views import (
     _fresh_label, _gauge_level, _sparkline_points, official_cards,
 )
 from tokenomy.aggregate import CombinedForecast
-from tokenomy.web.views import _forecast_hero
+from tokenomy.web.views import _forecast_hero, forecast_chart_data
 from datetime import date as _date
 
 NOW = datetime(2026, 6, 21, 12, 0, tzinfo=KST)
+NOW6 = datetime(2026, 6, 10, 12, 0, tzinfo=KST)   # 6/10(수): 차트 인덱스 9가 오늘
 
 
 def _conn():
@@ -269,3 +270,27 @@ def test_forecast_hero_insufficient():
 def test_forecast_hero_multi_provider_label():
     h = _forecast_hero(_fc(providers=["claude", "codex"]))
     assert h["providers_label"] == "Claude + Codex"
+
+
+def _daily_june():
+    # 6월(30일) 일별 점. day 번호만 쓰므로 누적값은 0으로 충분.
+    return [DayPoint(day=d, cumulative_cost=0.0) for d in range(1, 31)]
+
+
+def test_forecast_chart_none_when_no_forecast():
+    assert forecast_chart_data(None, _daily_june(), NOW6) == {"limit": None, "line": None}
+
+
+def test_forecast_chart_limit_only_when_rate_missing():
+    fc = _fc(daily_rate_usd=None, projected_used_usd=None, projected_remaining_usd=None)
+    out = forecast_chart_data(fc, _daily_june(), NOW6)
+    assert out["limit"] == 200.0 and out["line"] is None
+
+
+def test_forecast_chart_line_anchored_on_official_used():
+    out = forecast_chart_data(_fc(), _daily_june(), NOW6)   # used40 rate10, NOW6=6/10
+    line = out["line"]
+    assert out["limit"] == 200.0
+    assert line[8] is None                 # 6/9(인덱스8) — 오늘 이전 → None
+    assert line[9] == 40.0                 # 6/10(인덱스9=오늘) = 공식 used
+    assert line[29] == 180.0               # 6/30(인덱스29=월말) = used + rate*14
