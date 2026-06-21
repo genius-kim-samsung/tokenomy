@@ -38,7 +38,10 @@ Thumbs.db
 
 # tool-local (Claude Code / gstack — worktrees·settings 로컬 전용)
 .gstack/
-.claude/
+.claude/*
+# 단, 프로젝트 스킬은 추적해 머신 간(사내 PC↔집 데스크탑) 공유한다.
+# (.claude/는 디렉토리 자체를 ignore하면 하위를 되살릴 수 없어 .claude/* + negation 사용)
+!.claude/skills/
 
 # 설계 메모(docs/) — 로컬 전용으로 전환(2026-06-21). 추적 제외, 디스크엔 보존.
 docs/

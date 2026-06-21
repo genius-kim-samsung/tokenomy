@@ -1,0 +1,120 @@
+---
+name: release-exe
+description: >-
+  Tokenomy의 새 exe 버전을 릴리스한다. __version__ bump → 로컬 PyInstaller 빌드로 검증
+  → git 태그(v<버전>) → main+태그 push → GitHub Actions(release.yml)가 태그==버전 검증·exe
+  빌드·--version 스모크·GitHub Release 업로드까지 수행. "exe 배포", "새 버전 릴리스", "v0.1.x
+  배포", "릴리스해줘", "버전 올려서 배포", "deploy new exe", "release new version" 같은
+  요청이면 버전 번호를 명시하지 않았더라도 반드시 이 스킬을 사용한다. 배포 없이 로컬 exe만 빌드·검증하고
+  싶을 때도 3·게시 절을 참고용으로 쓴다. (단순 코드 수정·테스트 실행·CI 디버깅은 대상 아님.)
+---
+
+# Tokenomy exe 릴리스
+
+새 버전의 `Tokenomy.exe`를 GitHub Release로 배포하는 결정적 절차다. 공식 배포본은
+**CI가 빌드한 산출물**이고, 로컬 빌드는 태그 전에 "정말 빌드·실행되는가"를 확인하는 검증 단계다.
+
+## 릴리스 메커니즘 (왜 이 순서인가)
+
+`release.yml`은 **태그 push(`v*`)** 에만 트리거되고, 첫 스텝에서 **git 태그 == `tokenomy.__version__`**
+를 검증한 뒤 어긋나면 빌드를 실패시킨다. 그래서 **반드시 `__version__`을 먼저 올리고, 같은 번호로
+태그**해야 한다. 태그가 코드보다 앞서거나 버전이 안 맞으면 CI가 즉시 죽는다.
+
+CI 파이프라인: `checkout → setup-python 3.12 → pip install -r requirements.txt pyinstaller
+→ 태그==버전 검증 → pyinstaller tokenomy.spec → dist/Tokenomy.exe --version 스모크 →
+softprops/action-gh-release로 Release 업로드`.
+
+## 0. 사전 점검 (dry-run — 되돌리기 어려우니 먼저 막는다)
+
+릴리스는 태그 push·Release 발행이라 사실상 비가역이다. 시작 전에 아래를 모두 통과시킨다.
+
+```bash
+cd "<repo 루트>"                                   # 보통 C:/projects/samsung/tokenomy
+git -C . rev-parse --abbrev-ref HEAD               # main 인지 확인
+grep -n '__version__' tokenomy/__init__.py         # 현재 버전 읽기
+.venv/Scripts/python -c "import PyInstaller; print(PyInstaller.__version__)"  # 빌드 환경
+ls tokenomy.spec                                   # spec 존재
+```
+
+목표 태그가 **이미 있으면 중단**(중복 릴리스 방지):
+
+```bash
+git tag -l "v<버전>"                               # 로컬
+git ls-remote --tags origin "v<버전>"              # 원격 — 출력 비어야 정상
+```
+
+## 1. 버전 결정
+
+- 사용자가 버전을 명시했으면 그 값을 쓴다(예: "v0.2.0으로 배포" → minor 점프).
+- **명시하지 않았으면 현재 `__version__`의 마지막 자리(patch) +1을 제안하고 확인을 받는다**
+  (예: `0.1.10` → `0.1.11`). 자리 해석이 모호하면 묻는다 — "마지막 자리"는 보통 patch를 뜻한다.
+- 버전은 SemVer 문자열 `MAJOR.MINOR.PATCH`, 태그는 접두사 `v`를 붙인 `v<버전>`.
+
+## 2. 버전 bump (워크트리 경유 — 주 워크트리 편집 가드 우회)
+
+`tokenomy/__init__.py`는 추적 파일이라 **주 워크트리 직접 편집이 PreToolUse 가드에 막힌다.**
+전용 워크트리에서 고치고 main으로 fast-forward 머지한다.
+
+1. `EnterWorktree`로 전용 워크트리를 만든다(이미 워크트리 안이면 `git reset --hard main`으로 최신
+   main에 맞춘 뒤 재사용). 워크트리엔 `.venv`가 없으니 빌드는 주 repo의 `.venv`를 쓴다.
+2. 워크트리에서 `tokenomy/__init__.py`의 `__version__`을 목표 버전으로 수정한다.
+3. 커밋(저장소의 평소 커밋 컨벤션·푸터를 따른다):
+   ```
+   chore(release): v<버전> — __version__ <old> → <new>
+   ```
+4. 주 워크트리에서 ff-merge:
+   ```bash
+   git -C "<repo 루트>" merge --ff-only <워크트리-브랜치>
+   ```
+
+> 머지가 ff가 아니면(main이 앞서 있으면) 워크트리를 `git reset --hard main` 후 bump를 다시 올린다.
+
+## 3. 로컬 exe 빌드 + 스모크 검증
+
+main이 새 버전을 담은 상태에서 **주 repo 루트**에서 빌드한다. **반드시 `.venv`로** 빌드한다 —
+시스템 Python으로 빌드하면 pywebview가 번들에서 빠져 네이티브 창 대신 브라우저로 fallback한다.
+
+```bash
+cd "<repo 루트>"
+.venv/Scripts/python -m PyInstaller --noconfirm tokenomy.spec   # → dist/Tokenomy.exe
+./dist/Tokenomy.exe --version                                   # 출력 == 새 버전이어야 함
+.venv/Scripts/python -c "import tokenomy; print(tokenomy.__version__)"  # 기대값
+```
+
+`--version` 출력이 `__version__`과 다르면 **태그하지 말고** 원인부터 잡는다(CI 스모크와 동일 검증).
+로컬 빌드는 검증용 — 실제 배포본은 CI가 다시 빌드한다.
+
+## 4. 태그 + push
+
+```bash
+cd "<repo 루트>"
+git tag -a v<버전> -m "v<버전>"
+git push origin main v<버전>      # main과 태그를 함께 push (CI는 태그로 트리거)
+```
+
+main도 함께 push해 origin/main을 최신으로 유지한다(태그만 push해도 CI는 돌지만 origin이 뒤처진다).
+
+## 5. CI 릴리스 모니터링 + 확인
+
+```bash
+gh run list --workflow=release.yml --limit 3        # 방금 run의 id 확인
+gh run watch <run-id> --exit-status                 # 완료까지 대기(이전 릴리스 ~1.5~2분)
+gh release view v<버전> --json tagName,isDraft,url,assets   # Release·에셋 확인
+```
+
+성공 기준: `build-windows` success(태그검증·빌드·스모크·업로드 전부 ✓) + Release가 **draft 아님** +
+에셋에 **`Tokenomy.exe`** 존재. CI가 실패하면 로그(`gh run view <id> --log-failed`)로 원인 분석.
+
+## 6. 보고
+
+표로 요약한다: 버전 bump 커밋, 로컬 스모크 결과, 태그, CI run 결과(소요시간), Release URL/에셋 크기.
+
+## 게시(gotchas) 요약
+
+- **태그 == `__version__`** 아니면 CI 실패 → 버전 먼저 bump, 같은 번호로 태그.
+- **빌드는 `.venv`로** — 시스템 Python은 pywebview 누락 → 창 대신 브라우저 fallback.
+- **로컬 빌드는 검증용**, 공개 배포본은 CI 산출물. 로컬 `dist/`는 gitignore(커밋 안 됨).
+- **main + 태그 함께 push.** 태그만 올리면 origin/main이 뒤처진다.
+- **버전 bump은 워크트리 경유** — 주 워크트리 추적 파일 직접 편집은 가드가 막는다.
+- **중복 태그 금지** — 사전 점검에서 `v<버전>` 부재 확인. 이미 있으면 중단.
+- CI 로그의 **Node 20 deprecation 경고**는 빌드에 무해(액션 메이저 버전 업그레이드가 근본 해결).
