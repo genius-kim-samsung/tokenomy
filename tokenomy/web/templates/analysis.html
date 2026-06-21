@@ -2,6 +2,10 @@
 {% block body %}
 <h1 class="page-title">차원별</h1>
 
+{% if active_empty %}
+<p class="muted">표시할 AI가 없습니다 — <a href="/settings">설정</a>에서 켜세요.</p>
+{% endif %}
+
 <section class="card">
   <div class="card-head">
     <div class="period-nav">

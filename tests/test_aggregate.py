@@ -1633,3 +1633,33 @@ def test_dimension_context_inactive_provider_falls_back(monkeypatch, tmp_path):
     assert ctx["provider"] == ""           # 비활성 codex → 전체 폴백
     assert ctx["total"] == 8.0             # claude만
     assert ctx["show_filter"] is False     # 활성 1개
+
+
+# ─── Commit 6(활성 AI): 라벨 적응 + 빈 상태 플래그 ─────────────────────────────
+
+def _ctx_with_active(monkeypatch, tmp_path, providers_json):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ' + providers_json + '}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", provider="claude", ts="2026-06-10T10:00:00Z", cost_usd=10.0)
+    return overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+
+
+def test_overview_context_label_flags_single(monkeypatch, tmp_path):
+    ctx = _ctx_with_active(monkeypatch, tmp_path, '["claude"]')
+    assert ctx["combined"] is False
+    assert ctx["solo_label"] == "Claude"   # 활성 1개 → provider명
+    assert ctx["active_empty"] is False
+
+
+def test_overview_context_label_flags_multi(monkeypatch, tmp_path):
+    ctx = _ctx_with_active(monkeypatch, tmp_path, '["claude", "codex"]')
+    assert ctx["combined"] is True         # 활성 ≥2 → 통합/전 AI 합산
+    assert ctx["active_empty"] is False
+
+
+def test_overview_context_active_empty_flag(monkeypatch, tmp_path):
+    ctx = _ctx_with_active(monkeypatch, tmp_path, '[]')
+    assert ctx["active_empty"] is True
+    assert ctx["combined"] is False

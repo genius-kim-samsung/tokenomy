@@ -1,3 +1,6 @@
+{% if active_empty %}
+<p class="muted">표시할 AI가 없습니다 — <a href="/settings">설정</a>에서 켜세요.</p>
+{% endif %}
 <div class="card-head">
   <div class="period-nav">
     <a class="btn" href="/history?anchor={{ prev_anchor }}&provider={{ provider }}&sort={{ sort }}&period={{ period }}">‹ 이전</a>

@@ -349,10 +349,16 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     has_data = last is not None and last["t"] is not None
     token_comp = token_composition(conn, None, *month_bounds(now), providers=active)
 
+    # 라벨 적응(ADR 0005): 활성 ≥2면 "통합/전 AI 합산", 1개면 수식어 떼고 provider명.
+    combined = len(active) >= 2
+    solo_label = (_PROVIDER_META.get(active[0], {}).get("label", active[0].title())
+                  if len(active) == 1 else None)
+
     return {
         "active_nav": "dashboard", "sort": sort,
         "user_label": user_label(config),
         "tracked": active,
+        "combined": combined, "solo_label": solo_label, "active_empty": not active,
         "month": now.strftime("%Y-%m"),
         "month_total": month_total,
         "official_cards": official_cards(conn, config, now),
@@ -436,6 +442,7 @@ def dimension_context(conn, anchor_kst: datetime, provider: str, *,
         "active_nav": "analysis", "user_label": user_label(config),
         "provider": provider, "dim": dim, "dim_label": DIM_LABELS[dim],
         "filter_providers": _filter_options(active), "show_filter": len(active) >= 2,
+        "active_empty": not active,
         "claude_only": dim in ("skill", "branch"), "split": split,
         "rows": table, "count": len(table), "total": total,
         "period": period, "custom": custom, "period_label": label,
@@ -617,6 +624,7 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
         "user_label": user_label(config),
         "provider": provider, "sort": sort,
         "filter_providers": _filter_options(active), "show_filter": len(active) >= 2,
+        "active_empty": not active,
         "period": period, "custom": custom,
         "anchor": anchor_kst.strftime("%Y-%m-%d"),
         "start": start or "", "end": end or "",

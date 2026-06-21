@@ -945,6 +945,50 @@ def test_settings_toggles_reflect_active(tmp_path, monkeypatch):
     assert not re.search(r'name="track_codex"[^>]*checked', html)     # 비활성 → 해제
 
 
+# ── Commit 6(활성 AI): 라벨 적응 + 빈 상태 ───────────────────────────────────────
+
+def test_dashboard_heading_uses_provider_name_when_single_active(tmp_path, monkeypatch):
+    client, fake_connect = _client(tmp_path, monkeypatch)
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    conn = fake_connect()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','p','2026-06-10T10:00:00Z','claude-opus-4-8',5.0,1)")
+    conn.commit()
+    html = client.get("/").text
+    assert "(Claude)" in html                # 활성 1개 → provider명
+    assert "전 AI 합산" not in html           # "통합/전 AI" 수식어 제거
+    assert "통합 추세" not in html
+    assert "통합 효율 코치" not in html
+
+
+def test_dashboard_empty_active_shows_settings_prompt(tmp_path, monkeypatch):
+    client, fake_connect = _client(tmp_path, monkeypatch)
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": []}', encoding="utf-8")
+    conn = fake_connect()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,cost_usd,priced) "
+                 "VALUES ('a','claude','s1','p','2026-06-10T10:00:00Z','claude-opus-4-8',5.0,1)")
+    conn.commit()
+    html = client.get("/").text
+    assert "표시할 AI가 없습니다" in html      # 데이터는 있어도 활성 0개 → 빈 상태 안내
+    assert "/settings" in html
+
+
+def test_history_empty_active_shows_notice(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": []}', encoding="utf-8")
+    html = client.get("/history").text
+    assert "표시할 AI가 없습니다" in html
+
+
+def test_analysis_empty_active_shows_notice(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": []}', encoding="utf-8")
+    html = client.get("/analysis").text
+    assert "표시할 AI가 없습니다" in html
+
+
 def test_settings_get_has_provider_checkboxes(tmp_path, monkeypatch):
     client, _ = _client_with_config(tmp_path, monkeypatch)
     html = client.get("/settings").text
