@@ -61,6 +61,14 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **web/app.py** — FastAPI 라우트(얇게: 라우팅 + 입력검증만). 데이터 조립은 **web/views.py**.
 - **launcher.py** — exe 진입점. ingest 1회 → 빈 포트 탐색 → uvicorn(127.0.0.1) → pywebview 창(없으면 브라우저 fallback).
 - **paths.py** — 경로 중앙 해석. 데이터 위치가 실행 형태로 갈린다(아래 게시).
+- **budget.py** — 이름과 달리 **설정 모델**(`config/tokenomy.config.json` 로더). 예산 로직 아님(예산 제거됨,
+  이름은 역사적 잔재). `load_config`/`save_config` · `tracked_providers`(빈값이면 크레덴셜 존재로 시드) ·
+  `credit_to_usd`(기본 0.04) · `official_fetch_settings`(min_interval_minutes) · `pricing_overrides`.
+  **config 키를 찾으면 여기다**(`TOKENOMY_CONFIG`로 경로 override).
+- **freshness.py** — 수집 신선도. 마지막 ingest 경과 + 디스크상 최고령 raw 파일 나이(vs 30일 cleanup) →
+  ≥25일이면 `warn`. 트리거가 다 실패해도 데이터 유실 위험을 사람에게 노출.
+- **update.py** — 인앱 업데이트 확인(GitHub Releases 최신 태그 vs `__version__`, 1일 1회).
+  실패/오프라인은 조용히 skip(`TOKENOMY_SKIP_UPDATE_CHECK`로 끔). stdlib(urllib)만.
 
 ## 핵심 게시(gotchas)
 
