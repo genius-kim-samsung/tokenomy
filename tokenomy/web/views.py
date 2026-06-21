@@ -48,6 +48,16 @@ def _provider_has_data(conn, provider: str) -> bool:
     return row is not None and row["t"] is not None
 
 
+def _filter_options(active: list[str]) -> list[dict]:
+    """화면별 provider 필터(전체/<AI>) 항목. 활성 집합에서 파생 — claude/codex 하드코딩 없음."""
+    return [{"key": p, "label": _PROVIDER_META.get(p, {}).get("label", p.title())} for p in active]
+
+
+def _active_provider(provider: str, active: list[str]) -> str:
+    """요청 provider를 활성 집합으로 검증. 활성에 없으면 ""(전체)로 폴백."""
+    return provider if provider in active else ""
+
+
 def sidebar_freshness(conn) -> str | None:
     """사이드바 '수집: N분 전'용 마지막 수집 실행 시각(ISO). 없으면 None.
 
@@ -405,8 +415,11 @@ def dimension_context(conn, anchor_kst: datetime, provider: str, *,
     dim = dim if dim in DIM_COLUMNS else "model"
     now = now_kst or datetime.now(KST)
     config = load_config()
+    active = tracked_providers(config)
+    provider = _active_provider(provider, active)   # 비활성 provider 요청 → 전체 폴백
     s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
-    rows = by_dimension(conn, provider or None, s, nxt, dim)
+    pfilter = None if provider else active          # "" → 활성 합산, 단일 → 그 provider
+    rows = by_dimension(conn, provider or None, s, nxt, dim, providers=pfilter)
     total = round(sum(r.cost for r in rows), 4)
     null_label = _NULL_BUCKET[dim]
     table = [
@@ -417,11 +430,12 @@ def dimension_context(conn, anchor_kst: datetime, provider: str, *,
          "cache_creation": r.cache_creation, "cache_read": r.cache_read}
         for r in rows
     ]
-    split = sidechain_split(conn, provider or None, s, nxt)
+    split = sidechain_split(conn, provider or None, s, nxt, providers=pfilter)
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     return {
         "active_nav": "analysis", "user_label": user_label(config),
         "provider": provider, "dim": dim, "dim_label": DIM_LABELS[dim],
+        "filter_providers": _filter_options(active), "show_filter": len(active) >= 2,
         "claude_only": dim in ("skill", "branch"), "split": split,
         "rows": table, "count": len(table), "total": total,
         "period": period, "custom": custom, "period_label": label,
@@ -618,14 +632,19 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
     """내역 — 날짜→폴더→세션 트리. 주/월 기간 또는 사용자 지정 [start, end]."""
     now = now_kst or datetime.now(KST)
     config = load_config()
+    active = tracked_providers(config)
+    provider = _active_provider(provider, active)   # 비활성 provider 요청 → 전체 폴백
     last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
     s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
-    rows = by_day_session(conn, provider or None, start=s, nxt=nxt)
+    # provider 지정 → 단일, "" → 활성 합산(providers=active)
+    rows = by_day_session(conn, provider or None, start=s, nxt=nxt,
+                          providers=(None if provider else active))
     tree = build_date_tree(rows, sort)
     return {
         "active_nav": "history",
         "user_label": user_label(config),
         "provider": provider, "sort": sort,
+        "filter_providers": _filter_options(active), "show_filter": len(active) >= 2,
         "period": period, "custom": custom,
         "anchor": anchor_kst.strftime("%Y-%m-%d"),
         "start": start or "", "end": end or "",

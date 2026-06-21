@@ -24,11 +24,14 @@
         <button class="btn" type="submit">조회</button>
       </span>
     </form>
+    {% if show_filter %}
     <nav class="toggle small">
-      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if provider == '' }}">전체</a>
-      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=claude" class="{{ 'on' if provider == 'claude' }}">Claude</a>
-      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=codex" class="{{ 'on' if provider == 'codex' }}">Codex</a>
+      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider=" class="{{ 'on' if provider == '' }}">전체</a>
+      {% for fp in filter_providers %}
+      <a href="/analysis?dim={{ dim }}&anchor={{ anchor }}&period={{ period }}&provider={{ fp.key }}" class="{{ 'on' if provider == fp.key }}">{{ fp.label }}</a>
+      {% endfor %}
     </nav>
+    {% endif %}
   </div>
 
   <nav class="toggle small" aria-label="차원 선택">

@@ -870,6 +870,54 @@ def test_settings_post_writes_tracked_providers(tmp_path, monkeypatch):
     assert "budget" not in saved
 
 
+# ── Commit 4(활성 AI): settings POST 동적 파싱 + 필터 UI 활성 파생 ────────────────
+
+def test_settings_post_unchecking_all_persists_empty(tmp_path, monkeypatch):
+    """track_* 전부 미체크 → 빈 집합 저장(Commit 1이 영속 보장 — 재시드 안 함)."""
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"min_interval": "10", "credit_to_usd": "0.04"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["tracked_providers"] == []
+
+
+def test_settings_post_dynamic_collects_each_provider(tmp_path, monkeypatch):
+    """폼 파싱이 PROVIDERS를 순회 — 3번째 AI 추가 대비(track_<new>도 수집, 하드코딩 없음)."""
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_module, "PROVIDERS", ("claude", "codex", "gemini"))
+    r = client.post("/settings", data={"track_claude": "on", "track_gemini": "on",
+                                       "min_interval": "10", "credit_to_usd": "0.04"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["tracked_providers"] == ["claude", "gemini"]   # track_codex 미체크 → 제외
+
+
+def test_history_provider_filter_hidden_when_single_active(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    r = client.get("/history")
+    assert r.status_code == 200
+    assert 'id="provider-filter"' not in r.text     # 활성 1개 → AI 필터 숨김
+
+
+def test_history_provider_filter_shows_active_only(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    r = client.get("/history")
+    assert 'id="provider-filter"' in r.text
+    assert ">Claude<" in r.text and ">Codex<" in r.text
+
+
+def test_analysis_provider_toggle_hidden_when_single_active(tmp_path, monkeypatch):
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    r = client.get("/analysis")
+    assert r.status_code == 200
+    assert "provider=codex" not in r.text           # 활성 1개 → provider 토글 없음
+
+
 def test_settings_get_has_provider_checkboxes(tmp_path, monkeypatch):
     client, _ = _client_with_config(tmp_path, monkeypatch)
     html = client.get("/settings").text

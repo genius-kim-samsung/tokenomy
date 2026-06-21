@@ -1582,3 +1582,54 @@ def test_overview_context_empty_active_is_empty_state(monkeypatch, tmp_path):
     assert ctx["month_total"] == 0.0
     assert ctx["official_cards"] == []
     assert ctx["trend_series"] == []
+
+
+# ─── Commit 4(활성 AI): history/analysis 활성 필터 + 필터 옵션 파생 ─────────────
+
+def test_history_context_inactive_provider_falls_back_to_active(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", provider="claude", session_id="s1", ts="2026-06-13T01:00:00Z", cost_usd=2.0)
+    _msg(conn, dedup_key="cx", provider="codex", session_id="s2", ts="2026-06-13T01:00:00Z", cost_usd=9.0)
+    # provider=codex 요청이지만 codex가 비활성 → 전체(활성=claude)로 폴백, codex 행 안 뜸
+    ctx = history_context(conn, _ANCHOR_613, "codex", "date_desc", now_kst=_NOW_613)
+    assert ctx["provider"] == ""
+    assert ctx["total"] == 2.0
+
+
+def test_history_context_filter_single_active_hidden(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    ctx = history_context(conn, _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
+    assert ctx["show_filter"] is False
+    assert [p["key"] for p in ctx["filter_providers"]] == ["claude"]
+
+
+def test_history_context_filter_multi_active_shown(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    ctx = history_context(conn, _ANCHOR_613, "", "date_desc", now_kst=_NOW_613)
+    assert ctx["show_filter"] is True
+    assert [p["key"] for p in ctx["filter_providers"]] == ["claude", "codex"]
+    assert [p["label"] for p in ctx["filter_providers"]] == ["Claude", "Codex"]
+
+
+def test_dimension_context_inactive_provider_falls_back(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="cl", model="claude-opus-4-8", provider="claude",
+         ts="2026-06-10T10:00:00Z", cost_usd=8.0)
+    _msg(conn, dedup_key="cx", model="gpt-5", provider="codex",
+         ts="2026-06-10T10:00:00Z", cost_usd=2.0)
+    ctx = dimension_context(conn, _ANCHOR_613, "codex", dim="model", now_kst=_NOW_613)
+    assert ctx["provider"] == ""           # 비활성 codex → 전체 폴백
+    assert ctx["total"] == 8.0             # claude만
+    assert ctx["show_filter"] is False     # 활성 1개

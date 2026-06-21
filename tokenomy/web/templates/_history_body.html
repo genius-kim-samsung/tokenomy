@@ -14,11 +14,14 @@
       <option value="month" {{ 'selected' if period == 'month' }}>월간</option>
       <option value="week" {{ 'selected' if period == 'week' }}>주간</option>
     </select>
+    {% if show_filter %}
     <select id="provider-filter" name="provider" aria-label="AI 필터">
       <option value="" {{ 'selected' if provider == '' }}>전체</option>
-      <option value="claude" {{ 'selected' if provider == 'claude' }}>Claude</option>
-      <option value="codex" {{ 'selected' if provider == 'codex' }}>Codex</option>
+      {% for fp in filter_providers %}
+      <option value="{{ fp.key }}" {{ 'selected' if provider == fp.key }}>{{ fp.label }}</option>
+      {% endfor %}
     </select>
+    {% endif %}
     <select id="sort-filter" name="sort" aria-label="정렬">
       {% set sort_opts = [('date_desc','날짜 최신순'),('date_asc','날짜 오래된순'),('day_cost','일별 지출많은순')] %}
       {% for val, lbl in sort_opts %}

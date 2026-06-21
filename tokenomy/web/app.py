@@ -203,14 +203,16 @@ def _to_float(value: str | None) -> float:
 
 
 @app.post("/settings")
-def settings_post(track_claude: str = Form(""), track_codex: str = Form(""),
-                  credit_to_usd: str = Form(""), min_interval: str = Form("")):
+async def settings_post(request: Request):
+    # 동적 파싱 — track_<provider> 체크박스를 PROVIDERS 순회로 수집(claude/codex 하드코딩 제거,
+    # 3번째 AI 추가 시 폼·파서 무수정). 전부 미체크 → 빈 집합 영속(Commit 1이 재시드 차단).
+    form = await request.form()
     config = load_config()
-    sel = [p for p, v in (("claude", track_claude), ("codex", track_codex)) if v]
+    sel = [p for p in PROVIDERS if form.get(f"track_{p}")]
     config["tracked_providers"] = sel
-    ctu = _to_float(credit_to_usd)
+    ctu = _to_float(form.get("credit_to_usd"))
     config["credit_to_usd"] = ctu if ctu > 0 else 0.04
-    mi = int(_to_float(min_interval))
+    mi = int(_to_float(form.get("min_interval")))
     config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 10}
     # 레거시 키 정리(있으면 제거 — config를 깔끔하게 다시 쓴다)
     for k in ("budget", "budget_start"):
