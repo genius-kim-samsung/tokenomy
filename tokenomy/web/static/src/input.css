@@ -347,6 +347,16 @@
   .priv-list li::before { @apply absolute left-0 font-bold; }
   .priv-list li.yes::before { content: "\2713"; color: var(--color-ok); }
   .priv-list li.no::before { content: "\2715"; color: var(--color-muted); }
+
+  /* ── 통합 월말 전망 히어로(ADR 0004) ── */
+  .forecast-hero .forecast-headline {
+    font-size: 1.6rem;
+    font-weight: 600;
+    margin: 0.25rem 0;
+  }
+  .forecast-hero[data-level="surplus"] .forecast-headline { color: var(--color-ok); }
+  .forecast-hero[data-level="shortfall"] .forecast-headline,
+  .forecast-hero[data-level="exhausted"] .forecast-headline { color: var(--color-warn); }
 }
 
 /* ── 세션 표(.sess) 반응형: 기존 동작 그대로 이식(원시 CSS) ── */
