@@ -893,3 +893,19 @@ def test_settings_get_has_provider_checkboxes(tmp_path, monkeypatch):
     assert 'name="track_claude"' in html
     assert 'name="track_codex"' in html
     assert "월 예산" not in html
+
+
+# ── Task 5(추세 차트): 한도 수평선 + 예상선 데이터셋 ──────────────────────────────
+
+def test_overview_renders_forecast_chart_vars(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key, provider, session_id, ts, cost_usd, priced) "
+        "VALUES ('a','claude','s1','2026-06-10T10:00:00Z', 7.0, 1)"
+    )
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "forecastLimit" in r.text
+    assert "forecastLine" in r.text
