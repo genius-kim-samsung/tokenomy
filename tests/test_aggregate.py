@@ -1447,3 +1447,98 @@ def test_insights_no_budget_overrun_card():
     # bd 인자 없음 — TypeError 안 나야 함(시그니처 확인)
     texts = " ".join(c.text for c in cards)
     assert "한도 초과" not in texts and "월말" not in texts
+
+
+# ─── Commit 2(활성 AI): providers 필터(WHERE provider IN) ─────────────────────
+# provider=None(전체)일 때 키워드 providers로 활성 집합만 합산. 빈 집합은 빈 결과.
+
+def _seed_two_providers(conn):
+    """claude $5 + codex $7(같은 달). 활성 필터 동치/빈집합/가중평균 검증용."""
+    _insert(conn, "2026-06-05T00:00:00Z", 5.0, session="c", provider="claude",
+            input_t=50, cache_read=50, model="claude-opus-4-8")
+    _insert(conn, "2026-06-06T00:00:00Z", 7.0, session="x", provider="codex",
+            input_t=70, cache_read=30, model="gpt-5-codex")
+
+
+def test_month_spend_providers_single_equals_positional():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    # providers=["claude"]는 단일 positional provider="claude"와 동치
+    assert month_spend(conn, None, NOW, providers=["claude"]) == month_spend(conn, "claude", NOW)
+    assert month_spend(conn, None, NOW, providers=["claude"]) == 5.0
+
+
+def test_month_spend_providers_all_equals_none():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    # DB가 두 provider뿐이므로 활성=둘 == None(전체)
+    assert month_spend(conn, None, NOW, providers=["claude", "codex"]) == month_spend(conn, None, NOW)
+    assert month_spend(conn, None, NOW, providers=["claude", "codex"]) == 12.0
+
+
+def test_month_spend_empty_providers_is_zero():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    # 활성 0개 → 빈 결과(전체로 새지 않음 — 빈 상태가 깨지지 않게)
+    assert month_spend(conn, None, NOW, providers=[]) == 0.0
+
+
+def test_aggregations_empty_providers_are_empty():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    start, nxt = month_bounds(NOW)
+    assert by_project(conn, None, NOW, providers=[]) == []
+    assert by_session(conn, None, NOW, providers=[]) == []
+    assert token_composition(conn, None, start, nxt, providers=[]).total == 0
+    assert by_dimension(conn, None, start, nxt, "model", providers=[]) == []
+    assert sidechain_split(conn, None, start, nxt, providers=[]).total_cost == 0.0
+
+
+def test_by_dimension_providers_weighted_ratio_claude_only():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    start, nxt = month_bounds(NOW)
+    rows = by_dimension(conn, None, start, nxt, "model", providers=["claude"])
+    # claude 행만 — cache_ratio = 50/(50+0+50)=0.5, codex 분모가 섞이지 않음(뷰 재합산 대비 정밀)
+    assert [r.key for r in rows] == ["claude-opus-4-8"]
+    assert rows[0].cache_ratio == 0.5
+
+
+def test_token_composition_providers_single():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    start, nxt = month_bounds(NOW)
+    tc = token_composition(conn, None, start, nxt, providers=["codex"])
+    assert tc.total == 100                       # codex만: input 70 + cache_read 30
+    assert tc.input_tokens == 70 and tc.cache_read == 30
+
+
+def test_sidechain_split_providers_single():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    start, nxt = month_bounds(NOW)
+    assert sidechain_split(conn, None, start, nxt, providers=["claude"]).total_cost == 5.0
+
+
+def test_pricing_coverage_providers_filter():
+    conn = connect(":memory:")
+    _seed_two_providers(conn)
+    full = pricing_coverage(conn, _PRICING)
+    claude_only = pricing_coverage(conn, _PRICING, providers=["claude"])
+    empty = pricing_coverage(conn, _PRICING, providers=[])
+    assert {m.provider for m in full.models} == {"claude", "codex"}
+    assert {m.provider for m in claude_only.models} == {"claude"}
+    assert claude_only.models[0].model == "claude-opus-4-8"
+    assert empty.models == [] and empty.total_tokens == 0
+
+
+def test_insights_providers_passthrough():
+    conn = connect(":memory:")
+    # claude 캐시 충분(0.9), codex 캐시 낮음(0.1). 활성=claude면 codex의 낮은 캐시 신호가 안 떠야 함.
+    _msg(conn, dedup_key="cl", provider="claude", ts="2026-06-10T10:00:00Z",
+         cost_usd=1.0, input_tokens=10, cache_read=90)
+    _msg(conn, dedup_key="cx", provider="codex", ts="2026-06-10T10:00:00Z",
+         cost_usd=1.0, input_tokens=90, cache_read=10)
+    cards = insights(conn, _NOW_STATUS, None, cov=None, providers=["claude"])
+    texts = " ".join(c.text for c in cards)
+    assert "캐시 활용" not in texts          # claude만 보면 캐시 0.9라 경고 없음

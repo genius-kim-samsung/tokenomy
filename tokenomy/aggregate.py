@@ -134,13 +134,31 @@ class ProjectRow:
     cache_ratio: float
 
 
-def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime) -> list:
+def _provider_where(provider: str | None, providers: list[str] | None) -> tuple[str, list]:
+    """provider 필터 (where_sql, params) 생성. 단일 provider 우선, 다음 활성 집합 providers.
+
+    - provider 지정(not None) → `WHERE provider=?`(기존 단일 동작).
+    - provider=None, providers 지정 → `WHERE provider IN (...)`(활성 합산).
+      단 빈 집합(providers=[])은 `WHERE 0`(빈 결과) — 활성 0개가 전체로 새지 않게 한다.
+    - 둘 다 None → 필터 없음(DB 전체, 하위호환).
+    where_sql은 앞에 공백을 포함해 SELECT 뒤에 그대로 이어붙일 수 있다.
+    """
+    if provider is not None:
+        return " WHERE provider=?", [provider]
+    if providers is not None:
+        if not providers:
+            return " WHERE 0", []
+        qs = ",".join("?" * len(providers))
+        return f" WHERE provider IN ({qs})", list(providers)
+    return "", []
+
+
+def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime,
+                *, providers: list[str] | None = None) -> list:
     cols = ("SELECT ts, cost_usd, priced, session_id, project, "
             "input_tokens, cache_creation, cache_read, web_search FROM messages")
-    if provider is None:
-        rows = conn.execute(cols).fetchall()          # 전 AI 합산
-    else:
-        rows = conn.execute(cols + " WHERE provider=?", (provider,)).fetchall()
+    where, params = _provider_where(provider, providers)
+    rows = conn.execute(cols + where, params).fetchall()
     out = []
     for r in rows:
         dt = parse_ts(r["ts"])
@@ -151,14 +169,16 @@ def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime) -> l
     return out
 
 
-def _month_rows(conn, provider: str | None, now_kst: datetime) -> list:
+def _month_rows(conn, provider: str | None, now_kst: datetime,
+                *, providers: list[str] | None = None) -> list:
     start, nxt = month_bounds(now_kst)
-    return _range_rows(conn, provider, start, nxt)
+    return _range_rows(conn, provider, start, nxt, providers=providers)
 
 
-def month_spend(conn, provider: str | None, now_kst: datetime) -> float:
-    """provider(또는 None=전체)의 이번 달(KST) cost_usd 합. 번다운 없이 총지출만."""
-    return round(sum((r["cost_usd"] or 0) for r in _month_rows(conn, provider, now_kst)), 4)
+def month_spend(conn, provider: str | None, now_kst: datetime,
+                *, providers: list[str] | None = None) -> float:
+    """provider(또는 None=전체/providers=활성 합산)의 이번 달(KST) cost_usd 합. 번다운 없이 총지출만."""
+    return round(sum((r["cost_usd"] or 0) for r in _month_rows(conn, provider, now_kst, providers=providers)), 4)
 
 
 def codex_weekly_window(conn) -> tuple[datetime, datetime] | None:
@@ -389,9 +409,11 @@ def official_view(conn, provider: str, now_kst: datetime,
 
 
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None,
-               *, start: datetime | None = None, nxt: datetime | None = None) -> list[ProjectRow]:
+               *, start: datetime | None = None, nxt: datetime | None = None,
+               providers: list[str] | None = None) -> list[ProjectRow]:
     assert (start is None) == (nxt is None), "start/nxt는 함께 지정해야 한다"
-    rows = _range_rows(conn, provider, start, nxt) if (start and nxt) else _month_rows(conn, provider, now_kst)
+    rows = (_range_rows(conn, provider, start, nxt, providers=providers) if (start and nxt)
+            else _month_rows(conn, provider, now_kst, providers=providers))
     agg: dict = {}
     for r in rows:
         key = r["project"] or "(unknown)"
@@ -477,6 +499,7 @@ def by_session(
     *,
     start: datetime | None = None,
     nxt: datetime | None = None,
+    providers: list[str] | None = None,
 ) -> list[SessionRow]:
     """세션별 비용·효율 + 라벨/작업요약. start/nxt 미지정 시 이번 달 기준.
 
@@ -484,7 +507,8 @@ def by_session(
     order="cost"(비용순) | "recent"(last_ts 최신순). project가 주어지면 그 프로젝트만.
     """
     assert (start is None) == (nxt is None), "start/nxt는 함께 지정해야 한다"
-    rows = _range_rows(conn, provider, start, nxt) if (start and nxt) else _month_rows(conn, provider, now_kst)
+    rows = (_range_rows(conn, provider, start, nxt, providers=providers) if (start and nxt)
+            else _month_rows(conn, provider, now_kst, providers=providers))
     meta = {
         r["session_id"]: (r["label"], r["summary"], r["provider"], r["user_turns"])
         for r in conn.execute(
@@ -528,14 +552,15 @@ def by_session(
     return out[:limit_n] if limit_n else out
 
 
-def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime) -> list[DaySessionRow]:
+def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime,
+                   providers: list[str] | None = None) -> list[DaySessionRow]:
     """(KST날짜 × 세션) 단위 행. 기간 [start, nxt) 내 메시지를 날짜+세션으로 버킷팅한다.
 
     is_continued: 세션 최초 등장일(전체 messages의 MIN(ts))보다 이 행 날짜가 이후인가.
                   조회 범위가 아닌 전체에서 구해야 지난달 시작→이번달 이어짐을 오판하지 않는다.
     cache_miss:   is_continued AND cache_ratio < INSIGHT_CACHE_READ_MIN(첫 등장일은 절대 제외).
     """
-    rows = _range_rows(conn, provider, start, nxt)
+    rows = _range_rows(conn, provider, start, nxt, providers=providers)
 
     # 세션별 최초 등장일(전체 기준, KST 날짜 문자열)
     first_day: dict[str, str] = {}
@@ -607,17 +632,16 @@ class TokenComposition:
     cache_read_pct: float
 
 
-def token_composition(conn, provider: str | None, start, nxt) -> TokenComposition:
+def token_composition(conn, provider: str | None, start, nxt,
+                      *, providers: list[str] | None = None) -> TokenComposition:
     """기간 [start, nxt) 내 input/output/cache_creation/cache_read 합계와 비중(%)을 반환.
 
     _range_rows는 output_tokens를 select하지 않아 재사용하지 않고 자체 SELECT한다.
     비중은 0~100 퍼센트값(round(x/total*100,1)) — cache_ratio(0~1)와 단위가 다르다.
     """
     sql = "SELECT ts, input_tokens, output_tokens, cache_creation, cache_read FROM messages"
-    if provider is None:
-        rows = conn.execute(sql).fetchall()
-    else:
-        rows = conn.execute(sql + " WHERE provider=?", (provider,)).fetchall()
+    where, params = _provider_where(provider, providers)
+    rows = conn.execute(sql + where, params).fetchall()
     it = ot = cc = cr = 0
     for r in rows:
         dt = parse_ts(r["ts"])
@@ -652,7 +676,7 @@ class DimensionRow:
 
 
 def by_dimension(conn, provider: str | None, start: datetime, nxt: datetime,
-                 dim: str = "model") -> list[DimensionRow]:
+                 dim: str = "model", *, providers: list[str] | None = None) -> list[DimensionRow]:
     """기간 [start, nxt) 내 차원(dim) 단위 합계. 비용 내림차순.
 
     dim은 DIM_COLUMNS 화이트리스트 키. 빈 문자열/NULL 키는 None 버킷(미귀속)으로 접는다.
@@ -660,10 +684,8 @@ def by_dimension(conn, provider: str | None, start: datetime, nxt: datetime,
     col = DIM_COLUMNS.get(dim, "model")
     sql = (f"SELECT ts, {col} AS key, cost_usd, session_id, input_tokens, output_tokens, "
            "cache_creation, cache_read FROM messages")
-    if provider is None:
-        rows = conn.execute(sql).fetchall()
-    else:
-        rows = conn.execute(sql + " WHERE provider=?", (provider,)).fetchall()
+    where, params = _provider_where(provider, providers)
+    rows = conn.execute(sql + where, params).fetchall()
     agg: dict = {}
     for r in rows:
         dt = parse_ts(r["ts"])
@@ -726,14 +748,13 @@ class SidechainSplit:
     sub_tokens: int
 
 
-def sidechain_split(conn, provider: str | None, start: datetime, nxt: datetime) -> SidechainSplit:
+def sidechain_split(conn, provider: str | None, start: datetime, nxt: datetime,
+                    *, providers: list[str] | None = None) -> SidechainSplit:
     """기간 [start, nxt) 내 is_sidechain 기준 부모 vs 서브에이전트 비용·토큰 분리."""
     sql = ("SELECT ts, is_sidechain, cost_usd, input_tokens, output_tokens, "
            "cache_creation, cache_read FROM messages")
-    if provider is None:
-        rows = conn.execute(sql).fetchall()
-    else:
-        rows = conn.execute(sql + " WHERE provider=?", (provider,)).fetchall()
+    where, params = _provider_where(provider, providers)
+    rows = conn.execute(sql + where, params).fetchall()
     pc = sc = 0.0
     pt = st = 0
     for r in rows:
@@ -788,9 +809,10 @@ class Insight:
 
 
 def insights(conn, now_kst: datetime, provider: str | None,
-             cov: "CoverageReport | None" = None) -> list[Insight]:
+             cov: "CoverageReport | None" = None,
+             *, providers: list[str] | None = None) -> list[Insight]:
     """효율 코치 카드. bd 인자 제거 — 예산 초과 카드 없음. unpriced는 rows에서 직접 계산."""
-    rows = _month_rows(conn, provider, now_kst)
+    rows = _month_rows(conn, provider, now_kst, providers=providers)
     cr = sum(r["cache_read"] or 0 for r in rows)
     den = sum((r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0) for r in rows)
     cache_ratio = (cr / den) if den else 1.0
@@ -806,7 +828,7 @@ def insights(conn, now_kst: datetime, provider: str | None,
     month_start, month_nxt = month_bounds(now_kst)
     rebuild_sessions = {
         r.session_id
-        for r in by_day_session(conn, provider, start=month_start, nxt=month_nxt)
+        for r in by_day_session(conn, provider, start=month_start, nxt=month_nxt, providers=providers)
         if r.cache_miss
     }
     if rebuild_sessions:
@@ -850,17 +872,19 @@ class CoverageReport:
     coarse_contains: list[str]     # 2개 이상 distinct 모델이 매칭된 contains
 
 
-def pricing_coverage(conn, pricing: dict) -> CoverageReport:
+def pricing_coverage(conn, pricing: dict, *, providers: list[str] | None = None) -> CoverageReport:
     """distinct (provider, model)별 토큰 집계 + 단가 매칭 진단(읽기 전용).
 
     - find_rate로 매칭, 매칭 항목의 contains 보존. rate None → unpriced.
     - 버전경계 의심(_is_version_boundary) → suspect, 그 외 ok.
     - coarse_contains: 같은 contains에 매칭된 distinct 모델이 2개 이상인 항목.
+    - providers(활성 집합) 지정 시 그 provider만 진단(끈 AI는 설정 진단에도 안 나옴). 빈 집합은 빈 리포트.
     """
+    where, params = _provider_where(None, providers)
     rows = conn.execute(
         "SELECT provider, model, "
         "SUM(input_tokens+output_tokens+cache_creation+cache_read) AS toks "
-        "FROM messages GROUP BY provider, model"
+        "FROM messages" + where + " GROUP BY provider, model", params
     ).fetchall()
     total = sum((r["toks"] or 0) for r in rows)
     models: list[CoverageModel] = []
@@ -898,7 +922,8 @@ class DayPoint:
     cumulative_cost: float | None   # 미래(오늘 이후) 구간은 None → 차트에서 선이 끊김
 
 
-def daily_series(conn, provider: str | None, now_kst: datetime) -> list[DayPoint]:
+def daily_series(conn, provider: str | None, now_kst: datetime,
+                 *, providers: list[str] | None = None) -> list[DayPoint]:
     """일별 누적 비용 시계열. 기간 [달력 월 1일, 말일].
 
     실제 누적값은 오늘까지만 채우고 이후 날은 None(미래 구간 — 차트에서 선이 끊김).
@@ -906,7 +931,7 @@ def daily_series(conn, provider: str | None, now_kst: datetime) -> list[DayPoint
     """
     period_start, period_end = month_bounds(now_kst)
     last_day = (period_end - timedelta(days=1)).day
-    rows = _range_rows(conn, provider, period_start, period_end)
+    rows = _range_rows(conn, provider, period_start, period_end, providers=providers)
     per_day: dict = {}
     for r in rows:
         dt = parse_ts(r["ts"])
