@@ -11,18 +11,20 @@ a = Analysis(
     binaries=[],
     datas=[
         ('config/pricing.json', 'config'),
+        ('assets/tokenomy.ico', 'assets'),
         ('tokenomy/web/templates', 'tokenomy/web/templates'),
         ('tokenomy/web/static', 'tokenomy/web/static'),
     ] + collect_data_files('webview'),
     hiddenimports=(
         collect_submodules('uvicorn')
         + collect_submodules('webview')
-        + ['clr']  # pywebview→pythonnet(.NET interop), Windows EdgeChromium 백엔드
+        + collect_submodules('pystray')
+        + ['clr', 'PIL.Image']  # pywebview→pythonnet, pystray→PIL 이미지 로드
     ),
     hookspath=[],
     runtime_hooks=[],
-    # 런타임 미사용 의존성 제외. PIL/numpy는 Tokenomy/pywebview 런타임이 import하지 않음.
-    excludes=['pytest', '_pytest', 'httpx', 'numpy', 'PIL', 'setuptools'],
+    # 런타임 미사용 의존성 제외. PIL은 pystray 트레이 아이콘 로드에 사용하므로 제외 해제.
+    excludes=['pytest', '_pytest', 'httpx', 'numpy', 'setuptools'],
 )
 pyz = PYZ(a.pure)
 
