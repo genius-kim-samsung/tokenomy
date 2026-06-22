@@ -355,3 +355,35 @@ def test_launch_window_wires_tray_and_stops_on_exit(monkeypatch):
     assert ("cb", launcher._show_window) in events          # 복원 콜백 등록
     assert ("start",) in events                              # GUI 루프 진입
     assert icon.stopped is True                              # 종료 시 트레이 정지
+
+
+def test_launch_window_degrades_to_single_shot_when_tray_unavailable(monkeypatch):
+    """_build_tray가 실패하면(pystray/Pillow 미가용) closing 핸들러를 부착하지 않아
+    X=종료가 유지된다(창 숨김 후 복원 불가 함정 방지). webview.start는 여전히 호출."""
+    events = []
+    class FakeEvents:
+        def __init__(self):
+            self.closing = self
+        def __iadd__(self, handler):
+            events.append(("closing", handler)); return self
+    class FakeWin:
+        def __init__(self): self.events = FakeEvents()
+    fake_win = FakeWin()
+    fake_webview = type("W", (), {
+        "create_window": staticmethod(lambda *a, **k: fake_win),
+        "start": staticmethod(lambda: events.append(("start",))),
+    })
+    monkeypatch.setitem(__import__("sys").modules, "webview", fake_webview)
+
+    def boom():
+        raise RuntimeError("pystray 미가용")
+    monkeypatch.setattr(launcher, "_build_tray", boom)
+    monkeypatch.setattr(launcher, "_tray_state", {"window": None, "icon": None, "quitting": True})
+    # set_show_callback이 불리면 안 됨(강등 경로) — 불리면 기록
+    monkeypatch.setattr("tokenomy.web.control.set_show_callback",
+                        lambda fn: events.append(("cb", fn)))
+
+    launcher._launch_window(9999)
+    assert ("start",) in events                       # GUI 루프는 여전히 진입
+    assert not any(e[0] == "closing" for e in events) # closing 핸들러 미부착 → X=종료 유지
+    assert not any(e[0] == "cb" for e in events)       # show 콜백 미등록

@@ -251,6 +251,7 @@ def _launch_window(port: int) -> None:
     if icon is not None:
         from tokenomy.web.control import set_show_callback
         _tray_state["icon"] = icon
+        # pywebview의 closing은 locking 이벤트라 핸들러의 False 반환이 닫기를 취소한다(hide-on-close의 핵심 의존).
         window.events.closing += _on_closing
         set_show_callback(_show_window)
         threading.Thread(target=icon.run, daemon=True).start()
