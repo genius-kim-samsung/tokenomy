@@ -215,7 +215,9 @@ async def settings_post(request: Request):
     ctu = _to_float(form.get("credit_to_usd"))
     config["credit_to_usd"] = ctu if ctu > 0 else 0.04
     mi = int(_to_float(form.get("min_interval")))
-    config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 10}
+    # background_poll: 체크박스(미체크면 폼에 키 부재 → False). 상주 백그라운드 폴 토글(ADR 0007).
+    config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 10,
+                                "background_poll": bool(form.get("background_poll"))}
     # 소비속도 추정 기간(트레일링 창, 주) — getter로 정규화(1~8 clamp·오설정→기본 2) 후 저장.
     # 클램프 범위를 getter 단일 출처에 두려고 직접 min/max를 두지 않는다.
     rw = forecast_settings({"forecast_settings": {"rate_window_weeks": form.get("rate_window_weeks")}})

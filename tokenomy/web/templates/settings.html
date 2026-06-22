@@ -38,6 +38,13 @@
       너무 짧으면 API 한도(429)에 걸릴 수 있어요. 기본 10분.</p>
   </div>
 
+  <div class="field">
+    <label class="field-label" for="background_poll">백그라운드 자동 갱신</label>
+    <span class="field-input"><input type="checkbox" id="background_poll" name="background_poll" {% if official_fetch.background_poll %}checked{% endif %}> <span class="field-unit">트레이 상주 중에도 갱신</span></span>
+    <p class="field-help">트레이에 상주하는 동안 창을 닫아둬도 위 간격마다 공식 사용량을 갱신해 <strong>사용량 추이</strong>를 쌓습니다.
+      끄면 대시보드를 열어둔 동안과 창 복원 시에만 갱신합니다. 기본 켜짐.</p>
+  </div>
+
   <details class="advanced">
     <summary>고급</summary>
     <div class="field">

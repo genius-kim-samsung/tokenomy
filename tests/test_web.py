@@ -889,6 +889,35 @@ def test_settings_post_saves_official_fetch(tmp_path, monkeypatch):
     assert "enabled" not in of
 
 
+def test_settings_shows_background_poll_toggle_checked_by_default(tmp_path, monkeypatch):
+    # 상주 백그라운드 폴 토글 — 기본 ON이라 체크된 상태로 렌더(ADR 0007)
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert 'name="background_poll"' in r.text
+    assert 'name="background_poll" checked' in r.text
+
+
+def test_settings_post_background_poll_off_when_unchecked(tmp_path, monkeypatch):
+    # 체크박스 미체크(폼에 키 부재) → background_poll False 영속
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"min_interval": "10", "credit_to_usd": "0.04"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["official_fetch"]["background_poll"] is False
+
+
+def test_settings_post_background_poll_on_when_checked(tmp_path, monkeypatch):
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"min_interval": "10", "credit_to_usd": "0.04",
+                                       "background_poll": "on"}, follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["official_fetch"]["background_poll"] is True
+    assert saved["official_fetch"]["min_interval_minutes"] == 10
+
+
 # ── Task 6 TDD: 대시보드 새로고침 버튼 + 취득 상태 표면 ──────────────────────────────
 
 def test_overview_has_per_provider_refresh_buttons(tmp_path, monkeypatch):
