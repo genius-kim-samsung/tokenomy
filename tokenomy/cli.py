@@ -24,7 +24,7 @@ from tokenomy.official_parser import parse_claude, parse_codex
 CLAUDE_ROOT = Path.home() / ".claude" / "projects"
 
 
-def cmd_ingest(conn) -> None:
+def cmd_ingest(conn) -> int:
     config = load_config()
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
     n_claude = ingest_root(conn, CLAUDE_ROOT, pricing, provider="claude")
@@ -46,6 +46,8 @@ def cmd_ingest(conn) -> None:
     print(msg)
     # 수집은 순수 — 공식 갱신은 트리거하지 않는다(웹 대시보드 로드 시 hx-trigger="load"가 첫 갱신,
     # 이후 '자동 갱신 간격'마다 폴링 / 수동 갱신 버튼 / 설정 변경이 담당).
+    # 화면에 영향을 주는 변경 합계(archive 제외) — 창 복원 시 조건부 리로드 판정용.
+    return n_claude + n_codex + n_titles + n_turns + repriced
 
 
 def cmd_official_import(conn, provider: str, path: str, *, now_kst=None,

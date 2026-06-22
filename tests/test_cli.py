@@ -54,3 +54,19 @@ def test_report_runs_without_budget(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "claude" in out.lower()
     assert "이번 달" in out or "총지출" in out
+
+
+def test_cmd_ingest_returns_total_visible_changes(monkeypatch):
+    """cmd_ingest는 화면에 영향을 주는 변경 합계를 반환한다(archive 제외)."""
+    import tokenomy.cli as cli
+    monkeypatch.setattr(cli, "load_config", lambda: {})
+    monkeypatch.setattr(cli, "apply_pricing_overrides", lambda p, o: p)
+    monkeypatch.setattr(cli, "load_pricing", lambda: {})
+    monkeypatch.setattr(cli, "ingest_root", lambda *a, **k: 2)      # n_claude
+    monkeypatch.setattr(cli, "ingest_codex", lambda *a, **k: 3)     # n_codex
+    monkeypatch.setattr(cli, "archive_tree", lambda *a, **k: 9)     # 합계 제외
+    monkeypatch.setattr(cli, "ingest_titles", lambda *a, **k: 1)    # n_titles
+    monkeypatch.setattr(cli, "ingest_user_turns", lambda *a, **k: 0)
+    monkeypatch.setattr(cli, "maybe_reprice", lambda *a, **k: 4)    # repriced
+    monkeypatch.setattr(cli, "record_ingest", lambda *a, **k: None)
+    assert cli.cmd_ingest(conn=None) == 2 + 3 + 1 + 0 + 4
