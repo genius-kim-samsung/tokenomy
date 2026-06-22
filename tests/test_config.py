@@ -140,3 +140,28 @@ def test_tracked_providers_empty_list_persists(monkeypatch):
     import tokenomy.config as b
     monkeypatch.setattr(b, "creds_present", lambda p: True)
     assert tracked_providers({"tracked_providers": []}) == []
+
+
+from tokenomy.config import mini_view_settings
+
+
+def test_mini_view_settings_default_off_no_position():
+    # 미설정 → opt-in이라 꺼짐(False), 위치는 미정(None) → 런처가 기본 코너에 둔다.
+    assert mini_view_settings({}) == {"enabled": False, "x": None, "y": None}
+
+
+def test_mini_view_settings_reads_enabled_and_position():
+    s = mini_view_settings({"mini_view": {"enabled": True, "x": 1500, "y": 880}})
+    assert s == {"enabled": True, "x": 1500, "y": 880}
+
+
+def test_mini_view_settings_enabled_false_persists():
+    # 명시적 off는 그대로 off(opt-in 토글의 영속 상태).
+    assert mini_view_settings({"mini_view": {"enabled": False}})["enabled"] is False
+
+
+def test_mini_view_settings_bad_coords_fall_back_to_none():
+    # 비숫자·누락 좌표는 None으로 — 오설정으로 창 배치가 깨지지 않게(런처가 기본 코너).
+    assert mini_view_settings({"mini_view": {"enabled": True, "x": "nope"}})["x"] is None
+    assert mini_view_settings({"mini_view": {"enabled": True, "y": None}})["y"] is None
+    assert mini_view_settings({"mini_view": {"enabled": True}}) == {"enabled": True, "x": None, "y": None}

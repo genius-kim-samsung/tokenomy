@@ -1111,3 +1111,85 @@ def test_app_show_invokes_request_show():
     assert r.json() == {"ok": True}
     assert called == [True]
     control.set_show_callback(None)
+
+
+# ── 미니 뷰(ADR 0008): /mini 셸 + /mini/section 자동 폴링 ─────────────────────────
+
+def _seed_monthly(conn, provider, used, limit, util):
+    from tokenomy.official_parser import OfficialBucket
+    insert_official_buckets(
+        conn, provider=provider, fetched_at="2026-06-20T09:00:00+09:00",
+        buckets=[OfficialBucket(
+            bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit", label="월 사용 한도",
+            native_unit="usd", used_native=used, limit_native=limit, remaining_native=limit - used,
+            used_usd=used, limit_usd=limit, remaining_usd=limit - used, utilization=util, resets_at=None)],
+        created_at="2026-06-20T09:00:00+09:00")
+
+
+def test_mini_page_renders_standalone(tmp_path, monkeypatch):
+    """GET /mini — 사이드바 없는 독립 셸. app.css 로드 + 게이지 렌더(공식 시드 시)."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    _seed_monthly(conn_factory(), "claude", 80.0, 100.0, 80.0)
+    r = client.get("/mini")
+    assert r.status_code == 200
+    assert 'class="sidebar"' not in r.text          # 독립 셸 — 큰 창 크롬 없음
+    assert "/static/app.css" in r.text
+    assert "월 사용 한도" in r.text and "80%" in r.text
+
+
+def test_mini_page_has_polling_trigger(tmp_path, monkeypatch):
+    """미니 셸이 /mini/section을 load + every Nm로 폴링한다(자체 갱신)."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"], '
+                   '"official_fetch": {"min_interval_minutes": 10}}', encoding="utf-8")
+    r = client.get("/mini")
+    assert 'hx-get="/mini/section"' in r.text
+    assert "load" in r.text
+    assert "every 10m" in r.text
+
+
+def test_mini_page_has_open_main_and_close_controls(tmp_path, monkeypatch):
+    """hover 컨트롤 — '↗ 큰 창'(open_main 브리지) + '✕ 끄기'(close_mini 브리지)."""
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/mini")
+    assert "open_main" in r.text     # pywebview JS 브리지 — 큰 창 복원
+    assert "close_mini" in r.text    # pywebview JS 브리지 — 미니 뷰 끄기
+
+
+def test_mini_section_polls_with_auto_throttle(tmp_path, monkeypatch):
+    """GET /mini/section → 압축 조각 + manual=False(자동 throttle 적용)."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    calls = []
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider",
+                        lambda p, **k: calls.append(k.get("manual")))
+    r = client.get("/mini/section")
+    assert r.status_code == 200
+    assert "<!doctype html>" not in r.text.lower()   # 조각만(셸 없음)
+    assert 'class="sidebar"' not in r.text
+    assert calls == [False]                          # 자동 = throttle 적용
+
+
+def test_mini_section_official_only_no_local_fallback(tmp_path, monkeypatch):
+    """official-only 불변식 — 공식 없고 로컬만 있으면 '공식 데이터 없음' 안내, 로컬 추정 미표시."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    conn = connect(str(tmp_path / "t.db"))
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s','2026-06-12T10:00:00Z',7.0,1)")
+    conn.commit()
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider", lambda p, **k: None)
+    r = client.get("/mini/section")
+    assert r.status_code == 200
+    assert "공식 데이터 없음" in r.text       # official-only 안내
+    assert "로컬 추정" not in r.text          # 큰 창 폴백 문구 미사용(불변식)
+
+
+def test_mini_section_empty_active_shows_settings_prompt(tmp_path, monkeypatch):
+    """활성 AI 0개 → 미니에 '설정에서 켜기' 안내."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": []}', encoding="utf-8")
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider", lambda p, **k: None)
+    r = client.get("/mini/section")
+    assert r.status_code == 200
+    assert "/settings" in r.text

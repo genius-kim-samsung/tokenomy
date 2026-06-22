@@ -272,6 +272,35 @@
   .src-official { @apply font-semibold text-body; }
   .src-est { @apply font-semibold text-muted; border-bottom: 1px dashed var(--color-muted); }
 
+  /* ── 미니 뷰(ADR 0008) — 큰 창과 독립된 항상 위 프레임리스 동반 창 ──
+     활성 AI별 현재 게이지를 압축 행으로. easy_drag로 본문을 잡아 이동, hover 시 컨트롤 노출. */
+  .mini-body { @apply m-0 bg-card text-fg overflow-hidden select-none; }
+  .mini-wrap { @apply p-2.5; box-shadow: inset 0 0 0 1px var(--color-line); }
+  .mini-bar { @apply flex items-center gap-2 mb-1.5; cursor: move; }
+  .mini-title { @apply text-[11px] font-semibold tracking-wide text-muted uppercase; }
+  .mini-controls { @apply ml-auto flex gap-1 opacity-0 transition-opacity; }
+  .mini-wrap:hover .mini-controls { @apply opacity-100; }
+  .mini-ctl { @apply px-1.5 py-px rounded text-[12px] leading-none text-muted bg-elev; cursor: pointer; border: none; }
+  .mini-ctl:hover { @apply text-fg; }
+
+  .mini-card { @apply mb-2; }
+  .mini-card:last-child { @apply mb-0; }
+  .mini-card-head { @apply flex items-center gap-1.5 mb-0.5; }
+  .mini-mark { @apply inline-block w-2 h-2 rounded-full shrink-0; background: var(--accent, var(--color-muted)); }
+  .mini-name { @apply text-[12px] font-semibold truncate; }
+  .mini-warn { @apply ml-auto text-exceeds text-[12px]; }
+  .mini-fresh { @apply ml-auto text-[10px] text-muted tabular-nums; }
+
+  .mini-gauge { @apply mt-1; }
+  .mini-gauge-line { @apply flex items-center gap-2 text-[12px]; }
+  .mini-gauge-label { @apply truncate text-body; }
+  .mini-gauge-pct { @apply ml-auto shrink-0 tabular-nums font-semibold; }
+  .mini-gauge-pct.lvl-ok { @apply text-ok; }
+  .mini-gauge-pct.lvl-warn { @apply text-warn; }
+  .mini-gauge-pct.lvl-exceeds { @apply text-exceeds; }
+  .mini-gauge-caption { @apply block text-[10px] text-muted tabular-nums mt-px; }
+  .mini-empty { @apply text-[11px] text-muted my-1; }
+
   /* ── 설정 화면 재구성 ──
      Tier 1(편집 카드: AI row+토글+상태칩 / 필드 / 고급 접기 / 저장)
      Tier 2(정보·진단: 조용한 카드 — 커버리지 건강줄+자세히, 프라이버시 ✓/✗). */

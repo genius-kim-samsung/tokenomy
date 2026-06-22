@@ -21,17 +21,35 @@ WINDOW_TITLE = "Tokenomy"
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 800
 
+# 미니 뷰(ADR 0008) — 폭 고정, 높이는 내용에 맞춰 JS가 resize_mini로 조정.
+MINI_TITLE = "Tokenomy 미니"
+MINI_WIDTH = 300
+MINI_HEIGHT = 200       # 첫 표시 높이(로드 후 내용 높이로 교체)
+
 
 class Api:
-    """pywebview JS 브리지 — 외부 링크를 기본 브라우저로 연다."""
+    """pywebview JS 브리지 — 외부 링크 열기 + 미니 뷰 조작(open_main/close_mini/resize_mini)."""
 
     def open_external(self, url: str) -> None:
         if isinstance(url, str) and url.startswith(("http://", "https://")):
             webbrowser.open(url)
 
+    def open_main(self) -> None:
+        """미니 뷰의 '↗ 큰 창' — 큰 창 복원(수집 1회 동반)."""
+        _show_window()
 
-# 상주 모드 상태 — webview 창/pystray 아이콘 참조 + 종료 플래그.
-_tray_state: dict = {"window": None, "icon": None, "quitting": False}
+    def close_mini(self) -> None:
+        """미니 뷰의 '✕ 끄기' — 미니 창 숨김 + off 영속."""
+        _hide_mini()
+
+    def resize_mini(self, height) -> None:
+        """미니 내용 높이에 창을 맞춤(폭 고정)."""
+        _resize_mini(height)
+
+
+# 상주 모드 상태 — 큰 창/미니 창/pystray 아이콘 참조 + 종료·미니표시 플래그.
+_tray_state: dict = {"window": None, "icon": None, "quitting": False,
+                     "mini": None, "mini_shown": False}
 
 
 def _on_closing() -> bool:
@@ -54,7 +72,7 @@ def _maybe_first_time_notice() -> None:
     icon = _tray_state["icon"]
     if icon is not None:
         try:
-            icon.notify("완전히 종료하려면 트레이 아이콘을 우클릭 → 종료",
+            icon.notify("종료: 트레이 우클릭 → 종료. 사용량을 작게 흘끗 보려면 우클릭 → 미니 뷰.",
                         "Tokenomy는 트레이에서 계속 실행됩니다")
         except Exception:
             pass
@@ -95,14 +113,101 @@ def _on_open(icon=None, item=None) -> None:
 
 
 def _on_quit(icon=None, item=None) -> None:
-    """트레이 '종료' — 종료 플래그 후 창 파괴(메인 스레드 GUI 루프 종료)."""
+    """트레이 '종료' — 종료 플래그 후 창 파괴(메인 스레드 GUI 루프 종료).
+
+    미니 창도 함께 파괴한다(살아 있으면 GUI 루프가 안 끝날 수 있음)."""
     _tray_state["quitting"] = True
-    window = _tray_state["window"]
-    if window is not None:
-        try:
-            window.destroy()
-        except Exception:
-            pass
+    for key in ("mini", "window"):       # 미니 먼저, 큰 창 마지막
+        win = _tray_state.get(key)
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+
+# ── 미니 뷰(ADR 0008) — 위치 계산(순수) ──────────────────────────────────────
+def _clamp_position(x, y, screen_w, screen_h, win_w, win_h):
+    """저장된 미니 창 좌표를 화면 안으로 당긴다(모니터 분리 등으로 화면 밖이면 보정).
+
+    x 또는 y가 None(미저장)이면 None 반환 → 호출부가 기본 위치를 쓴다."""
+    if x is None or y is None:
+        return None
+    cx = min(max(int(x), 0), max(screen_w - win_w, 0))
+    cy = min(max(int(y), 0), max(screen_h - win_h, 0))
+    return (cx, cy)
+
+
+def _default_mini_position(screen_w, screen_h, win_w, win_h, margin=16):
+    """미저장 시 기본 위치 — 우하단(작업표시줄 위 코너), 마진만큼 띄움."""
+    return (max(screen_w - win_w - margin, 0), max(screen_h - win_h - margin, 0))
+
+
+# ── 미니 뷰 — 설정 영속 ──────────────────────────────────────────────────────
+def _persist_mini(**fields) -> None:
+    """미니 뷰 설정 일부(enabled·x·y)를 config['mini_view']에 병합 저장.
+
+    None 값은 무시(부분 갱신) — enabled=False는 유효값이라 그대로 저장된다.
+    위치 저장(잦음)과 토글(enabled)이 서로를 덮지 않게 기존 키를 보존한다."""
+    from tokenomy.config import load_config, save_config
+    config = load_config()
+    mv = dict(config.get("mini_view") or {})
+    mv.update({k: v for k, v in fields.items() if v is not None})
+    config["mini_view"] = mv
+    save_config(config)
+
+
+def _save_mini_position(x, y) -> None:
+    """미니 창 moved 이벤트 → 위치 영속(원본 저장, 화면 밖 보정은 복원 시 _clamp_position)."""
+    _persist_mini(x=x, y=y)
+
+
+# ── 미니 뷰 — show/hide/toggle/closing/resize ────────────────────────────────
+def _show_mini(persist: bool = True) -> None:
+    """미니 창 표시 + on 영속."""
+    win = _tray_state.get("mini")
+    if win is not None:
+        win.show()
+    _tray_state["mini_shown"] = True
+    if persist:
+        _persist_mini(enabled=True)
+
+
+def _hide_mini(persist: bool = True) -> None:
+    """미니 창 숨김(파괴 아님) + off 영속."""
+    win = _tray_state.get("mini")
+    if win is not None:
+        win.hide()
+    _tray_state["mini_shown"] = False
+    if persist:
+        _persist_mini(enabled=False)
+
+
+def _toggle_mini(icon=None, item=None) -> None:
+    """트레이 '미니 뷰' 토글 — 켜져 있으면 숨기고, 아니면 표시."""
+    if _tray_state.get("mini_shown"):
+        _hide_mini()
+    else:
+        _show_mini()
+
+
+def _on_mini_closing() -> bool:
+    """미니 창 X/Alt+F4 — 종료 중이 아니면 숨김+off(파괴 취소, False), 종료 중이면 닫기 허용."""
+    if _tray_state.get("quitting"):
+        return True
+    _hide_mini()
+    return False
+
+
+def _resize_mini(height) -> None:
+    """미니 창을 내용 높이에 맞춘다(폭 MINI_WIDTH 고정). 비숫자·비양수 높이는 무시."""
+    win = _tray_state.get("mini")
+    try:
+        h = int(height)
+    except (TypeError, ValueError):
+        return
+    if win is not None and h > 0:
+        win.resize(MINI_WIDTH, h)
 
 
 def _tray_image():
@@ -113,10 +218,12 @@ def _tray_image():
 
 
 def _build_tray():
-    """pystray 트레이 아이콘 생성 — 기본 항목 '열기'(좌클릭) + '종료'."""
+    """pystray 트레이 아이콘 생성 — '열기'(좌클릭 기본) + '미니 뷰'(체크 토글) + '종료'."""
     import pystray
     menu = pystray.Menu(
         pystray.MenuItem("열기", _on_open, default=True),
+        pystray.MenuItem("미니 뷰", _toggle_mini,
+                         checked=lambda item: bool(_tray_state.get("mini_shown"))),
         pystray.MenuItem("종료", _on_quit),
     )
     return pystray.Icon("tokenomy", _tray_image(), "Tokenomy", menu=menu)
@@ -234,8 +341,24 @@ def _serve(port: int) -> None:
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
+def _resolve_mini_xy(mv: dict) -> tuple:
+    """미니 창 초기 좌표 — 저장값을 화면 안으로 보정(_clamp_position), 미저장이면 우하단 기본.
+    화면 조회 실패(헤드리스/테스트)면 (None, None) → pywebview가 중앙 배치."""
+    try:
+        import webview
+        scr = webview.screens[0]
+        sw, sh = int(scr.width), int(scr.height)
+    except Exception:
+        return (None, None)
+    pos = _clamp_position(mv.get("x"), mv.get("y"), sw, sh, MINI_WIDTH, MINI_HEIGHT)
+    if pos is None:
+        pos = _default_mini_position(sw, sh, MINI_WIDTH, MINI_HEIGHT)
+    return pos
+
+
 def _launch_window(port: int) -> None:
-    """pywebview 창 + pystray 트레이(상주). 트레이 미가용 시 단발로 강등(X=종료)."""
+    """pywebview 큰 창 + 미니 뷰(hidden, ADR 0008) + pystray 트레이(상주).
+    트레이 미가용 시 단발로 강등(X=종료, 미니 창도 안 만듦)."""
     import webview
     window = webview.create_window(
         WINDOW_TITLE, f"http://127.0.0.1:{port}/",
@@ -249,11 +372,26 @@ def _launch_window(port: int) -> None:
     except Exception as e:  # pystray/Pillow 미가용 → 단발 강등
         print(f"[launcher] 트레이 비활성(라이브러리 미가용) — 단발 모드: {e}")
     if icon is not None:
+        from tokenomy.config import load_config, mini_view_settings
         from tokenomy.web.control import set_show_callback
         _tray_state["icon"] = icon
         # pywebview의 closing은 locking 이벤트라 핸들러의 False 반환이 닫기를 취소한다(hide-on-close의 핵심 의존).
         window.events.closing += _on_closing
         set_show_callback(_show_window)
+        # 미니 뷰 — hidden으로 미리 생성(런타임 create_window 회피). 마지막 on/off 상태를 복원.
+        mv = mini_view_settings(load_config())
+        mx, my = _resolve_mini_xy(mv)
+        mini = webview.create_window(
+            MINI_TITLE, f"http://127.0.0.1:{port}/mini",
+            width=MINI_WIDTH, height=MINI_HEIGHT, x=mx, y=my,
+            frameless=True, on_top=True, easy_drag=True, hidden=True, js_api=Api(),
+        )
+        _tray_state["mini"] = mini
+        _tray_state["mini_shown"] = False
+        mini.events.closing += _on_mini_closing      # X/Alt+F4 → 숨김+off(파괴 아님)
+        mini.events.moved += _save_mini_position      # 드래그 이동 → 위치 영속
+        if mv["enabled"]:
+            _show_mini(persist=False)                 # 복원(영속값은 그대로)
         threading.Thread(target=icon.run, daemon=True).start()
     webview.start()  # ← 메인 스레드 GUI 루프(블로킹). window.destroy()까지 반환 안 함.
     if icon is not None:
