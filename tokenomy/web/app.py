@@ -19,8 +19,9 @@ from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
 from tokenomy.web import control
 from tokenomy.web.views import (
-    coverage_card_context, dimension_context, history_context, official_section_context,
-    overview_context, session_context, settings_provider_toggles, sidebar_freshness,
+    coverage_card_context, dimension_context, history_context, mini_view_context,
+    official_section_context, overview_context, session_context, settings_provider_toggles,
+    sidebar_freshness,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -172,6 +173,29 @@ def official_section(request: Request):
     now = datetime.now(KST)
     refresh_tracked(config, now_kst=now, conn=conn, manual=False)
     return _official_section_response(request, conn, config, now)
+
+
+@app.get("/mini")
+def mini_view(request: Request):
+    """미니 뷰(상주 동반 글랜스 창, ADR 0008) 셸 — 사이드바 없는 독립 페이지.
+
+    활성 AI별 압축 게이지 행(official-only). 갱신은 셸 안의 #mini-section이
+    hx-trigger="load, every Nm"로 /mini/section을 자체 폴링한다(수집과 무관).
+    """
+    conn = connect()
+    ctx = mini_view_context(conn, load_config(), datetime.now(KST))
+    return templates.TemplateResponse(request, "mini.html", ctx)
+
+
+@app.get("/mini/section")
+def mini_section(request: Request):
+    """미니 뷰 자동 폴링 — 자동 갱신(manual=False, throttle 적용) 후 압축 조각 렌더."""
+    conn = connect()
+    config = load_config()
+    now = datetime.now(KST)
+    refresh_tracked(config, now_kst=now, conn=conn, manual=False)
+    return templates.TemplateResponse(
+        request, "_mini_section.html", mini_view_context(conn, config, now))
 
 
 @app.get("/settings")

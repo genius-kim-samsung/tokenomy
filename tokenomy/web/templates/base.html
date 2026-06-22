@@ -21,6 +21,19 @@
   <script src="/static/rel-time.js"></script>
   {% block scripts %}{% endblock %}
   <script>
+    // 미니뷰 전환(ADR 0008) — pywebview JS 브리지로 큰 창 숨기고 미니로. webview에서만 의미.
+    function switchToMini() {
+      var api = window.pywebview && window.pywebview.api;
+      if (api && api.to_mini) api.to_mini();
+    }
+    // 미니뷰 전환 버튼은 webview(pywebview) 환경에서만 노출(브라우저 fallback엔 미니 뷰 없음).
+    function _revealMiniSwitch() {
+      var b = document.getElementById('mini-switch');
+      if (b) b.style.display = '';
+    }
+    window.addEventListener('pywebviewready', _revealMiniSwitch);
+    if (window.pywebview && window.pywebview.api) _revealMiniSwitch();
+
     // 외부 링크(비 localhost http/https)는 네이티브 창 대신 기본 브라우저로.
     document.addEventListener('click', function (e) {
       var a = e.target.closest && e.target.closest('a[href]');

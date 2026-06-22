@@ -93,6 +93,29 @@ def forecast_settings(config: dict) -> dict:
     return {"rate_window_weeks": min(max(w, 1), 8)}
 
 
+def mini_view_settings(config: dict) -> dict:
+    """미니 뷰(상주 모드 안의 배타 전환 글랜스 창, ADR 0008) 표시 설정.
+
+    last_view = 마지막 본 뷰("main"|"mini"). 기본 "main"(최초 실행·미설정·알 수 없는 값은
+    일반뷰로 안전 복원). 트레이 "열기"·재실행·재시작이 이 값으로 복원한다.
+    x/y = 마지막 미니 창 위치(int|None). 미설정·비숫자는 None으로 폴백 → 런처가 기본 코너에 둔다
+    (오설정 좌표로 창 배치가 깨지지 않게). 위치 저장은 미니 창의 moved 이벤트가 담당한다.
+    """
+    raw = config.get("mini_view") or {}
+
+    def _coord(v) -> int | None:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    last_view = raw.get("last_view")
+    if last_view not in ("main", "mini"):
+        last_view = "main"
+    return {"last_view": last_view,
+            "x": _coord(raw.get("x")), "y": _coord(raw.get("y"))}
+
+
 def tracked_providers(config: dict) -> list[str]:
     """사용자가 앱에서 보기로 켠 provider(=활성 AI) 목록.
 

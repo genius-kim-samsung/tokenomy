@@ -14,6 +14,9 @@
     <form method="post" action="/ingest" class="inline">
       <button class="btn" type="submit" title="로컬 로그를 다시 수집">↻ 수집</button>
     </form>
+    {# 미니뷰 전환(ADR 0008, 배타 전환) — webview 전용이라 기본 숨김, pywebview 준비 시 표시 #}
+    <button id="mini-switch" class="btn" type="button" onclick="switchToMini()"
+            title="작게 흘끗 보는 미니 뷰로 전환" style="display:none">⊟ 미니뷰</button>
     <div class="muted">v{{ app_version }}</div>
     {% if update_tag %}
     <a class="update-link" href="https://github.com/genius-kim-samsung/tokenomy/releases/latest"

@@ -21,17 +21,39 @@ WINDOW_TITLE = "Tokenomy"
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 800
 
+# 미니 뷰(ADR 0008) — 폭 고정, 높이는 내용에 맞춰 JS가 resize_mini로 조정.
+MINI_TITLE = "Tokenomy 미니"
+MINI_WIDTH = 300
+MINI_HEIGHT = 200       # 첫 표시 높이(로드 후 내용 높이로 교체)
+
 
 class Api:
-    """pywebview JS 브리지 — 외부 링크를 기본 브라우저로 연다."""
+    """pywebview JS 브리지 — 외부 링크 열기 + 미니/일반 배타 전환(to_mini/to_main/hide_to_tray/resize_mini)."""
 
     def open_external(self, url: str) -> None:
         if isinstance(url, str) and url.startswith(("http://", "https://")):
             webbrowser.open(url)
 
+    def to_mini(self) -> None:
+        """일반뷰의 '⊟ 미니뷰' — 큰 창 숨기고 미니로 전환."""
+        _to_mini()
 
-# 상주 모드 상태 — webview 창/pystray 아이콘 참조 + 종료 플래그 + 백그라운드 폴 stop.
-_tray_state: dict = {"window": None, "icon": None, "quitting": False, "poll_stop": None}
+    def to_main(self) -> None:
+        """미니뷰의 '⊞ 일반뷰' — 미니 숨기고 큰 창 복원(수집 1회 동반)."""
+        _to_main()
+
+    def hide_to_tray(self) -> None:
+        """미니뷰의 '✕' — 미니를 트레이로 숨김(마지막 뷰=미니 유지)."""
+        _hide_mini_to_tray()
+
+    def resize_mini(self, height) -> None:
+        """미니 내용 높이에 창을 맞춤(폭 고정)."""
+        _resize_mini(height)
+
+
+# 상주 모드 상태 — 큰 창/미니 창/pystray 아이콘 + 종료 플래그 + 현재 뷰(배타 전환)·서버 포트(lazy 생성)·백그라운드 폴 stop(ADR 0007).
+_tray_state: dict = {"window": None, "icon": None, "quitting": False,
+                     "mini": None, "current_view": "main", "port": None, "poll_stop": None}
 
 
 def _on_closing() -> bool:
@@ -54,7 +76,7 @@ def _maybe_first_time_notice() -> None:
     icon = _tray_state["icon"]
     if icon is not None:
         try:
-            icon.notify("완전히 종료하려면 트레이 아이콘을 우클릭 → 종료",
+            icon.notify("종료: 트레이 우클릭 → 종료. 사용량을 작게 흘끗 보려면 우클릭 → 미니 뷰.",
                         "Tokenomy는 트레이에서 계속 실행됩니다")
         except Exception:
             pass
@@ -90,8 +112,8 @@ def _reingest_and_maybe_reload() -> None:
 
 
 def _on_open(icon=None, item=None) -> None:
-    """트레이 '열기' / 기본 클릭 — 창 복원."""
-    _show_window()
+    """트레이 '열기' / 기본 클릭 — 마지막 본 뷰(일반/미니) 복원."""
+    _restore_last_view()
 
 
 def _start_background_poll() -> None:
@@ -123,17 +145,143 @@ def _start_background_poll() -> None:
 
 
 def _on_quit(icon=None, item=None) -> None:
-    """트레이 '종료' — 종료 플래그 후 창 파괴(메인 스레드 GUI 루프 종료)."""
+    """트레이 '종료' — 종료 플래그 후 창 파괴(메인 스레드 GUI 루프 종료).
+
+    미니 창도 함께 파괴한다(살아 있으면 GUI 루프가 안 끝날 수 있음)."""
     _tray_state["quitting"] = True
-    stop_event = _tray_state.get("poll_stop")
+    stop_event = _tray_state.get("poll_stop")    # 0007: 백그라운드 폴 정지
     if stop_event is not None:
         stop_event.set()
-    window = _tray_state["window"]
+    for key in ("mini", "window"):       # 미니 먼저, 큰 창 마지막
+        win = _tray_state.get(key)
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+
+# ── 미니 뷰(ADR 0008) — 위치 계산(순수) ──────────────────────────────────────
+def _clamp_position(x, y, screen_w, screen_h, win_w, win_h):
+    """저장된 미니 창 좌표를 화면 안으로 당긴다(모니터 분리 등으로 화면 밖이면 보정).
+
+    x 또는 y가 None(미저장)이면 None 반환 → 호출부가 기본 위치를 쓴다."""
+    if x is None or y is None:
+        return None
+    cx = min(max(int(x), 0), max(screen_w - win_w, 0))
+    cy = min(max(int(y), 0), max(screen_h - win_h, 0))
+    return (cx, cy)
+
+
+def _default_mini_position(screen_w, screen_h, win_w, win_h, margin=16):
+    """미저장 시 기본 위치 — 우하단(작업표시줄 위 코너), 마진만큼 띄움."""
+    return (max(screen_w - win_w - margin, 0), max(screen_h - win_h - margin, 0))
+
+
+# ── 미니 뷰 — 설정 영속 ──────────────────────────────────────────────────────
+def _persist_mini(**fields) -> None:
+    """미니 뷰 설정 일부(last_view·x·y)를 config['mini_view']에 병합 저장.
+
+    None 값은 무시(부분 갱신) — 위치 저장(잦음)과 뷰 전환(last_view)이
+    서로를 덮지 않게 기존 키를 보존한다."""
+    from tokenomy.config import load_config, save_config
+    config = load_config()
+    mv = dict(config.get("mini_view") or {})
+    mv.update({k: v for k, v in fields.items() if v is not None})
+    config["mini_view"] = mv
+    save_config(config)
+
+
+def _save_mini_position(x, y) -> None:
+    """미니 창 moved 이벤트 → 위치 영속(원본 저장, 화면 밖 보정은 복원 시 _clamp_position)."""
+    _persist_mini(x=x, y=y)
+
+
+# ── 미니 뷰(배타 전환, ADR 0008) — lazy 생성 / 전환 / 트레이 숨김 / 복원 ──────
+def _set_view(view: str) -> None:
+    """현재 뷰를 런타임 상태 + config에 영속(트레이 '열기'·재실행·재시작 복원 기준)."""
+    _tray_state["current_view"] = view
+    _persist_mini(last_view=view)
+
+
+def _ensure_mini():
+    """미니 창을 lazy 생성(보이는 상태 — hidden 미사용, WebView2 흰 창 회피). 이미 있으면 그대로.
+    시작 시엔 만들지 않고 첫 미니 전환 때 한 번 만들어 이후 hide/show로 재사용한다."""
+    mini = _tray_state.get("mini")
+    if mini is not None:
+        return mini
+    import webview
+    from tokenomy.config import load_config, mini_view_settings
+    mv = mini_view_settings(load_config())
+    mx, my = _resolve_mini_xy(mv)
+    port = _tray_state.get("port")
+    mini = webview.create_window(
+        MINI_TITLE, f"http://127.0.0.1:{port}/mini",
+        width=MINI_WIDTH, height=MINI_HEIGHT, x=mx, y=my,
+        frameless=True, on_top=True, easy_drag=True, js_api=Api(),
+    )
+    _tray_state["mini"] = mini
+    mini.events.closing += _on_mini_closing      # X/Alt+F4 → 트레이 숨김(파괴 아님)
+    mini.events.moved += _save_mini_position      # 드래그 이동 → 위치 영속
+    return mini
+
+
+def _show_mini_window() -> None:
+    """미니 창 표시(없으면 lazy 생성)."""
+    _ensure_mini().show()
+
+
+def _to_mini() -> None:
+    """일반뷰 → 미니: 큰 창 숨기고 미니 표시 + 마지막 뷰=미니 영속."""
+    window = _tray_state.get("window")
     if window is not None:
-        try:
-            window.destroy()
-        except Exception:
-            pass
+        window.hide()
+    _show_mini_window()
+    _set_view("mini")
+
+
+def _to_main() -> None:
+    """미니뷰 → 일반: 미니 숨기고 큰 창 복원(수집 1회 동반) + 마지막 뷰=일반 영속."""
+    mini = _tray_state.get("mini")
+    if mini is not None:
+        mini.hide()
+    _set_view("main")
+    _show_window()
+
+
+def _hide_mini_to_tray() -> None:
+    """미니 ✕/X — 미니를 트레이로 숨김(파괴 아님). current_view='mini' 유지 → 다음 복원도 미니."""
+    mini = _tray_state.get("mini")
+    if mini is not None:
+        mini.hide()
+    _maybe_first_time_notice()
+
+
+def _on_mini_closing() -> bool:
+    """미니 창 X/Alt+F4 — 종료 중이 아니면 트레이 숨김(파괴 취소, False), 종료 중이면 닫기 허용."""
+    if _tray_state.get("quitting"):
+        return True
+    _hide_mini_to_tray()
+    return False
+
+
+def _restore_last_view() -> None:
+    """트레이 '열기'·단일 인스턴스 재실행(/app/show) — 마지막 본 뷰(일반/미니)로 복원."""
+    if _tray_state.get("current_view") == "mini":
+        _show_mini_window()
+    else:
+        _show_window()
+
+
+def _resize_mini(height) -> None:
+    """미니 창을 내용 높이에 맞춘다(폭 MINI_WIDTH 고정). 비숫자·비양수 높이는 무시."""
+    win = _tray_state.get("mini")
+    try:
+        h = int(height)
+    except (TypeError, ValueError):
+        return
+    if win is not None and h > 0:
+        win.resize(MINI_WIDTH, h)
 
 
 def _tray_image():
@@ -144,7 +292,8 @@ def _tray_image():
 
 
 def _build_tray():
-    """pystray 트레이 아이콘 생성 — 기본 항목 '열기'(좌클릭) + '종료'."""
+    """pystray 트레이 아이콘 생성 — '열기'(좌클릭 기본, 마지막 본 뷰 복원) + '종료'.
+    배타 전환이라 미니 토글은 없다(미니↔일반 전환은 각 창의 버튼이 담당)."""
     import pystray
     menu = pystray.Menu(
         pystray.MenuItem("열기", _on_open, default=True),
@@ -265,8 +414,24 @@ def _serve(port: int) -> None:
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
+def _resolve_mini_xy(mv: dict) -> tuple:
+    """미니 창 초기 좌표 — 저장값을 화면 안으로 보정(_clamp_position), 미저장이면 우하단 기본.
+    화면 조회 실패(헤드리스/테스트)면 (None, None) → pywebview가 중앙 배치."""
+    try:
+        import webview
+        scr = webview.screens[0]
+        sw, sh = int(scr.width), int(scr.height)
+    except Exception:
+        return (None, None)
+    pos = _clamp_position(mv.get("x"), mv.get("y"), sw, sh, MINI_WIDTH, MINI_HEIGHT)
+    if pos is None:
+        pos = _default_mini_position(sw, sh, MINI_WIDTH, MINI_HEIGHT)
+    return pos
+
+
 def _launch_window(port: int) -> None:
-    """pywebview 창 + pystray 트레이(상주). 트레이 미가용 시 단발로 강등(X=종료)."""
+    """pywebview 큰 창 + pystray 트레이(상주). 미니 뷰는 배타 전환·lazy 생성(ADR 0008).
+    트레이 미가용 시 단발로 강등(X=종료, 미니 전환 없음)."""
     import webview
     window = webview.create_window(
         WINDOW_TITLE, f"http://127.0.0.1:{port}/",
@@ -274,25 +439,39 @@ def _launch_window(port: int) -> None:
     )
     _tray_state["window"] = window
     _tray_state["quitting"] = False
+    _tray_state["mini"] = None
+    _tray_state["port"] = port      # 미니 lazy 생성 시 /mini URL 구성에 사용
     icon = None
     try:
         icon = _build_tray()
     except Exception as e:  # pystray/Pillow 미가용 → 단발 강등
         print(f"[launcher] 트레이 비활성(라이브러리 미가용) — 단발 모드: {e}")
     if icon is not None:
+        from tokenomy.config import load_config, mini_view_settings
         from tokenomy.web.control import set_show_callback
         _tray_state["icon"] = icon
         # pywebview의 closing은 locking 이벤트라 핸들러의 False 반환이 닫기를 취소한다(hide-on-close의 핵심 의존).
         window.events.closing += _on_closing
-        set_show_callback(_show_window)
+        set_show_callback(_restore_last_view)         # 단일 인스턴스 재실행도 마지막 뷰로
+        # 마지막 본 뷰를 복원 기준으로 — 미니 창은 시작 시 만들지 않고(흰 창 차단) 첫 전환 때 lazy 생성.
+        _tray_state["current_view"] = mini_view_settings(load_config())["last_view"]
         threading.Thread(target=icon.run, daemon=True).start()
         _start_background_poll()   # 상주 모드에서만 — 단발 강등 시엔 폴 안 함(ADR 0007)
-    webview.start()  # ← 메인 스레드 GUI 루프(블로킹). window.destroy()까지 반환 안 함.
+        webview.start(_on_gui_start)  # ← 메인 GUI 루프(블로킹). 시작 직후 콜백이 마지막 뷰 적용.
+    else:
+        webview.start()
     if icon is not None:
         try:
             icon.stop()
         except Exception:
             pass
+
+
+def _on_gui_start() -> None:
+    """GUI 루프 시작 직후 — 마지막 뷰가 미니면 미니로 전환(큰 창 숨김 + 미니 lazy 생성).
+    일반뷰면 아무것도 안 한다(큰 창이 이미 보임)."""
+    if _tray_state.get("current_view") == "mini":
+        _to_mini()
 
 
 def _open_browser_when_ready(port: int) -> None:

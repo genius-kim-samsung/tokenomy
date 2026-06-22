@@ -1,0 +1,33 @@
+{# 미니 뷰 압축 게이지 행(ADR 0008) — official-only. 공식 데이터 없으면 로컬 추정 폴백 없이
+   '공식 데이터 없음' 안내만 둔다(큰 창 카드와 다른 점). 색=임계(s-/lvl-), 텍스처=추정(est). #}
+{% for c in cards %}
+<div class="mini-card" data-status="{{ c.status }}" style="--accent: {{ c.accent }}">
+  <div class="mini-card-head">
+    <span class="mini-mark"></span>
+    <span class="mini-name">{{ c.label }}</span>
+    {% if c.status == "error" %}
+    <span class="mini-warn" title="갱신 실패{% if c.fresh %} · {{ c.fresh }}{% endif %}">⚠</span>
+    {% elif c.fetched_at %}
+    <time class="mini-fresh rel-time" data-ts="{{ c.fetched_at }}">{{ c.fresh }}</time>
+    {% endif %}
+  </div>
+  {% if c.no_official %}
+  <p class="mini-empty">공식 데이터 없음 · <a href="/">큰 창</a>에서 확인</p>
+  {% else %}
+  {% for g in c.gauges %}
+  <div class="mini-gauge">
+    <div class="mini-gauge-line">
+      <span class="mini-gauge-label">{{ g.label }}</span>
+      <span class="mini-gauge-pct lvl-{{ g.level }}">{{ g.util }}%{% if g.exhausted %} 소진{% endif %}</span>
+    </div>
+    <span class="gauge{% if g.estimated %} gauge-est{% endif %}">
+      <span class="gauge-fill s-{{ g.level }}{% if g.estimated %} est{% endif %}" style="width: {{ g.fill_pct }}%"></span>
+    </span>
+    {% if g.caption %}<span class="mini-gauge-caption">{{ g.caption }}</span>{% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+{% else %}
+<p class="mini-empty">활성 AI 없음 · <a href="/settings">설정</a>에서 켜기</p>
+{% endfor %}

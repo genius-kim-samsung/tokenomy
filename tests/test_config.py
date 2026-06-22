@@ -150,3 +150,29 @@ def test_tracked_providers_empty_list_persists(monkeypatch):
     import tokenomy.config as b
     monkeypatch.setattr(b, "creds_present", lambda p: True)
     assert tracked_providers({"tracked_providers": []}) == []
+
+
+from tokenomy.config import mini_view_settings
+
+
+def test_mini_view_settings_default_main_no_position():
+    # 미설정 → 배타 전환 기본은 일반뷰("main"), 위치는 미정(None) → 런처가 기본 코너에 둔다.
+    assert mini_view_settings({}) == {"last_view": "main", "x": None, "y": None}
+
+
+def test_mini_view_settings_reads_last_view_and_position():
+    s = mini_view_settings({"mini_view": {"last_view": "mini", "x": 1500, "y": 880}})
+    assert s == {"last_view": "mini", "x": 1500, "y": 880}
+
+
+def test_mini_view_settings_invalid_last_view_falls_back_to_main():
+    # 알 수 없는 값/누락은 "main"으로 — 재시작 시 일반뷰로 안전 복원.
+    assert mini_view_settings({"mini_view": {"last_view": "widget"}})["last_view"] == "main"
+    assert mini_view_settings({"mini_view": {}})["last_view"] == "main"
+
+
+def test_mini_view_settings_bad_coords_fall_back_to_none():
+    # 비숫자·누락 좌표는 None으로 — 오설정으로 창 배치가 깨지지 않게(런처가 기본 코너).
+    assert mini_view_settings({"mini_view": {"last_view": "mini", "x": "nope"}})["x"] is None
+    assert mini_view_settings({"mini_view": {"last_view": "mini", "y": None}})["y"] is None
+    assert mini_view_settings({"mini_view": {"last_view": "mini"}}) == {"last_view": "mini", "x": None, "y": None}
