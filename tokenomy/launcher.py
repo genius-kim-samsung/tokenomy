@@ -30,6 +30,98 @@ class Api:
             webbrowser.open(url)
 
 
+# 상주 모드 상태 — webview 창/pystray 아이콘 참조 + 종료 플래그.
+_tray_state: dict = {"window": None, "icon": None, "quitting": False}
+
+
+def _on_closing() -> bool:
+    """창 X — 종료 중이 아니면 창만 숨기고 닫기를 취소(False 반환), 첫 1회 안내."""
+    if _tray_state["quitting"]:
+        return True
+    window = _tray_state["window"]
+    if window is not None:
+        window.hide()
+    _maybe_first_time_notice()
+    return False
+
+
+def _maybe_first_time_notice() -> None:
+    """첫 X-닫기 시 트레이 상주 안내를 1회 띄우고 config에 영속(영구히 1회)."""
+    from tokenomy.config import load_config, save_config
+    config = load_config()
+    if config.get("tray_notice_seen"):
+        return
+    icon = _tray_state["icon"]
+    if icon is not None:
+        try:
+            icon.notify("완전히 종료하려면 트레이 아이콘을 우클릭 → 종료",
+                        "Tokenomy는 트레이에서 계속 실행됩니다")
+        except Exception:
+            pass
+    config["tray_notice_seen"] = True
+    save_config(config)
+
+
+def _show_window() -> None:
+    """숨긴 창을 복원하고, 백그라운드에서 재수집 후 신규 있으면 리로드(조건부)."""
+    window = _tray_state["window"]
+    if window is None:
+        return
+    window.show()
+    threading.Thread(target=_reingest_and_maybe_reload, daemon=True).start()
+
+
+def _reingest_and_maybe_reload() -> None:
+    """창 복원 시 1회 수집 — 화면 영향 변경이 있을 때만 페이지 리로드(불필요한 깜빡임 방지)."""
+    try:
+        from tokenomy.cli import cmd_ingest
+        from tokenomy.db import connect
+        changed = cmd_ingest(connect())
+    except Exception as e:
+        print(f"[launcher] 복원 시 수집 건너뜀: {e}")
+        return
+    if changed:
+        window = _tray_state["window"]
+        if window is not None:
+            try:
+                window.evaluate_js("window.location.reload()")
+            except Exception:
+                pass
+
+
+def _on_open(icon=None, item=None) -> None:
+    """트레이 '열기' / 기본 클릭 — 창 복원."""
+    _show_window()
+
+
+def _on_quit(icon=None, item=None) -> None:
+    """트레이 '종료' — 종료 플래그 후 창 파괴(메인 스레드 GUI 루프 종료)."""
+    _tray_state["quitting"] = True
+    window = _tray_state["window"]
+    if window is not None:
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
+
+def _tray_image():
+    """트레이 아이콘 이미지(번들된 .ico를 PIL로 로드)."""
+    from PIL import Image
+    from tokenomy.paths import resource_path
+    return Image.open(str(resource_path("assets/tokenomy.ico")))
+
+
+def _build_tray():
+    """pystray 트레이 아이콘 생성 — 기본 항목 '열기'(좌클릭) + '종료'."""
+    import pystray
+    menu = pystray.Menu(
+        pystray.MenuItem("열기", _on_open, default=True),
+        pystray.MenuItem("종료", _on_quit),
+    )
+    return pystray.Icon("tokenomy", _tray_image(), "Tokenomy", menu=menu)
+
+
 def _ensure_std_streams() -> None:
     """windowed(PyInstaller noconsole) 실행에서 sys.stdout/stderr가 None이면
     devnull로 대체 — print/로깅이 AttributeError로 죽지 않게 한다.
