@@ -1071,3 +1071,43 @@ def test_overview_renders_forecast_chart_vars(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "forecastLimit" in r.text
     assert "forecastLine" in r.text
+
+
+# ── Task 3 TDD: control 레지스트리 + /app/ping · /app/show ───────────────────────
+
+def test_control_request_show_invokes_registered_callback():
+    from tokenomy.web import control
+    called = []
+    control.set_show_callback(lambda: called.append(True))
+    control.request_show()
+    assert called == [True]
+    control.set_show_callback(None)  # 정리
+
+
+def test_control_request_show_noop_when_unset():
+    from tokenomy.web import control
+    control.set_show_callback(None)
+    control.request_show()  # 예외 없이 통과
+
+
+def test_app_ping_returns_marker():
+    from fastapi.testclient import TestClient
+    from tokenomy.web.app import app
+    client = TestClient(app)
+    r = client.get("/app/ping")
+    assert r.status_code == 200
+    assert r.json() == {"app": "tokenomy"}
+
+
+def test_app_show_invokes_request_show():
+    from fastapi.testclient import TestClient
+    from tokenomy.web import control
+    from tokenomy.web.app import app
+    called = []
+    control.set_show_callback(lambda: called.append(True))
+    client = TestClient(app)
+    r = client.post("/app/show")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+    assert called == [True]
+    control.set_show_callback(None)

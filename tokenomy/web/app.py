@@ -17,6 +17,7 @@ from tokenomy.official_fetch import refresh_tracked
 from tokenomy.paths import resource_path
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
+from tokenomy.web import control
 from tokenomy.web.views import (
     coverage_card_context, dimension_context, history_context, official_section_context,
     overview_context, session_context, settings_provider_toggles, sidebar_freshness,
@@ -224,5 +225,18 @@ async def settings_post(request: Request):
         config.pop(k, None)
     save_config(config)
     return RedirectResponse("/settings?saved=1", status_code=303)
+
+
+@app.get("/app/ping")
+def app_ping():
+    """단일 인스턴스 정체 확인 마커 — 런처가 기존 인스턴스인지 판별할 때 GET."""
+    return {"app": "tokenomy"}
+
+
+@app.post("/app/show")
+def app_show():
+    """재실행된 인스턴스가 보낸 창 복원 신호 — 등록된 콜백(_show_window) 호출."""
+    control.request_show()
+    return {"ok": True}
 
 
