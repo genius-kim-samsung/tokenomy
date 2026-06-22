@@ -74,6 +74,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 
 - **exe는 반드시 `.venv`로 빌드.** 시스템 Python으로 빌드하면 pywebview가 번들에서 빠져
   네이티브 창 대신 브라우저로 fallback한다. (PyInstaller는 런타임 의존성이 아니라 CI는 별도 설치.)
+- **webview 경로는 상주 모드(ADR 0006).** exe에서 창 X = 트레이로 숨김(종료 아님), 트레이 우클릭 "종료"로만 완전 종료. 단일 인스턴스(`data/runtime.json`) — 재실행 시 기존 창 복원(`/app/ping` 정체 확인 → `/app/show`). 창 복원 시 ingest 1회 + 조건부 리로드. 트레이는 pystray+Pillow(번들). 브라우저 fallback·개발 모드는 단발 유지.
 - **프라이버시 경계 — 발췌선을 지킬 것.** 파서는 토큰 usage 메타를 추출하고, Codex는
   세션 식별용으로 **첫 사용자 프롬프트만 120자 발췌**해 `sessions.summary`에 저장한다.
   그 외 content/프롬프트/대화 본문 전체는 DB에 적재하지 않는다(raw JSONL 원문은 archive.py가
