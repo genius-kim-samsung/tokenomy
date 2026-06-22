@@ -318,3 +318,93 @@ def test_fetch_bad_creds_file_is_auth_error(monkeypatch, tmp_path):
     conn = connect(":memory:")
     r = fetch_provider("claude", now_kst=_NOW, config=_CFG_ON, conn=conn, urlopen=_never)
     assert r.status == "auth_error"
+
+
+# --- 백그라운드 공식 갱신 폴 루프(ADR 0007) ---
+
+import threading
+from tokenomy.official_fetch import background_poll_loop
+
+
+class _FakeConn:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def test_background_poll_loop_disabled_does_not_poll():
+    calls = []
+    background_poll_loop(
+        {"official_fetch": {"background_poll": False}},
+        conn_factory=lambda: _FakeConn(),
+        now_fn=lambda: "T",
+        stop_event=threading.Event(),
+        sleep_fn=lambda s: None,
+        refresh_fn=lambda *a, **k: calls.append(1),
+    )
+    assert calls == []
+
+
+def test_background_poll_loop_polls_until_stop():
+    stop = threading.Event()
+    calls = []
+    intervals = []
+
+    def fake_sleep(sec):
+        intervals.append(sec)
+        if len(intervals) >= 2:
+            stop.set()
+
+    def fake_refresh(config, *, now_kst, conn, manual):
+        calls.append((now_kst, manual))
+
+    background_poll_loop(
+        {"official_fetch": {"min_interval_minutes": 10, "background_poll": True}},
+        conn_factory=lambda: _FakeConn(),
+        now_fn=lambda: "T",
+        stop_event=stop,
+        sleep_fn=fake_sleep,
+        refresh_fn=fake_refresh,
+    )
+    assert calls == [("T", False), ("T", False)]   # manual=False(자동, throttle 적용)
+    assert intervals == [600, 600]                  # min_interval_minutes × 60
+
+
+def test_background_poll_loop_swallows_refresh_errors():
+    stop = threading.Event()
+    n = []
+
+    def fake_sleep(sec):
+        n.append(1)
+        if len(n) >= 2:
+            stop.set()
+
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+
+    background_poll_loop(
+        {"official_fetch": {"background_poll": True}},
+        conn_factory=lambda: _FakeConn(),
+        now_fn=lambda: "T",
+        stop_event=stop,
+        sleep_fn=fake_sleep,
+        refresh_fn=boom,
+    )
+    assert len(n) == 2   # 예외에도 루프가 계속 돌고 정상 종료
+
+
+def test_background_poll_loop_closes_conn():
+    fc = _FakeConn()
+    stop = threading.Event()
+    stop.set()           # 즉시 멈춤(루프 0회) — 그래도 conn 생성 후 종료
+    background_poll_loop(
+        {"official_fetch": {"background_poll": True}},
+        conn_factory=lambda: fc,
+        now_fn=lambda: "T",
+        stop_event=stop,
+        sleep_fn=lambda s: None,
+        refresh_fn=lambda *a, **k: None,
+    )
+    assert fc.closed is True

@@ -69,13 +69,23 @@ from tokenomy.config import official_fetch_settings
 def test_official_fetch_settings_defaults():
     # 자동 갱신 간격 기본 10분(quota를 CLI와 공유 → 보수적)
     s = official_fetch_settings({})
-    assert s == {"min_interval_minutes": 10}
+    assert s == {"min_interval_minutes": 10, "background_poll": True}
 
 
 def test_official_fetch_settings_bad_interval_falls_back():
     assert official_fetch_settings({"official_fetch": {"min_interval_minutes": "x"}})["min_interval_minutes"] == 10
     assert official_fetch_settings({"official_fetch": {"min_interval_minutes": -3}})["min_interval_minutes"] == 10
     assert official_fetch_settings({"official_fetch": {"min_interval_minutes": 9}})["min_interval_minutes"] == 9
+
+
+def test_official_fetch_settings_background_poll_default_on():
+    # 상주 중 백그라운드 공식 갱신 폴은 기본 ON(콜드스타트 방지, ADR 0007)
+    assert official_fetch_settings({})["background_poll"] is True
+
+
+def test_official_fetch_settings_background_poll_explicit_off():
+    assert official_fetch_settings(
+        {"official_fetch": {"background_poll": False}})["background_poll"] is False
 
 
 def test_load_config_default_auto_interval_is_10(tmp_path):

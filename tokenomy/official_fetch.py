@@ -183,3 +183,35 @@ def refresh_tracked(config, *, now_kst, conn, manual=False, providers=None):
         except Exception:
             pass
     return results
+
+
+def background_poll_loop(config, *, conn_factory, now_fn, stop_event, sleep_fn,
+                         refresh_fn=refresh_tracked):
+    """상주 모드 백그라운드 공식 갱신 폴 루프(ADR 0007).
+
+    stop_event가 set될 때까지 자동 갱신 간격(min_interval_minutes)마다
+    refresh_tracked(manual=False)를 호출해 공식 스냅샷 이력을 누적한다. 창 숨김과 무관하게
+    돈다 — ADR 0006의 "숨김 중 주기작업 거부"를 **공식 갱신에 한해** 보완한 것이며, 로컬
+    수집(ingest)은 건드리지 않는다(복원 시에만, ADR 0006). background_poll가 꺼져 있으면
+    한 번도 폴하지 않고 즉시 반환한다.
+
+    DB 연결은 이 스레드 안에서 conn_factory()로 만든다(sqlite는 스레드 격리). 개별 폴의
+    예외는 삼켜 루프가 죽지 않게 한다(비차단). now_fn/sleep_fn/refresh_fn은 테스트 주입용.
+    """
+    settings = official_fetch_settings(config)
+    if not settings["background_poll"]:
+        return
+    interval_sec = settings["min_interval_minutes"] * 60
+    conn = conn_factory()
+    try:
+        while not stop_event.is_set():
+            try:
+                refresh_fn(config, now_kst=now_fn(), conn=conn, manual=False)
+            except Exception:
+                pass
+            sleep_fn(interval_sec)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

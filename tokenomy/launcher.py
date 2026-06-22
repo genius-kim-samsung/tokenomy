@@ -30,8 +30,8 @@ class Api:
             webbrowser.open(url)
 
 
-# 상주 모드 상태 — webview 창/pystray 아이콘 참조 + 종료 플래그.
-_tray_state: dict = {"window": None, "icon": None, "quitting": False}
+# 상주 모드 상태 — webview 창/pystray 아이콘 참조 + 종료 플래그 + 백그라운드 폴 stop.
+_tray_state: dict = {"window": None, "icon": None, "quitting": False, "poll_stop": None}
 
 
 def _on_closing() -> bool:
@@ -94,9 +94,40 @@ def _on_open(icon=None, item=None) -> None:
     _show_window()
 
 
+def _start_background_poll() -> None:
+    """상주 모드 백그라운드 공식 갱신 폴 스레드 기동(ADR 0007).
+
+    창 숨김과 무관하게 자동 갱신 간격마다 공식 사용량을 갱신해 스냅샷 이력을 누적한다.
+    config의 background_poll가 꺼져 있으면 background_poll_loop가 즉시 반환한다(no-op).
+    stop_event는 종료(_on_quit) 시 set되어 sleep(stop_event.wait)을 깨운다.
+    """
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.config import load_config
+    from tokenomy.db import connect
+    from tokenomy.official_fetch import background_poll_loop
+
+    stop_event = threading.Event()
+    _tray_state["poll_stop"] = stop_event
+    config = load_config()
+
+    def _run() -> None:
+        background_poll_loop(
+            config,
+            conn_factory=connect,
+            now_fn=lambda: datetime.now(KST),
+            stop_event=stop_event,
+            sleep_fn=stop_event.wait,   # 종료 시 즉시 깨어남(블로킹 sleep 대신)
+        )
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def _on_quit(icon=None, item=None) -> None:
     """트레이 '종료' — 종료 플래그 후 창 파괴(메인 스레드 GUI 루프 종료)."""
     _tray_state["quitting"] = True
+    stop_event = _tray_state.get("poll_stop")
+    if stop_event is not None:
+        stop_event.set()
     window = _tray_state["window"]
     if window is not None:
         try:
@@ -255,6 +286,7 @@ def _launch_window(port: int) -> None:
         window.events.closing += _on_closing
         set_show_callback(_show_window)
         threading.Thread(target=icon.run, daemon=True).start()
+        _start_background_poll()   # 상주 모드에서만 — 단발 강등 시엔 폴 안 함(ADR 0007)
     webview.start()  # ← 메인 스레드 GUI 루프(블로킹). window.destroy()까지 반환 안 함.
     if icon is not None:
         try:

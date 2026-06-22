@@ -75,7 +75,10 @@ def official_fetch_settings(config: dict) -> dict:
         mi = int(raw.get("min_interval_minutes", 10))
     except (TypeError, ValueError):
         mi = 10
-    return {"min_interval_minutes": mi if mi > 0 else 10}
+    # background_poll: 상주 모드 중 창 숨김과 무관하게 공식 갱신을 주기 폴할지(ADR 0007).
+    # 기본 ON(콜드스타트 방지) — 끄면 갱신은 페이지 폴링·창 복원·수동 버튼에만 일어난다.
+    return {"min_interval_minutes": mi if mi > 0 else 10,
+            "background_poll": bool(raw.get("background_poll", True))}
 
 
 def forecast_settings(config: dict) -> dict:

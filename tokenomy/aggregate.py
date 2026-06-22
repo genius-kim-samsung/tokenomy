@@ -525,6 +525,126 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
     )
 
 
+# 통합 풀에 기여하는 USD 한도 버킷 종류(rate_window/promo 제외 — ADR 0007).
+_POOL_KINDS = ("monthly_limit", "event_credit", "codex_monthly")
+
+
+def pool_used_history(conn, provider: str) -> list[tuple[datetime, float]]:
+    """provider의 스냅샷별 통합 풀 used(USD) 시계열 [(fetched_at dt, used_usd 합)] 오름차순.
+
+    각 공식 스냅샷(fetched_at)에서 USD 한도 버킷(_POOL_KINDS & limit_usd 존재)의 used_usd를
+    합산한다 — official_view의 풀 집계(pool_*)와 동형이되 최신 스냅샷이 아니라 전 이력에 적용.
+    USD 한도 버킷이 하나도 없는 스냅샷(개인 구독 rate_window만 등)은 제외한다(공식 사용량
+    스냅샷 이력은 소진형 한도에만 의미, ADR 0007). 시각 파싱 실패 스냅샷도 제외한다.
+    """
+    rows = conn.execute(
+        "SELECT fetched_at, bucket_kind, used_usd, limit_usd FROM official_buckets "
+        "WHERE provider=? ORDER BY fetched_at ASC, id ASC",
+        (provider,),
+    ).fetchall()
+    by_snap: dict[str, float] = {}
+    for r in rows:
+        if r["bucket_kind"] in _POOL_KINDS and r["limit_usd"] is not None:
+            by_snap[r["fetched_at"]] = by_snap.get(r["fetched_at"], 0.0) + (r["used_usd"] or 0.0)
+    out: list[tuple[datetime, float]] = []
+    for ft, used in by_snap.items():
+        dt = parse_ts(ft)
+        if dt is not None:
+            out.append((dt, round(used, 4)))
+    out.sort(key=lambda p: p[0])
+    return out
+
+
+def _segment_points(points: list, max_gap_minutes: int | None) -> list:
+    """오름차순 [(dt, val)]을 연속 세그먼트로 분할한다(공식 스냅샷 이력 정직성, ADR 0007).
+
+    경계: ① 리셋 — val이 직전보다 작으면(누적이 떨어짐 = 청구 리셋) 끊는다. ② 갭 —
+    max_gap_minutes가 주어지고 직전 점과의 간격이 그보다 크면(수집 공백) 끊는다.
+    빈 구간은 잇지 않는다 — 호출자가 세그먼트별로 그려 갭/리셋을 가로지르지 않게 한다.
+    max_gap_minutes=None이면 갭으로는 끊지 않고 리셋으로만 끊는다.
+    """
+    segments: list = []
+    cur: list = []
+    prev_dt = None
+    prev_val = None
+    for dt, val in points:
+        if cur:
+            reset = val < prev_val
+            gap = (max_gap_minutes is not None
+                   and (dt - prev_dt).total_seconds() > max_gap_minutes * 60)
+            if reset or gap:
+                segments.append(cur)
+                cur = []
+        cur.append((dt, val))
+        prev_dt, prev_val = dt, val
+    if cur:
+        segments.append(cur)
+    return segments
+
+
+def pool_history(conn, providers: list[str], *, max_gap_minutes: int | None = None) -> list:
+    """활성 providers의 통합 풀 used(USD) 과거 곡선을 세그먼트 리스트로 반환(ADR 0007).
+
+    각 세그먼트=연속 구간 [{"ts": iso, "used_usd": float}, ...] 오름차순. 전망 차트가
+    세그먼트별로 그려 갭/리셋을 가로지르지 않게 한다. USD 풀 기여가 있는 provider만
+    합산한다(rate_window-only는 pool_used_history에서 이미 빠짐).
+
+    여러 provider는 서로 다른 시각에 찍히므로 합집합 타임라인에서 각 provider의 가장
+    최근 값(≤T)을 forward-fill해 합산한다. forward-fill은 다음을 넘지 않는다:
+    ① 어느 provider의 마지막 표본이 max_gap보다 오래됐으면(수집 공백) 그 시점 합산을 생략(끊김),
+    ② 어느 provider가 새 세그먼트를 시작하면(리셋/공백 복귀) 그 시점에서 세그먼트를 끊는다.
+    max_gap_minutes=None이면 갭으로 끊지 않고 리셋으로만 끊는다.
+    """
+    contributing = []
+    for p in providers:
+        hist = pool_used_history(conn, p)
+        if hist:
+            contributing.append(hist)
+    if not contributing:
+        return []
+
+    boundaries = set()       # provider별 세그먼트 시작 시각(리셋/공백 복귀 경계)
+    union_times: set = set()
+    for hist in contributing:
+        for seg in _segment_points(hist, max_gap_minutes):
+            boundaries.add(seg[0][0])
+        for dt, _v in hist:
+            union_times.add(dt)
+    times = sorted(union_times)
+    max_gap_sec = max_gap_minutes * 60 if max_gap_minutes is not None else None
+
+    def _value_at(hist, T):
+        """hist에서 T 이하 가장 최근 값. 없거나 max_gap보다 오래되면 None(forward-fill 끊김)."""
+        latest = None
+        for dt, val in hist:        # hist 오름차순
+            if dt <= T:
+                latest = (dt, val)
+            else:
+                break
+        if latest is None:
+            return None
+        if max_gap_sec is not None and (T - latest[0]).total_seconds() > max_gap_sec:
+            return None
+        return latest[1]
+
+    segments: list = []
+    cur: list = []
+    for T in times:
+        vals = [_value_at(h, T) for h in contributing]
+        if any(v is None for v in vals):
+            if cur:
+                segments.append(cur)
+                cur = []
+            continue
+        if cur and T in boundaries:
+            segments.append(cur)
+            cur = []
+        cur.append({"ts": T.isoformat(), "used_usd": round(sum(vals), 4)})
+    if cur:
+        segments.append(cur)
+    return segments
+
+
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None,
                *, start: datetime | None = None, nxt: datetime | None = None,
                providers: list[str] | None = None) -> list[ProjectRow]:

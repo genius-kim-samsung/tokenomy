@@ -15,11 +15,12 @@ from tokenomy.aggregate import (
     week_count,
     combined_forecast, CombinedForecast,
     _trailing_business_days, trailing_window_spend,
+    pool_used_history, _segment_points, pool_history,
 )
 from tokenomy.db import connect, insert_official_buckets, ingest_records
 from tokenomy.official_parser import OfficialBucket
 from tokenomy.parser import UsageRecord
-from tokenomy.web.views import build_date_tree, history_context, dimension_context, overview_context, session_context
+from tokenomy.web.views import build_date_tree, history_context, dimension_context, overview_context, session_context, pool_history_to_daily
 
 # June 2026 has 30 days
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
@@ -1913,3 +1914,163 @@ def test_overview_context_active_empty_flag(monkeypatch, tmp_path):
     ctx = _ctx_with_active(monkeypatch, tmp_path, '[]')
     assert ctx["active_empty"] is True
     assert ctx["combined"] is False
+
+
+# --- 공식 사용량 스냅샷 이력: 통합 풀 used 시계열(ADR 0007) ---
+
+
+def test_pool_used_history_empty():
+    conn = connect(":memory:")
+    assert pool_used_history(conn, "claude") == []
+
+
+def test_pool_used_history_ascending_per_snapshot():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:10:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 42.0, 100.0, raw="spend")],
+                            created_at="x")
+    hist = pool_used_history(conn, "claude")
+    assert [u for _, u in hist] == [30.0, 42.0]
+    assert hist[0][0] == parse_ts("2026-06-10T09:00:00+09:00")
+    assert hist[0][0] < hist[1][0]
+
+
+def test_pool_used_history_sums_usd_buckets_excludes_rate_window():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 125.0, 500.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST)),
+                                     _ob("rate_window", "rate_window", None, None, raw="five_hour",
+                                         unit="percent", util=40.0)],
+                            created_at="x")
+    hist = pool_used_history(conn, "claude")
+    assert hist == [(parse_ts("2026-06-10T09:00:00+09:00"), 155.0)]  # 30 + 125, rate_window 제외
+
+
+def test_pool_used_history_excludes_snapshot_without_usd_limit():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("rate_window", "rate_window", None, None, raw="five_hour",
+                                         unit="percent", util=40.0)],
+                            created_at="x")
+    assert pool_used_history(conn, "claude") == []
+
+
+# --- 세그먼트 분할(_segment_points): 리셋·갭에서 선 끊기(ADR 0007) ---
+
+
+def _t(minute):
+    return datetime(2026, 6, 10, 9, 0, tzinfo=KST) + timedelta(minutes=minute)
+
+
+def test_segment_points_empty():
+    assert _segment_points([], max_gap_minutes=30) == []
+
+
+def test_segment_points_single():
+    p = [(_t(0), 10.0)]
+    assert _segment_points(p, max_gap_minutes=30) == [p]
+
+
+def test_segment_points_monotonic_one_segment():
+    p = [(_t(0), 10.0), (_t(10), 20.0), (_t(20), 25.0)]
+    assert _segment_points(p, max_gap_minutes=30) == [p]
+
+
+def test_segment_points_splits_on_reset_drop():
+    p = [(_t(0), 80.0), (_t(10), 90.0), (_t(20), 5.0), (_t(30), 12.0)]  # 90→5 리셋
+    assert _segment_points(p, max_gap_minutes=30) == [
+        [(_t(0), 80.0), (_t(10), 90.0)], [(_t(20), 5.0), (_t(30), 12.0)]]
+
+
+def test_segment_points_splits_on_time_gap():
+    p = [(_t(0), 10.0), (_t(10), 20.0), (_t(50), 30.0)]  # 10→50 = 40분 > 30
+    assert _segment_points(p, max_gap_minutes=30) == [
+        [(_t(0), 10.0), (_t(10), 20.0)], [(_t(50), 30.0)]]
+
+
+def test_segment_points_no_gap_break_within_threshold():
+    p = [(_t(0), 10.0), (_t(25), 20.0)]  # 25 ≤ 30
+    assert _segment_points(p, max_gap_minutes=30) == [p]
+
+
+def test_segment_points_none_gap_only_reset_breaks():
+    p = [(_t(0), 10.0), (_t(500), 20.0), (_t(510), 5.0)]  # max_gap None → 갭 무시, 리셋만
+    assert _segment_points(p, max_gap_minutes=None) == [
+        [(_t(0), 10.0), (_t(500), 20.0)], [(_t(510), 5.0)]]
+
+
+# --- 통합 풀 과거 곡선(pool_history): forward-fill 합산 + 갭/리셋 끊기(ADR 0007) ---
+
+
+def _seed_pool(conn, provider, kind, raw, samples, limit=100.0, unit="usd"):
+    for minute, used in samples:
+        insert_official_buckets(
+            conn, provider=provider, fetched_at=_t(minute).isoformat(),
+            buckets=[_ob("monthly", kind, used, limit, raw=raw, unit=unit)], created_at="x")
+
+
+def test_pool_history_empty():
+    conn = connect(":memory:")
+    assert pool_history(conn, ["claude", "codex"], max_gap_minutes=30) == []
+
+
+def test_pool_history_single_provider_segments_on_reset():
+    conn = connect(":memory:")
+    _seed_pool(conn, "claude", "monthly_limit", "spend", [(0, 80.0), (10, 90.0), (20, 5.0)])
+    segs = pool_history(conn, ["claude"], max_gap_minutes=30)
+    assert [[p["used_usd"] for p in s] for s in segs] == [[80.0, 90.0], [5.0]]
+    assert segs[0][0]["ts"] == _t(0).isoformat()
+
+
+def test_pool_history_two_providers_summed_forward_fill():
+    conn = connect(":memory:")
+    _seed_pool(conn, "claude", "monthly_limit", "spend", [(0, 30.0), (10, 40.0)])
+    _seed_pool(conn, "codex", "codex_monthly", "individual_limit", [(0, 20.0), (10, 25.0)],
+               limit=80.0, unit="credit")
+    segs = pool_history(conn, ["claude", "codex"], max_gap_minutes=30)
+    assert len(segs) == 1
+    assert [p["used_usd"] for p in segs[0]] == [50.0, 65.0]  # 30+20, 40+25
+
+
+def test_pool_history_breaks_on_provider_reset():
+    conn = connect(":memory:")
+    _seed_pool(conn, "claude", "monthly_limit", "spend", [(0, 30.0), (10, 40.0), (20, 50.0)])
+    _seed_pool(conn, "codex", "codex_monthly", "individual_limit", [(0, 20.0), (10, 25.0), (20, 2.0)],
+               limit=80.0, unit="credit")  # codex 리셋 t20: 25→2
+    segs = pool_history(conn, ["claude", "codex"], max_gap_minutes=30)
+    assert [[p["used_usd"] for p in s] for s in segs] == [[50.0, 65.0], [52.0]]
+
+
+# --- pool_history_to_daily: 과거 곡선을 전망 차트 일-인덱스에 매핑(ADR 0007) ---
+
+
+def test_pool_history_to_daily_maps_by_day_last_wins():
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=KST)
+    days = list(range(1, 31))  # 1..30
+    segs = [[
+        {"ts": datetime(2026, 6, 3, 9, 0, tzinfo=KST).isoformat(), "used_usd": 10.0},
+        {"ts": datetime(2026, 6, 3, 15, 0, tzinfo=KST).isoformat(), "used_usd": 12.0},  # 같은 날 → 나중 값
+        {"ts": datetime(2026, 6, 5, 9, 0, tzinfo=KST).isoformat(), "used_usd": 20.0},
+    ]]
+    out = pool_history_to_daily(segs, days, now)
+    assert out[2] == 12.0    # day 3 → index 2
+    assert out[4] == 20.0    # day 5 → index 4
+    assert out[0] is None and out[3] is None  # 데이터 없는 날 = None(끊김)
+
+
+def test_pool_history_to_daily_ignores_other_months():
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=KST)
+    days = list(range(1, 31))
+    segs = [[{"ts": datetime(2026, 5, 20, 9, 0, tzinfo=KST).isoformat(), "used_usd": 99.0}]]  # 5월 → 무시
+    assert all(v is None for v in pool_history_to_daily(segs, days, now))
+
+
+def test_pool_history_to_daily_empty():
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=KST)
+    days = list(range(1, 31))
+    assert pool_history_to_daily([], days, now) == [None] * 30

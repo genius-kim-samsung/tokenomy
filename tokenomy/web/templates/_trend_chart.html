@@ -6,6 +6,7 @@
   const trendTotals = {{ trend_totals|tojson }};    // 그날 합계(=맨 위 밴드 top)
   const forecastLimit = {{ forecast_limit|tojson }};   // 통합 한도(수평선). null이면 미표시
   const forecastLine = {{ forecast_line|tojson }};     // 월말까지 예상 used(점선). null이면 미표시
+  const forecastActual = {{ forecast_actual|tojson }}; // 실제 과거 used(공식 스냅샷 이력, 실선). 갱신 없는 날은 null=끊김(ADR 0007)
 
   // provider 밴드: top을 데이터로, fill 상대참조로 아래 밴드까지 채움
   const areaSets = trendSeries.map((s, i) => ({
@@ -85,8 +86,15 @@
     },
   };
 
-  // 예상선(점선) + 통합 한도 수평선 데이터셋 구성
+  // 실제 과거 실선(공식 스냅샷 이력) + 예상선(점선) + 통합 한도 수평선 데이터셋 구성
   const forecastSets = [];
+  if (forecastActual && forecastActual.some((v) => v != null)) {
+    forecastSets.push({
+      label: '실제(공식)', data: forecastActual,
+      borderColor: 'rgba(122,162,247,0.95)', borderWidth: 2,
+      backgroundColor: 'transparent', fill: false, tension: .1, pointRadius: 0, spanGaps: false,
+    });
+  }
   if (forecastLine) {
     forecastSets.push({
       label: '예상', data: forecastLine,

@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup,
     _provider_where, by_day_session, by_dimension, by_project, by_session,
-    combined_forecast, daily_series,
+    combined_forecast, daily_series, pool_history,
     insights, month_bounds, month_spend, official_view, parse_ts, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
@@ -129,6 +129,28 @@ def forecast_chart_data(fc, daily, now_kst: datetime) -> dict:
                 bd += 1
             line[i] = round(fc.used_usd + fc.daily_rate_usd * bd, 4)
     return {"limit": fc.limit_usd, "line": line}
+
+
+def pool_history_to_daily(segments, days, now_kst: datetime) -> list:
+    """통합 풀 과거 세그먼트(aggregate.pool_history) → days 정렬 per-day used 배열(전망 차트 실선용, ADR 0007).
+
+    각 날(현재 월·KST)의 마지막 스냅샷 used_usd를 해당 day 인덱스에 넣는다. 데이터 없는 날은
+    None(차트가 spanGaps:false로 잇지 않음). 다른 월·미래 점은 무시한다. 세그먼트 경계(리셋/갭)는
+    day 해상도로 환원되며 데이터 없는 날의 None으로 끊긴다(월 경계 리셋은 대개 차트 범위 밖).
+    """
+    idx_of = {d: i for i, d in enumerate(days)}
+    out: list = [None] * len(days)
+    for seg in segments:
+        for p in seg:
+            dt = parse_ts(p["ts"])
+            if dt is None:
+                continue
+            dt = dt.astimezone(KST)
+            if dt.year == now_kst.year and dt.month == now_kst.month:
+                i = idx_of.get(dt.day)
+                if i is not None:
+                    out[i] = p["used_usd"]
+    return out
 
 
 def _gauge_level(util: float | None) -> str:
@@ -391,6 +413,11 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     forecast_obj = combined_forecast(conn, forecast_views, now, weeks)
     forecast = _forecast_hero(forecast_obj)
     fc_chart = forecast_chart_data(forecast_obj, daily, now)
+    # 공식 사용량 스냅샷 이력 → 전망 차트 실제 과거 실선(ADR 0007). 활성 USD 풀만.
+    # max_gap = 자동 갱신 간격 ×3(그보다 긴 공백은 수집 단절로 보아 선을 끊는다).
+    interval = official_fetch_settings(config)["min_interval_minutes"]
+    pool_hist = pool_history(conn, active, max_gap_minutes=interval * 3)
+    forecast_actual = pool_history_to_daily(pool_hist, [p.day for p in daily], now)
 
     # 추세 밴드 = 활성 ∩ 데이터 있는 provider. stacked_trend·차트 JS는 무변경(N밴드 generic).
     trend_providers = [p for p in _TREND_STYLE if p in active and _provider_has_data(conn, p)]
@@ -427,6 +454,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "forecast": forecast,
         "forecast_limit": fc_chart["limit"],
         "forecast_line": fc_chart["line"],
+        "forecast_actual": forecast_actual,
         "official_cards": official_cards(conn, config, now),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
         "projects": projects, "sessions": sessions, "insights": coach,
