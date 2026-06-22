@@ -91,11 +91,12 @@ def forecast_settings(config: dict) -> dict:
 
 
 def mini_view_settings(config: dict) -> dict:
-    """미니 뷰(상주 동반 글랜스 창, ADR 0008) 표시 설정.
+    """미니 뷰(상주 모드 안의 배타 전환 글랜스 창, ADR 0008) 표시 설정.
 
-    enabled = 트레이 토글 on/off. 기본 False(opt-in — 명시적 off도 그대로 영속).
-    x/y = 마지막 창 위치(int|None). 미설정·비숫자는 None으로 폴백 → 런처가 기본 코너에 둔다
-    (오설정 좌표로 창 배치가 깨지지 않게). 위치 저장은 창의 moved 이벤트가 담당한다.
+    last_view = 마지막 본 뷰("main"|"mini"). 기본 "main"(최초 실행·미설정·알 수 없는 값은
+    일반뷰로 안전 복원). 트레이 "열기"·재실행·재시작이 이 값으로 복원한다.
+    x/y = 마지막 미니 창 위치(int|None). 미설정·비숫자는 None으로 폴백 → 런처가 기본 코너에 둔다
+    (오설정 좌표로 창 배치가 깨지지 않게). 위치 저장은 미니 창의 moved 이벤트가 담당한다.
     """
     raw = config.get("mini_view") or {}
 
@@ -105,7 +106,10 @@ def mini_view_settings(config: dict) -> dict:
         except (TypeError, ValueError):
             return None
 
-    return {"enabled": bool(raw.get("enabled", False)),
+    last_view = raw.get("last_view")
+    if last_view not in ("main", "mini"):
+        last_view = "main"
+    return {"last_view": last_view,
             "x": _coord(raw.get("x")), "y": _coord(raw.get("y"))}
 
 

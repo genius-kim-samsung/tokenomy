@@ -333,29 +333,29 @@ def test_build_tray_uses_default_open_and_quit_items(monkeypatch):
     assert icon.title == "Tokenomy"
 
 
-def test_build_tray_has_mini_view_toggle(monkeypatch):
-    """트레이에 '미니 뷰' 체크형 토글 — _toggle_mini 액션 + mini_shown을 반영하는 checked."""
+def test_build_tray_has_no_mini_toggle(monkeypatch):
+    """배타 전환 — 트레이엔 '미니 뷰' 토글이 없다('열기'=마지막 뷰, 전환은 창 버튼)."""
     items = []
     class FakeMenuItem:
         def __init__(self, text, action, checked=None, default=False, **kw):
-            items.append((text, action, checked, default))
+            items.append(text)
     class FakeMenu:
-        def __init__(self, *menuitems): self.menuitems = menuitems
+        def __init__(self, *menuitems): pass
     class FakeIconCls:
         def __init__(self, name, image, title, menu=None): self.title = title
     fake_pystray = type("M", (), {"Menu": FakeMenu, "MenuItem": FakeMenuItem, "Icon": FakeIconCls})
     monkeypatch.setitem(__import__("sys").modules, "pystray", fake_pystray)
     monkeypatch.setattr(launcher, "_tray_image", lambda: "IMG")
     launcher._build_tray()
-    by_text = {t: (a, c) for (t, a, c, d) in items}
-    assert "미니 뷰" in by_text
-    action, checked = by_text["미니 뷰"]
-    assert action is launcher._toggle_mini
-    # checked는 현재 표시 상태를 반영하는 callable
-    launcher._tray_state["mini_shown"] = True
-    assert checked(None) is True
-    launcher._tray_state["mini_shown"] = False
-    assert checked(None) is False
+    assert items == ["열기", "종료"]
+
+
+def test_on_open_restores_last_view(monkeypatch):
+    """트레이 '열기'/기본 클릭 → 마지막 본 뷰 복원(_restore_last_view)."""
+    called = []
+    monkeypatch.setattr(launcher, "_restore_last_view", lambda: called.append(True))
+    launcher._on_open()
+    assert called == [True]
 
 
 class _Slot:
@@ -381,9 +381,13 @@ def _install_fake_webview(monkeypatch, log, created):
         kind = "mini" if (url and url.endswith("/mini")) else "main"
         created.append({"kind": kind, "url": url, "kw": k})
         return _LaunchWin(log, kind)
+    def start(cb=None):
+        log.append(("start",))
+        if cb is not None:
+            cb()                       # GUI 루프 시작 직후 콜백(_on_gui_start) 실행 모사
     fake = type("W", (), {
         "create_window": staticmethod(create_window),
-        "start": staticmethod(lambda: log.append(("start",))),
+        "start": staticmethod(start),
     })
     monkeypatch.setitem(sys.modules, "webview", fake)
     return fake
@@ -394,6 +398,12 @@ def _isolate_config(monkeypatch, tmp_path, body="{}"):
     cfg.write_text(body, encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     return cfg
+
+
+def _fresh_state(quitting=False):
+    """_launch_window용 초기 _tray_state(배타 전환 — current_view/port 포함, 미니 미생성)."""
+    return {"window": None, "icon": None, "quitting": quitting,
+            "mini": None, "current_view": "main", "port": None}
 
 
 def test_launch_window_wires_tray_and_stops_on_exit(monkeypatch, tmp_path):
@@ -407,8 +417,7 @@ def test_launch_window_wires_tray_and_stops_on_exit(monkeypatch, tmp_path):
         def stop(self): self.stopped = True
     icon = FakeIcon()
     monkeypatch.setattr(launcher, "_build_tray", lambda: icon)
-    monkeypatch.setattr(launcher, "_tray_state",
-                        {"window": None, "icon": None, "quitting": True, "mini": None, "mini_shown": False})
+    monkeypatch.setattr(launcher, "_tray_state", _fresh_state(quitting=True))
 
     class FakeThread:
         def __init__(self, target=None, daemon=None, **k): self.target = target
@@ -419,47 +428,41 @@ def test_launch_window_wires_tray_and_stops_on_exit(monkeypatch, tmp_path):
 
     launcher._launch_window(9999)
     assert ("closing", launcher._on_closing) in log          # 큰 창 닫기 핸들러
-    assert ("closing", launcher._on_mini_closing) in log     # 미니 닫기 핸들러
-    assert ("moved", launcher._save_mini_position) in log    # 미니 위치 저장
-    assert ("cb", launcher._show_window) in log              # 복원 콜백 등록
+    assert ("cb", launcher._restore_last_view) in log        # 복원 콜백 = 마지막 뷰
     assert ("start",) in log                                  # GUI 루프 진입
     assert icon.stopped is True
 
 
-def test_launch_window_creates_mini_hidden_frameless_on_top(monkeypatch, tmp_path):
-    _isolate_config(monkeypatch, tmp_path)
+def test_launch_window_does_not_create_mini_at_startup(monkeypatch, tmp_path):
+    """배타 전환 — 시작 시 미니 창을 만들지 않는다(흰 창 차단; lazy create)."""
+    _isolate_config(monkeypatch, tmp_path)            # last_view 미설정 → main
     log, created = [], []
     _install_fake_webview(monkeypatch, log, created)
     monkeypatch.setattr(launcher, "_build_tray", lambda: type("I", (), {"run": lambda s: None, "stop": lambda s: None})())
-    monkeypatch.setattr(launcher, "_tray_state",
-                        {"window": None, "icon": None, "quitting": True, "mini": None, "mini_shown": False})
+    monkeypatch.setattr(launcher, "_tray_state", _fresh_state(quitting=True))
     monkeypatch.setattr(launcher.threading, "Thread", type("T", (), {"__init__": lambda s, **k: None, "start": lambda s: None}))
     monkeypatch.setattr("tokenomy.web.control.set_show_callback", lambda fn: None)
 
     launcher._launch_window(9999)
-    mini = next(c for c in created if c["kind"] == "mini")
-    assert mini["url"].endswith("/mini")
-    assert mini["kw"].get("frameless") is True
-    assert mini["kw"].get("on_top") is True
-    assert mini["kw"].get("hidden") is True
-    assert mini["kw"].get("easy_drag") is True
-    assert launcher._tray_state["mini"] is not None
+    assert all(c["kind"] != "mini" for c in created)  # 미니 미생성
+    assert launcher._tray_state["mini"] is None
+    assert launcher._tray_state["current_view"] == "main"
 
 
-def test_launch_window_shows_mini_when_enabled(monkeypatch, tmp_path):
-    # config에서 미니 뷰 enabled → 런치 시 마지막 상태 복원(표시).
-    _isolate_config(monkeypatch, tmp_path, '{"mini_view": {"enabled": true}}')
+def test_launch_window_starts_in_mini_when_last_view_mini(monkeypatch, tmp_path):
+    """last_view='mini' → GUI 시작 콜백(_on_gui_start)이 미니로 전환(큰 창 숨김 + 미니 lazy 생성)."""
+    _isolate_config(monkeypatch, tmp_path, '{"mini_view": {"last_view": "mini"}}')
     log, created = [], []
     _install_fake_webview(monkeypatch, log, created)
     monkeypatch.setattr(launcher, "_build_tray", lambda: type("I", (), {"run": lambda s: None, "stop": lambda s: None})())
-    monkeypatch.setattr(launcher, "_tray_state",
-                        {"window": None, "icon": None, "quitting": True, "mini": None, "mini_shown": False})
+    monkeypatch.setattr(launcher, "_tray_state", _fresh_state(quitting=True))
     monkeypatch.setattr(launcher.threading, "Thread", type("T", (), {"__init__": lambda s, **k: None, "start": lambda s: None}))
     monkeypatch.setattr("tokenomy.web.control.set_show_callback", lambda fn: None)
+    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: None)
 
     launcher._launch_window(9999)
-    assert launcher._tray_state["mini_shown"] is True
-    assert "show" in launcher._tray_state["mini"].calls
+    assert any(c["kind"] == "mini" for c in created)            # 미니 lazy 생성됨
+    assert launcher._tray_state["current_view"] == "mini"
 
 
 def test_launch_window_degrades_to_single_shot_when_tray_unavailable(monkeypatch, tmp_path):
@@ -472,8 +475,7 @@ def test_launch_window_degrades_to_single_shot_when_tray_unavailable(monkeypatch
     def boom():
         raise RuntimeError("pystray 미가용")
     monkeypatch.setattr(launcher, "_build_tray", boom)
-    monkeypatch.setattr(launcher, "_tray_state",
-                        {"window": None, "icon": None, "quitting": True, "mini": None, "mini_shown": False})
+    monkeypatch.setattr(launcher, "_tray_state", _fresh_state(quitting=True))
     monkeypatch.setattr("tokenomy.web.control.set_show_callback",
                         lambda fn: log.append(("cb", fn)))
 
@@ -488,10 +490,11 @@ def test_launch_window_degrades_to_single_shot_when_tray_unavailable(monkeypatch
 # Task 5: 미니 뷰(ADR 0008) — 위치 계산·영속·핸들러·브리지
 # ──────────────────────────────────────────────
 
-def _reset_mini_state(monkeypatch, mini=None, mini_shown=False, quitting=False):
+def _reset_mini_state(monkeypatch, window=None, mini=None, current_view="main",
+                      quitting=False, port=9999):
     monkeypatch.setattr(launcher, "_tray_state",
-                        {"window": None, "icon": None, "quitting": quitting,
-                         "mini": mini, "mini_shown": mini_shown})
+                        {"window": window, "icon": None, "quitting": quitting,
+                         "mini": mini, "current_view": current_view, "port": port})
 
 
 # ── 위치 계산(순수) ──────────────────────────────────────────────────────────
@@ -517,91 +520,138 @@ def test_default_mini_position_bottom_right():
 
 
 # ── 설정 영속 ────────────────────────────────────────────────────────────────
-def test_persist_mini_writes_enabled(monkeypatch, tmp_path):
+def test_persist_mini_writes_last_view(monkeypatch, tmp_path):
     cfg = tmp_path / "c.json"
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
-    launcher._persist_mini(enabled=True)
+    launcher._persist_mini(last_view="mini")
     import json
-    assert json.loads(cfg.read_text(encoding="utf-8"))["mini_view"]["enabled"] is True
+    assert json.loads(cfg.read_text(encoding="utf-8"))["mini_view"]["last_view"] == "mini"
 
 
-def test_persist_mini_merges_position_keeping_enabled(monkeypatch, tmp_path):
+def test_persist_mini_merges_position_keeping_last_view(monkeypatch, tmp_path):
     cfg = tmp_path / "c.json"
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
-    launcher._persist_mini(enabled=True)
-    launcher._persist_mini(x=10, y=20)          # 위치만 저장해도 enabled 보존
+    launcher._persist_mini(last_view="mini")
+    launcher._persist_mini(x=10, y=20)          # 위치만 저장해도 last_view 보존
     import json
     mv = json.loads(cfg.read_text(encoding="utf-8"))["mini_view"]
-    assert mv == {"enabled": True, "x": 10, "y": 20}
+    assert mv == {"last_view": "mini", "x": 10, "y": 20}
 
 
-def test_persist_mini_enabled_false_is_written(monkeypatch, tmp_path):
+def test_persist_mini_ignores_none_fields(monkeypatch, tmp_path):
     cfg = tmp_path / "c.json"
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
-    launcher._persist_mini(enabled=False)       # False도 영속(None만 무시)
+    launcher._persist_mini(last_view="mini", x=5, y=6)
+    launcher._persist_mini(x=None, y=99)        # None은 무시, 99만 반영(merge None-filter)
     import json
-    assert json.loads(cfg.read_text(encoding="utf-8"))["mini_view"]["enabled"] is False
+    mv = json.loads(cfg.read_text(encoding="utf-8"))["mini_view"]
+    assert mv == {"last_view": "mini", "x": 5, "y": 99}
 
 
-# ── 핸들러: show/hide/toggle/closing/resize ──────────────────────────────────
-def test_show_mini_shows_and_persists_on(monkeypatch):
+# ── lazy 생성 ────────────────────────────────────────────────────────────────
+def test_ensure_mini_lazy_creates_visible_frameless(monkeypatch, tmp_path):
+    """미니 없으면 보이는 프레임리스 on_top 창으로 lazy 생성(hidden 아님 — 흰 창 회피)."""
+    _isolate_config(monkeypatch, tmp_path)
+    log, created = [], []
+    _install_fake_webview(monkeypatch, log, created)
+    _reset_mini_state(monkeypatch, mini=None, port=9999)
+    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: None)
+    mini = launcher._ensure_mini()
+    c = next(c for c in created if c["kind"] == "mini")
+    assert c["url"].endswith("/mini")
+    assert c["kw"].get("frameless") is True and c["kw"].get("on_top") is True
+    assert c["kw"].get("easy_drag") is True
+    assert "hidden" not in c["kw"]                       # 보이게 생성 → 흰 창 차단
+    assert launcher._tray_state["mini"] is mini
+    assert ("closing", launcher._on_mini_closing) in log  # 닫기=트레이숨김 와이어링
+    assert ("moved", launcher._save_mini_position) in log # 위치 저장 와이어링
+
+
+def test_ensure_mini_reuses_existing(monkeypatch):
+    """이미 있으면 재생성하지 않고 그대로 반환(webview.create_window 미호출)."""
     w = _FakeWindow()
-    _reset_mini_state(monkeypatch, mini=w, mini_shown=False)
+    _reset_mini_state(monkeypatch, mini=w)
+    assert launcher._ensure_mini() is w
+
+
+# ── 전환: to_mini / to_main / hide_to_tray / 복원 ────────────────────────────
+def test_to_mini_hides_main_shows_mini_persists(monkeypatch):
+    w_main, w_mini = _FakeWindow(), _FakeWindow()
+    _reset_mini_state(monkeypatch, window=w_main, mini=w_mini, current_view="main")
     saved = []
     monkeypatch.setattr(launcher, "_persist_mini", lambda **k: saved.append(k))
-    launcher._show_mini()
-    assert "show" in w.calls
-    assert launcher._tray_state["mini_shown"] is True
-    assert {"enabled": True} in saved
+    launcher._to_mini()
+    assert "hide" in w_main.calls and "show" in w_mini.calls
+    assert launcher._tray_state["current_view"] == "mini"
+    assert {"last_view": "mini"} in saved
 
 
-def test_hide_mini_hides_and_persists_off(monkeypatch):
-    w = _FakeWindow()
-    _reset_mini_state(monkeypatch, mini=w, mini_shown=True)
-    saved = []
+def test_to_main_hides_mini_restores_main_persists(monkeypatch):
+    w_main, w_mini = _FakeWindow(), _FakeWindow()
+    _reset_mini_state(monkeypatch, window=w_main, mini=w_mini, current_view="mini")
+    saved, shown = [], []
     monkeypatch.setattr(launcher, "_persist_mini", lambda **k: saved.append(k))
-    launcher._hide_mini()
-    assert "hide" in w.calls
-    assert launcher._tray_state["mini_shown"] is False
-    assert {"enabled": False} in saved
+    monkeypatch.setattr(launcher, "_show_window", lambda: shown.append(True))
+    launcher._to_main()
+    assert "hide" in w_mini.calls
+    assert launcher._tray_state["current_view"] == "main"
+    assert {"last_view": "main"} in saved
+    assert shown == [True]                               # 큰 창 복원(ingest 1회 동반)
 
 
-def test_toggle_mini_flips_show_hide(monkeypatch):
-    w = _FakeWindow()
-    _reset_mini_state(monkeypatch, mini=w, mini_shown=False)
-    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: None)
-    launcher._toggle_mini()
-    assert launcher._tray_state["mini_shown"] is True and "show" in w.calls
-    launcher._toggle_mini()
-    assert launcher._tray_state["mini_shown"] is False and "hide" in w.calls
+def test_hide_mini_to_tray_keeps_view_mini(monkeypatch):
+    """미니 ✕/X → 트레이 숨김. current_view는 'mini' 유지 → 다음 복원도 미니."""
+    w_mini = _FakeWindow()
+    _reset_mini_state(monkeypatch, mini=w_mini, current_view="mini")
+    monkeypatch.setattr(launcher, "_maybe_first_time_notice", lambda: None)
+    launcher._hide_mini_to_tray()
+    assert "hide" in w_mini.calls
+    assert launcher._tray_state["current_view"] == "mini"
 
 
-def test_on_mini_closing_hides_and_cancels(monkeypatch):
-    w = _FakeWindow()
-    _reset_mini_state(monkeypatch, mini=w, mini_shown=True)
-    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: None)
-    assert launcher._on_mini_closing() is False     # 닫기 취소(파괴 아님)
-    assert "hide" in w.calls
-    assert launcher._tray_state["mini_shown"] is False
+def test_on_mini_closing_hides_to_tray_and_cancels(monkeypatch):
+    w_mini = _FakeWindow()
+    _reset_mini_state(monkeypatch, mini=w_mini, current_view="mini")
+    monkeypatch.setattr(launcher, "_maybe_first_time_notice", lambda: None)
+    assert launcher._on_mini_closing() is False         # 파괴 취소(트레이 숨김)
+    assert "hide" in w_mini.calls
 
 
 def test_on_mini_closing_allows_close_when_quitting(monkeypatch):
-    w = _FakeWindow()
-    _reset_mini_state(monkeypatch, mini=w, mini_shown=True, quitting=True)
-    assert launcher._on_mini_closing() is True      # 앱 종료 중 → 진짜 닫기 허용
-    assert "hide" not in w.calls
+    w_mini = _FakeWindow()
+    _reset_mini_state(monkeypatch, mini=w_mini, current_view="mini", quitting=True)
+    assert launcher._on_mini_closing() is True          # 앱 종료 중 → 진짜 닫기
+    assert "hide" not in w_mini.calls
+
+
+def test_restore_last_view_main(monkeypatch):
+    _reset_mini_state(monkeypatch, current_view="main")
+    seen = []
+    monkeypatch.setattr(launcher, "_show_window", lambda: seen.append("main"))
+    monkeypatch.setattr(launcher, "_show_mini_window", lambda: seen.append("mini"))
+    launcher._restore_last_view()
+    assert seen == ["main"]
+
+
+def test_restore_last_view_mini(monkeypatch):
+    _reset_mini_state(monkeypatch, current_view="mini")
+    seen = []
+    monkeypatch.setattr(launcher, "_show_window", lambda: seen.append("main"))
+    monkeypatch.setattr(launcher, "_show_mini_window", lambda: seen.append("mini"))
+    launcher._restore_last_view()
+    assert seen == ["mini"]
 
 
 def test_resize_mini_uses_mini_width(monkeypatch):
     w = _FakeWindow()
-    _reset_mini_state(monkeypatch, mini=w, mini_shown=True)
+    _reset_mini_state(monkeypatch, mini=w)
     launcher._resize_mini(150)
     assert ("resize", launcher.MINI_WIDTH, 150) in w.calls
 
 
 def test_resize_mini_ignores_bad_height(monkeypatch):
     w = _FakeWindow()
-    _reset_mini_state(monkeypatch, mini=w, mini_shown=True)
+    _reset_mini_state(monkeypatch, mini=w)
     launcher._resize_mini(0)
     launcher._resize_mini("x")
     assert not any(isinstance(c, tuple) and c[0] == "resize" for c in w.calls)
@@ -616,17 +666,24 @@ def test_save_mini_position_persists_xy(monkeypatch):
 
 
 # ── JS 브리지(Api) ───────────────────────────────────────────────────────────
-def test_api_open_main_restores_big_window(monkeypatch):
+def test_api_to_mini_delegates(monkeypatch):
     called = []
-    monkeypatch.setattr(launcher, "_show_window", lambda: called.append(True))
-    launcher.Api().open_main()
+    monkeypatch.setattr(launcher, "_to_mini", lambda: called.append(True))
+    launcher.Api().to_mini()
     assert called == [True]
 
 
-def test_api_close_mini_hides(monkeypatch):
+def test_api_to_main_delegates(monkeypatch):
     called = []
-    monkeypatch.setattr(launcher, "_hide_mini", lambda: called.append(True))
-    launcher.Api().close_mini()
+    monkeypatch.setattr(launcher, "_to_main", lambda: called.append(True))
+    launcher.Api().to_main()
+    assert called == [True]
+
+
+def test_api_hide_to_tray_delegates(monkeypatch):
+    called = []
+    monkeypatch.setattr(launcher, "_hide_mini_to_tray", lambda: called.append(True))
+    launcher.Api().hide_to_tray()
     assert called == [True]
 
 

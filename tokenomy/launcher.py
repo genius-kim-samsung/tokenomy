@@ -28,28 +28,32 @@ MINI_HEIGHT = 200       # 첫 표시 높이(로드 후 내용 높이로 교체)
 
 
 class Api:
-    """pywebview JS 브리지 — 외부 링크 열기 + 미니 뷰 조작(open_main/close_mini/resize_mini)."""
+    """pywebview JS 브리지 — 외부 링크 열기 + 미니/일반 배타 전환(to_mini/to_main/hide_to_tray/resize_mini)."""
 
     def open_external(self, url: str) -> None:
         if isinstance(url, str) and url.startswith(("http://", "https://")):
             webbrowser.open(url)
 
-    def open_main(self) -> None:
-        """미니 뷰의 '↗ 큰 창' — 큰 창 복원(수집 1회 동반)."""
-        _show_window()
+    def to_mini(self) -> None:
+        """일반뷰의 '⊟ 미니뷰' — 큰 창 숨기고 미니로 전환."""
+        _to_mini()
 
-    def close_mini(self) -> None:
-        """미니 뷰의 '✕ 끄기' — 미니 창 숨김 + off 영속."""
-        _hide_mini()
+    def to_main(self) -> None:
+        """미니뷰의 '⊞ 일반뷰' — 미니 숨기고 큰 창 복원(수집 1회 동반)."""
+        _to_main()
+
+    def hide_to_tray(self) -> None:
+        """미니뷰의 '✕' — 미니를 트레이로 숨김(마지막 뷰=미니 유지)."""
+        _hide_mini_to_tray()
 
     def resize_mini(self, height) -> None:
         """미니 내용 높이에 창을 맞춤(폭 고정)."""
         _resize_mini(height)
 
 
-# 상주 모드 상태 — 큰 창/미니 창/pystray 아이콘 참조 + 종료·미니표시 플래그.
+# 상주 모드 상태 — 큰 창/미니 창/pystray 아이콘 참조 + 종료 플래그 + 현재 뷰(배타 전환)·서버 포트(lazy 생성용).
 _tray_state: dict = {"window": None, "icon": None, "quitting": False,
-                     "mini": None, "mini_shown": False}
+                     "mini": None, "current_view": "main", "port": None}
 
 
 def _on_closing() -> bool:
@@ -108,8 +112,8 @@ def _reingest_and_maybe_reload() -> None:
 
 
 def _on_open(icon=None, item=None) -> None:
-    """트레이 '열기' / 기본 클릭 — 창 복원."""
-    _show_window()
+    """트레이 '열기' / 기본 클릭 — 마지막 본 뷰(일반/미니) 복원."""
+    _restore_last_view()
 
 
 def _on_quit(icon=None, item=None) -> None:
@@ -162,41 +166,80 @@ def _save_mini_position(x, y) -> None:
     _persist_mini(x=x, y=y)
 
 
-# ── 미니 뷰 — show/hide/toggle/closing/resize ────────────────────────────────
-def _show_mini(persist: bool = True) -> None:
-    """미니 창 표시 + on 영속."""
-    win = _tray_state.get("mini")
-    if win is not None:
-        win.show()
-    _tray_state["mini_shown"] = True
-    if persist:
-        _persist_mini(enabled=True)
+# ── 미니 뷰(배타 전환, ADR 0008) — lazy 생성 / 전환 / 트레이 숨김 / 복원 ──────
+def _set_view(view: str) -> None:
+    """현재 뷰를 런타임 상태 + config에 영속(트레이 '열기'·재실행·재시작 복원 기준)."""
+    _tray_state["current_view"] = view
+    _persist_mini(last_view=view)
 
 
-def _hide_mini(persist: bool = True) -> None:
-    """미니 창 숨김(파괴 아님) + off 영속."""
-    win = _tray_state.get("mini")
-    if win is not None:
-        win.hide()
-    _tray_state["mini_shown"] = False
-    if persist:
-        _persist_mini(enabled=False)
+def _ensure_mini():
+    """미니 창을 lazy 생성(보이는 상태 — hidden 미사용, WebView2 흰 창 회피). 이미 있으면 그대로.
+    시작 시엔 만들지 않고 첫 미니 전환 때 한 번 만들어 이후 hide/show로 재사용한다."""
+    mini = _tray_state.get("mini")
+    if mini is not None:
+        return mini
+    import webview
+    from tokenomy.config import load_config, mini_view_settings
+    mv = mini_view_settings(load_config())
+    mx, my = _resolve_mini_xy(mv)
+    port = _tray_state.get("port")
+    mini = webview.create_window(
+        MINI_TITLE, f"http://127.0.0.1:{port}/mini",
+        width=MINI_WIDTH, height=MINI_HEIGHT, x=mx, y=my,
+        frameless=True, on_top=True, easy_drag=True, js_api=Api(),
+    )
+    _tray_state["mini"] = mini
+    mini.events.closing += _on_mini_closing      # X/Alt+F4 → 트레이 숨김(파괴 아님)
+    mini.events.moved += _save_mini_position      # 드래그 이동 → 위치 영속
+    return mini
 
 
-def _toggle_mini(icon=None, item=None) -> None:
-    """트레이 '미니 뷰' 토글 — 켜져 있으면 숨기고, 아니면 표시."""
-    if _tray_state.get("mini_shown"):
-        _hide_mini()
-    else:
-        _show_mini()
+def _show_mini_window() -> None:
+    """미니 창 표시(없으면 lazy 생성)."""
+    _ensure_mini().show()
+
+
+def _to_mini() -> None:
+    """일반뷰 → 미니: 큰 창 숨기고 미니 표시 + 마지막 뷰=미니 영속."""
+    window = _tray_state.get("window")
+    if window is not None:
+        window.hide()
+    _show_mini_window()
+    _set_view("mini")
+
+
+def _to_main() -> None:
+    """미니뷰 → 일반: 미니 숨기고 큰 창 복원(수집 1회 동반) + 마지막 뷰=일반 영속."""
+    mini = _tray_state.get("mini")
+    if mini is not None:
+        mini.hide()
+    _set_view("main")
+    _show_window()
+
+
+def _hide_mini_to_tray() -> None:
+    """미니 ✕/X — 미니를 트레이로 숨김(파괴 아님). current_view='mini' 유지 → 다음 복원도 미니."""
+    mini = _tray_state.get("mini")
+    if mini is not None:
+        mini.hide()
+    _maybe_first_time_notice()
 
 
 def _on_mini_closing() -> bool:
-    """미니 창 X/Alt+F4 — 종료 중이 아니면 숨김+off(파괴 취소, False), 종료 중이면 닫기 허용."""
+    """미니 창 X/Alt+F4 — 종료 중이 아니면 트레이 숨김(파괴 취소, False), 종료 중이면 닫기 허용."""
     if _tray_state.get("quitting"):
         return True
-    _hide_mini()
+    _hide_mini_to_tray()
     return False
+
+
+def _restore_last_view() -> None:
+    """트레이 '열기'·단일 인스턴스 재실행(/app/show) — 마지막 본 뷰(일반/미니)로 복원."""
+    if _tray_state.get("current_view") == "mini":
+        _show_mini_window()
+    else:
+        _show_window()
 
 
 def _resize_mini(height) -> None:
@@ -218,12 +261,11 @@ def _tray_image():
 
 
 def _build_tray():
-    """pystray 트레이 아이콘 생성 — '열기'(좌클릭 기본) + '미니 뷰'(체크 토글) + '종료'."""
+    """pystray 트레이 아이콘 생성 — '열기'(좌클릭 기본, 마지막 본 뷰 복원) + '종료'.
+    배타 전환이라 미니 토글은 없다(미니↔일반 전환은 각 창의 버튼이 담당)."""
     import pystray
     menu = pystray.Menu(
         pystray.MenuItem("열기", _on_open, default=True),
-        pystray.MenuItem("미니 뷰", _toggle_mini,
-                         checked=lambda item: bool(_tray_state.get("mini_shown"))),
         pystray.MenuItem("종료", _on_quit),
     )
     return pystray.Icon("tokenomy", _tray_image(), "Tokenomy", menu=menu)
@@ -357,8 +399,8 @@ def _resolve_mini_xy(mv: dict) -> tuple:
 
 
 def _launch_window(port: int) -> None:
-    """pywebview 큰 창 + 미니 뷰(hidden, ADR 0008) + pystray 트레이(상주).
-    트레이 미가용 시 단발로 강등(X=종료, 미니 창도 안 만듦)."""
+    """pywebview 큰 창 + pystray 트레이(상주). 미니 뷰는 배타 전환·lazy 생성(ADR 0008).
+    트레이 미가용 시 단발로 강등(X=종료, 미니 전환 없음)."""
     import webview
     window = webview.create_window(
         WINDOW_TITLE, f"http://127.0.0.1:{port}/",
@@ -366,6 +408,8 @@ def _launch_window(port: int) -> None:
     )
     _tray_state["window"] = window
     _tray_state["quitting"] = False
+    _tray_state["mini"] = None
+    _tray_state["port"] = port      # 미니 lazy 생성 시 /mini URL 구성에 사용
     icon = None
     try:
         icon = _build_tray()
@@ -377,28 +421,25 @@ def _launch_window(port: int) -> None:
         _tray_state["icon"] = icon
         # pywebview의 closing은 locking 이벤트라 핸들러의 False 반환이 닫기를 취소한다(hide-on-close의 핵심 의존).
         window.events.closing += _on_closing
-        set_show_callback(_show_window)
-        # 미니 뷰 — hidden으로 미리 생성(런타임 create_window 회피). 마지막 on/off 상태를 복원.
-        mv = mini_view_settings(load_config())
-        mx, my = _resolve_mini_xy(mv)
-        mini = webview.create_window(
-            MINI_TITLE, f"http://127.0.0.1:{port}/mini",
-            width=MINI_WIDTH, height=MINI_HEIGHT, x=mx, y=my,
-            frameless=True, on_top=True, easy_drag=True, hidden=True, js_api=Api(),
-        )
-        _tray_state["mini"] = mini
-        _tray_state["mini_shown"] = False
-        mini.events.closing += _on_mini_closing      # X/Alt+F4 → 숨김+off(파괴 아님)
-        mini.events.moved += _save_mini_position      # 드래그 이동 → 위치 영속
-        if mv["enabled"]:
-            _show_mini(persist=False)                 # 복원(영속값은 그대로)
+        set_show_callback(_restore_last_view)         # 단일 인스턴스 재실행도 마지막 뷰로
+        # 마지막 본 뷰를 복원 기준으로 — 미니 창은 시작 시 만들지 않고(흰 창 차단) 첫 전환 때 lazy 생성.
+        _tray_state["current_view"] = mini_view_settings(load_config())["last_view"]
         threading.Thread(target=icon.run, daemon=True).start()
-    webview.start()  # ← 메인 스레드 GUI 루프(블로킹). window.destroy()까지 반환 안 함.
+        webview.start(_on_gui_start)  # ← 메인 GUI 루프(블로킹). 시작 직후 콜백이 마지막 뷰 적용.
+    else:
+        webview.start()
     if icon is not None:
         try:
             icon.stop()
         except Exception:
             pass
+
+
+def _on_gui_start() -> None:
+    """GUI 루프 시작 직후 — 마지막 뷰가 미니면 미니로 전환(큰 창 숨김 + 미니 lazy 생성).
+    일반뷰면 아무것도 안 한다(큰 창이 이미 보임)."""
+    if _tray_state.get("current_view") == "mini":
+        _to_mini()
 
 
 def _open_browser_when_ready(port: int) -> None:

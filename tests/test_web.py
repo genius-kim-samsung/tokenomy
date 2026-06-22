@@ -1148,12 +1148,21 @@ def test_mini_page_has_polling_trigger(tmp_path, monkeypatch):
     assert "every 10m" in r.text
 
 
-def test_mini_page_has_open_main_and_close_controls(tmp_path, monkeypatch):
-    """hover 컨트롤 — '↗ 큰 창'(open_main 브리지) + '✕ 끄기'(close_mini 브리지)."""
+def test_mini_page_has_switch_and_hide_controls(tmp_path, monkeypatch):
+    """hover 컨트롤(배타 전환) — '⊞ 일반뷰'(to_main 브리지) + '✕ 트레이 숨김'(hide_to_tray 브리지)."""
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/mini")
-    assert "open_main" in r.text     # pywebview JS 브리지 — 큰 창 복원
-    assert "close_mini" in r.text    # pywebview JS 브리지 — 미니 뷰 끄기
+    assert "to_main" in r.text        # pywebview JS 브리지 — 일반뷰로 전환
+    assert "hide_to_tray" in r.text   # pywebview JS 브리지 — 미니를 트레이로 숨김
+    assert "open_main" not in r.text  # 구 동반-창 브리지 제거
+    assert "close_mini" not in r.text
+
+
+def test_dashboard_sidebar_has_mini_switch(tmp_path, monkeypatch):
+    """일반뷰 사이드바에 '미니뷰로 전환' 버튼(to_mini 브리지) — webview 전용(기본 숨김)."""
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/")
+    assert "to_mini" in r.text        # pywebview JS 브리지 — 미니로 전환
 
 
 def test_mini_section_polls_with_auto_throttle(tmp_path, monkeypatch):

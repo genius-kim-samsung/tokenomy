@@ -2,7 +2,7 @@
 <html lang="ko">
 {# 미니 뷰(ADR 0008) — 큰 창과 독립된 항상 위 프레임리스 동반 창의 셸.
    사이드바·나브 없는 독립 페이지. #mini-section이 /mini/section을 자체 폴링(official-only).
-   조작은 pywebview JS 브리지(open_main/close_mini/resize_mini)로 런처에 전달. #}
+   조작은 pywebview JS 브리지(to_main/hide_to_tray/resize_mini)로 런처에 전달(배타 전환). #}
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -14,10 +14,10 @@
     <header class="mini-bar">
       <span class="mini-title">Tokenomy</span>
       <span class="mini-controls">
-        <button class="mini-ctl" type="button" onclick="miniOpenMain()"
-                title="큰 창 열기" aria-label="큰 창 열기">↗</button>
-        <button class="mini-ctl" type="button" onclick="miniCloseMini()"
-                title="미니 뷰 끄기" aria-label="미니 뷰 끄기">✕</button>
+        <button class="mini-ctl" type="button" onclick="miniToMain()"
+                title="일반뷰로 전환" aria-label="일반뷰로 전환">⊞</button>
+        <button class="mini-ctl" type="button" onclick="miniHideToTray()"
+                title="트레이로 숨기기" aria-label="트레이로 숨기기">✕</button>
       </span>
     </header>
     <div id="mini-section" hx-get="/mini/section"
@@ -28,14 +28,14 @@
   <script src="/static/vendor/htmx.min.js"></script>
   <script src="/static/rel-time.js"></script>
   <script>
-    // hover 컨트롤 — 런처의 pywebview JS 브리지로 큰 창 복원/미니 끄기.
-    function miniOpenMain() {
+    // hover 컨트롤 — 런처의 pywebview JS 브리지로 배타 전환(일반뷰로) / 트레이 숨김.
+    function miniToMain() {
       var api = window.pywebview && window.pywebview.api;
-      if (api && api.open_main) api.open_main();
+      if (api && api.to_main) api.to_main();
     }
-    function miniCloseMini() {
+    function miniHideToTray() {
       var api = window.pywebview && window.pywebview.api;
-      if (api && api.close_mini) api.close_mini();
+      if (api && api.hide_to_tray) api.hide_to_tray();
     }
     // 내용 높이에 창을 맞춘다 — 로드/폴링 교체 후 본문 높이를 측정해 런처에 전달(window.resize).
     function miniFitHeight() {
