@@ -50,3 +50,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Tokenomy.exe
+          generate_release_notes: true   # 빈 본문 방지(안전망) — 큐레이션 노트는 skill 5.5에서 덮어씀

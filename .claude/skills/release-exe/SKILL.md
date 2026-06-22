@@ -105,9 +105,34 @@ gh release view v<버전> --json tagName,isDraft,url,assets   # Release·에셋 
 성공 기준: `build-windows` success(태그검증·빌드·스모크·업로드 전부 ✓) + Release가 **draft 아님** +
 에셋에 **`Tokenomy.exe`** 존재. CI가 실패하면 로그(`gh run view <id> --log-failed`)로 원인 분석.
 
+## 5.5. 릴리스 노트 작성 (사용자용 — 누락 금지)
+
+CI가 만든 Release는 본문이 **비어 있다**(`action-gh-release`가 `files`만 올림). 그대로 두지 말고
+**사용자가 이해할 한국어 릴리스 노트를 작성해 채운다.** 커밋 메시지(개발자용)가 아니라 "이번
+버전에서 사용자에게 무엇이 달라지나"를 평이하게 쓴다(커밋 로그 나열 금지).
+
+1. 이번 버전의 변경을 사용자 관점으로 요약한다 — **주요 변경 / 설정·옵션 / 주의사항** 정도로 묶고,
+   "왜 좋아지나"를 1~3줄로. 끝에 "아래 `Tokenomy.exe`를 받아 실행" 같은 설치 한 줄.
+2. Release가 CI로 **생성된 뒤**라 `edit`로 채운다(노트는 heredoc 문자열 또는 파일로):
+   ```bash
+   gh release edit v<버전> --notes "$(cat <<'EOF'
+   ## <한 줄 제목 — 사용자 체감 변화>
+   ...
+   EOF
+   )"
+   # 또는: gh release edit v<버전> --notes-file <노트파일>
+   ```
+3. **검증**(누락 가드): 본문이 비지 않았는지 확인한다.
+   ```bash
+   gh release view v<버전> --json body --jq '.body | length'   # 0이면 누락 — 다시 채운다
+   ```
+
+> 안전망: `release.yml`의 `action-gh-release`에 `generate_release_notes: true`를 둬, 위 단계를
+> 건너뛰어도 빈 본문은 안 나오게 한다(GitHub 자동 변경로그). 위 큐레이션 노트는 그걸 덮어쓴다.
+
 ## 6. 보고
 
-표로 요약한다: 버전 bump 커밋, 로컬 스모크 결과, 태그, CI run 결과(소요시간), Release URL/에셋 크기.
+표로 요약한다: 버전 bump 커밋, 로컬 스모크 결과, 태그, CI run 결과(소요시간), **릴리스 노트 작성(본문 길이>0)**, Release URL/에셋 크기.
 
 ## 게시(gotchas) 요약
 
@@ -115,6 +140,7 @@ gh release view v<버전> --json tagName,isDraft,url,assets   # Release·에셋 
 - **빌드는 `.venv`로** — 시스템 Python은 pywebview 누락 → 창 대신 브라우저 fallback.
 - **로컬 빌드는 검증용**, 공개 배포본은 CI 산출물. 로컬 `dist/`는 gitignore(커밋 안 됨).
 - **main + 태그 함께 push.** 태그만 올리면 origin/main이 뒤처진다.
+- **릴리스 노트 누락 금지.** CI Release는 본문이 빈 채로 발행된다 — 5.5에서 사용자용 한국어 노트로 채우고 본문 길이>0을 확인한다. `release.yml`의 `generate_release_notes: true`는 안전망.
 - **버전 bump은 워크트리 경유** — 주 워크트리 추적 파일 직접 편집은 가드가 막는다.
 - **중복 태그 금지** — 사전 점검에서 `v<버전>` 부재 확인. 이미 있으면 중단.
 - CI 로그의 **Node 20 deprecation 경고**는 빌드에 무해(액션 메이저 버전 업그레이드가 근본 해결).
