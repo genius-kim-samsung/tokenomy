@@ -46,8 +46,14 @@ jobs:
           echo "exe --version: $OUT"
           test "$OUT" = "$(python -c "import tokenomy; print(tokenomy.__version__)")"
 
+      # Release 자산 파일명에 버전을 표기 — 빌드 산출물(Tokenomy.exe)을 태그 버전으로 복사.
+      # 내부 빌드/스모크는 안정적 이름(Tokenomy.exe) 유지, 업로드만 버전명으로.
+      - name: Stage versioned artifact
+        shell: bash
+        run: cp dist/Tokenomy.exe "dist/Tokenomy-${GITHUB_REF_NAME#v}.exe"
+
       - name: Upload exe to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Tokenomy.exe
+          files: dist/Tokenomy-*.exe          # Tokenomy-<버전>.exe (버전 표기 자산)
           generate_release_notes: true   # 빈 본문 방지(안전망) — 큐레이션 노트는 skill 5.5에서 덮어씀
