@@ -69,6 +69,9 @@ def test_main_uses_window_when_webview_available(monkeypatch):
     monkeypatch.setattr(launcher, "_safe_ingest", lambda: None)
     monkeypatch.setattr(launcher, "find_free_port", lambda: 9999)
     monkeypatch.setattr(launcher, "_webview_available", lambda: True)
+    monkeypatch.setattr(launcher, "_existing_instance_port", lambda: None)
+    monkeypatch.setattr(launcher, "_write_runtime", lambda port: calls.__setitem__("runtime", port))
+    monkeypatch.setattr(launcher, "_clear_runtime", lambda: calls.__setitem__("cleared", True))
     monkeypatch.setattr(launcher, "_wait_until_ready", lambda port, **k: True)
     monkeypatch.setattr(launcher, "_launch_window",
                         lambda port: calls.__setitem__("window", port))
@@ -94,6 +97,21 @@ def test_main_uses_window_when_webview_available(monkeypatch):
     assert calls.get("thread_kwargs", {}).get("daemon") is True
     assert calls.get("window") == 9999
     assert "browser" not in calls
+    assert calls.get("runtime") == 9999
+    assert calls.get("cleared") is True
+
+
+def test_main_signals_existing_instance_and_exits(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(launcher, "_webview_available", lambda: True)
+    monkeypatch.setattr(launcher, "_existing_instance_port", lambda: 8765)
+    monkeypatch.setattr(launcher, "_signal_show", lambda port: calls.__setitem__("signaled", port))
+    monkeypatch.setattr(launcher, "_safe_ingest", lambda: calls.__setitem__("ingested", True))
+    monkeypatch.setattr(launcher, "_launch_window", lambda port: calls.__setitem__("window", port))
+    launcher.main([])
+    assert calls.get("signaled") == 8765       # 기존 창 복원 신호
+    assert "ingested" not in calls             # 두 번째 인스턴스는 수집 안 함
+    assert "window" not in calls               # 창도 안 띄움
 
 
 def test_main_falls_back_to_browser_when_no_webview(monkeypatch):
@@ -300,3 +318,40 @@ def test_build_tray_uses_default_open_and_quit_items(monkeypatch):
     assert texts["열기"][0] is launcher._on_open and texts["열기"][1] is True   # default
     assert texts["종료"][0] is launcher._on_quit
     assert icon.title == "Tokenomy"
+
+
+def test_launch_window_wires_tray_and_stops_on_exit(monkeypatch):
+    events = []
+    class FakeEvents:
+        def __init__(self):
+            self.closing = self
+        def __iadd__(self, handler): events.append(("closing", handler)); return self
+    class FakeWin:
+        def __init__(self): self.events = FakeEvents()
+    fake_win = FakeWin()
+    fake_webview = type("W", (), {
+        "create_window": staticmethod(lambda *a, **k: fake_win),
+        "start": staticmethod(lambda: events.append(("start",))),
+    })
+    monkeypatch.setitem(__import__("sys").modules, "webview", fake_webview)
+
+    class FakeIcon:
+        def __init__(self): self.stopped = False; self.ran = False
+        def run(self): self.ran = True
+        def stop(self): self.stopped = True
+    icon = FakeIcon()
+    monkeypatch.setattr(launcher, "_build_tray", lambda: icon)
+    monkeypatch.setattr(launcher, "_tray_state", {"window": None, "icon": None, "quitting": True})
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None, **k): self.target = target
+        def start(self):
+            if self.target is icon.run: icon.run()
+    monkeypatch.setattr(launcher.threading, "Thread", FakeThread)
+    monkeypatch.setattr("tokenomy.web.control.set_show_callback", lambda fn: events.append(("cb", fn)))
+
+    launcher._launch_window(9999)
+    assert ("closing", launcher._on_closing) in events     # 닫기 핸들러 부착
+    assert ("cb", launcher._show_window) in events          # 복원 콜백 등록
+    assert ("start",) in events                              # GUI 루프 진입
+    assert icon.stopped is True                              # 종료 시 트레이 정지

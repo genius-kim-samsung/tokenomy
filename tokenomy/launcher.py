@@ -235,13 +235,31 @@ def _serve(port: int) -> None:
 
 
 def _launch_window(port: int) -> None:
-    """pywebview 창을 띄운다(블로킹). 창을 닫으면 반환된다."""
+    """pywebview 창 + pystray 트레이(상주). 트레이 미가용 시 단발로 강등(X=종료)."""
     import webview
-    webview.create_window(
+    window = webview.create_window(
         WINDOW_TITLE, f"http://127.0.0.1:{port}/",
         width=WINDOW_WIDTH, height=WINDOW_HEIGHT, js_api=Api(),
     )
-    webview.start()
+    _tray_state["window"] = window
+    _tray_state["quitting"] = False
+    icon = None
+    try:
+        icon = _build_tray()
+    except Exception as e:  # pystray/Pillow 미가용 → 단발 강등
+        print(f"[launcher] 트레이 비활성(라이브러리 미가용) — 단발 모드: {e}")
+    if icon is not None:
+        from tokenomy.web.control import set_show_callback
+        _tray_state["icon"] = icon
+        window.events.closing += _on_closing
+        set_show_callback(_show_window)
+        threading.Thread(target=icon.run, daemon=True).start()
+    webview.start()  # ← 메인 스레드 GUI 루프(블로킹). window.destroy()까지 반환 안 함.
+    if icon is not None:
+        try:
+            icon.stop()
+        except Exception:
+            pass
 
 
 def _open_browser_when_ready(port: int) -> None:
@@ -258,18 +276,28 @@ def main(argv: list[str] | None = None) -> None:
         print(__version__)
         return
 
-    _safe_ingest()
-    port = find_free_port()
-
     if _webview_available():
-        # 서버는 데몬 스레드, 창이 메인 스레드를 점유 → 창 닫으면 프로세스 종료(단발 앱)
-        threading.Thread(target=_serve, args=(port,), daemon=True).start()
-        if not _wait_until_ready(port):
-            print(f"[Tokenomy] 서버가 {port}에서 응답하지 않습니다")
+        # 단일 인스턴스 — 이미 우리 앱이 떠 있으면 그 창을 복원시키고 본인은 종료.
+        existing = _existing_instance_port()
+        if existing is not None:
+            _signal_show(existing)
+            print(f"[Tokenomy] 이미 실행 중 — 기존 창을 띄웁니다 (포트 {existing})")
             return
-        _launch_window(port)
+        _safe_ingest()
+        port = find_free_port()
+        _write_runtime(port)
+        try:
+            threading.Thread(target=_serve, args=(port,), daemon=True).start()
+            if not _wait_until_ready(port):
+                print(f"[Tokenomy] 서버가 {port}에서 응답하지 않습니다")
+                return
+            _launch_window(port)
+        finally:
+            _clear_runtime()
     else:
-        # WebView 미가용(구형 환경) — 기존 방식: 브라우저 + uvicorn 메인 블로킹
+        # WebView 미가용(구형 환경) — 기존 방식: 브라우저 + uvicorn 메인 블로킹(단발)
+        _safe_ingest()
+        port = find_free_port()
         threading.Thread(
             target=_open_browser_when_ready, args=(port,), daemon=True
         ).start()
