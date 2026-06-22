@@ -12,7 +12,7 @@ from tokenomy.aggregate import (
     token_composition,
 )
 from tokenomy.config import (
-    credit_to_usd, load_config, official_fetch_settings, tracked_providers, user_label,
+    credit_to_usd, forecast_settings, load_config, official_fetch_settings, tracked_providers, user_label,
 )
 from tokenomy.db import get_fetch_state, get_meta
 from tokenomy.freshness import LAST_INGEST_KEY
@@ -343,12 +343,13 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[
     """
     now = now_kst or datetime.now(KST)
     ctu = credit_to_usd(config)
+    weeks = forecast_settings(config)["rate_window_weeks"]
     active = set(tracked_providers(config))
     cards: list[dict] = []
     for p in PROVIDERS:
         if p not in active:
             continue
-        view = official_view(conn, p, now, ctu)
+        view = official_view(conn, p, now, ctu, weeks)
         cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now))
     return cards
 
@@ -385,8 +386,9 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     # 통합 월말 전망 — 활성(ADR 0005) provider의 공식 뷰로 통합 풀 구성.
     # 화면의 "전체"가 곧 활성 합산이므로 forecast 풀도 활성만 본다(combined_forecast가 한도 보유분만 필터).
     ctu = credit_to_usd(config)
-    forecast_views = [official_view(conn, p, now, ctu) for p in active]
-    forecast_obj = combined_forecast(conn, forecast_views, now)
+    weeks = forecast_settings(config)["rate_window_weeks"]
+    forecast_views = [official_view(conn, p, now, ctu, weeks) for p in active]
+    forecast_obj = combined_forecast(conn, forecast_views, now, weeks)
     forecast = _forecast_hero(forecast_obj)
     fc_chart = forecast_chart_data(forecast_obj, daily, now)
 

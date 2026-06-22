@@ -255,13 +255,13 @@ def _row_to_bucket_dict(r) -> dict:
 
 def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
                       limit_usd: float | None, used_usd: float | None,
-                      reset_date: date | None) -> OfficialLens | None:
+                      reset_date: date | None, weeks: int = 2) -> OfficialLens | None:
     """로컬 일일 소비속도(local_daily_rate)로 소진예상·리셋 D-day 산출.
 
-    rate = 이번 달 로컬 소비 ÷ 경과 영업일. 소비가 없으면 daily_rate=None.
+    rate = 트레일링 창(오늘 포함 weeks×7일) 로컬 소비 ÷ 그 창의 영업일. 소비가 없으면 daily_rate=None.
     bucket_key는 반환값 식별용으로만 사용(rate 계산에 미사용).
     """
-    rate = local_daily_rate(conn, provider, now_kst)
+    rate = local_daily_rate(conn, provider, now_kst, weeks)
 
     exhaust_date: date | None = None
     if rate and limit_usd and used_usd is not None and limit_usd > used_usd:
@@ -276,7 +276,7 @@ def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
 
 
 def official_view(conn, provider: str, now_kst: datetime,
-                  credit_to_usd: float) -> OfficialView:
+                  credit_to_usd: float, weeks: int = 2) -> OfficialView:
     """공식 미러 패널 컨텍스트. 최신 스냅샷(공식) + 로컬 주간 윈도우(Codex)를 합친다.
 
     - period_used/limit = 월간 버킷(공식 ground truth). 없으면 None.
@@ -386,7 +386,7 @@ def official_view(conn, provider: str, now_kst: datetime,
         reset_date = parse_ts(active["resets_at"]).date() if active["resets_at"] else None
         # 렌즈는 로컬 rate라 provider 공통(Claude/Codex 모두 적용).
         lens = _lens_from_series(conn, provider, active_key, now_kst,
-                                 active["limit_usd"], active["used_usd"], reset_date)
+                                 active["limit_usd"], active["used_usd"], reset_date, weeks)
 
     note = None if rows else "공식 미취득 — 로컬 추정(USD)"
     return OfficialView(
@@ -420,26 +420,68 @@ class CombinedForecast:
     month_end: date
 
 
-def _elapsed_business_days(now_kst: datetime) -> int:
-    """이번 달(KST) 월초부터 오늘(포함)까지 경과한 영업일 수."""
-    month_start, _ = month_bounds(now_kst)
-    return business_days_between(month_start.date(), now_kst.date() + timedelta(days=1))
+def _trailing_window_bounds(now_kst: datetime, weeks: int) -> tuple[datetime, datetime]:
+    """오늘 포함 최근 weeks×7일 창 [start, nxt) — KST 자정 경계.
+
+    start_date = today − (weeks×7 − 1)이라 창은 정확히 weeks×7 달력일(=영업일 5×weeks).
+    정수 주(週)로 잡아 평일/주말 구성비 왜곡을 없앤다(ADR 0004 후속: 소비속도=트레일링 창).
+    """
+    days = max(int(weeks), 1) * 7
+    today0 = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+    return today0 - timedelta(days=days - 1), today0 + timedelta(days=1)
 
 
-def local_daily_rate(conn, provider: str, now_kst: datetime) -> float | None:
-    """provider의 이번 달 로컬 소비 ÷ 경과 영업일(USD/영업일). 소비/경과가 없으면 None."""
-    elapsed = _elapsed_business_days(now_kst)
-    spend = month_spend(conn, provider, now_kst)
+def _earliest_message_date(conn, provider: str | None, providers: list[str] | None):
+    """모집단(provider/providers)의 최초 메시지 KST 날짜. 없으면 None."""
+    where, params = _provider_where(provider, providers)
+    dts = [parse_ts(r["ts"]) for r in conn.execute("SELECT ts FROM messages" + where, params).fetchall()]
+    dts = [d for d in dts if d is not None]
+    return min(dts).date() if dts else None
+
+
+def _trailing_business_days(conn, now_kst: datetime, weeks: int, *,
+                            provider: str | None = None,
+                            providers: list[str] | None = None) -> int:
+    """트레일링 창의 영업일 수(적응형 분모).
+
+    분모 = business_days_between(max(창시작, 모집단 최초메시지일), 오늘+1). 기성 사용자
+    (최초메시지 ≤ 창시작)는 풀 창(=5×weeks, 유휴 영업일 포함해 정상 희석), 신규/복귀는
+    존재 이전 일수를 제외해 과소추정(거짓 "여유")을 막는다. 모집단에 메시지가 전혀 없으면 0.
+    earliest-msg는 spend와 같은 provider 모집단으로 조회(분자/분모 모집단 일치).
+    """
+    start, _ = _trailing_window_bounds(now_kst, weeks)
+    earliest = _earliest_message_date(conn, provider, providers)
+    if earliest is None:
+        return 0
+    return business_days_between(max(start.date(), earliest), now_kst.date() + timedelta(days=1))
+
+
+def trailing_window_spend(conn, provider: str | None, now_kst: datetime, weeks: int,
+                          *, providers: list[str] | None = None) -> float:
+    """트레일링 창(오늘 포함 weeks×7일)의 로컬 cost_usd 합. 번다운 없이 총소비."""
+    start, nxt = _trailing_window_bounds(now_kst, weeks)
+    return round(sum((r["cost_usd"] or 0) for r in _range_rows(conn, provider, start, nxt, providers=providers)), 4)
+
+
+def local_daily_rate(conn, provider: str, now_kst: datetime, weeks: int = 2) -> float | None:
+    """provider의 트레일링 창(오늘 포함 weeks×7일) 로컬 소비 ÷ 그 창의 영업일(USD/영업일).
+
+    소비속도는 청구 리셋과 무관한 행동 속성이라 트레일링 창으로 추정한다(ADR 0004 후속:
+    월초 누적 → 트레일링). 분모는 적응형(_trailing_business_days). 소비/창이 없으면 None.
+    """
+    elapsed = _trailing_business_days(conn, now_kst, weeks, provider=provider)
+    spend = trailing_window_spend(conn, provider, now_kst, weeks)
     return round(spend / elapsed, 4) if (elapsed > 0 and spend > 0) else None
 
 
-def combined_forecast(conn, views: list[OfficialView], now_kst: datetime) -> CombinedForecast | None:
+def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
+                      weeks: int = 2) -> CombinedForecast | None:
     """공식 USD/크레딧 한도가 있는 provider를 한 풀로 합쳐 달력 월말 예상 잔여를 낸다.
 
     풀 = pool_limit_usd가 있는 view들. 없으면 None(히어로 숨김).
     used/limit = 공식 pool_*의 합(현재 위치 — 월간+포함크레딧 등 USD 한도 버킷 합산, ADR 0004).
     예상 used = used + daily_rate × (오늘 이후 월말까지 남은 영업일). 음수 잔여면 소진 예상일 산출.
-    daily_rate = 풀 provider 로컬 월소비 합 ÷ 경과 영업일.
+    daily_rate = 풀 provider 트레일링 창(오늘 포함 weeks×7일) 로컬 소비 합 ÷ 그 창의 영업일(적응형).
     이미 소진(used≥limit)이거나 로컬 소비가 없으면(daily_rate None) 전망은 생략(None)한다.
 
     한계(ADR 0004): 포함 크레딧은 리셋 주기가 월간과 다를 수 있으나(예: 분기 만료),
@@ -455,8 +497,9 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime) -> Com
 
     _, next_month = month_bounds(now_kst)
     month_end = (next_month - timedelta(days=1)).date()
-    elapsed = _elapsed_business_days(now_kst)
-    spend = sum(month_spend(conn, v.provider, now_kst) for v in pool)
+    pool_providers = [v.provider for v in pool]
+    elapsed = _trailing_business_days(conn, now_kst, weeks, providers=pool_providers)
+    spend = trailing_window_spend(conn, None, now_kst, weeks, providers=pool_providers)
     daily_rate = round(spend / elapsed, 4) if (elapsed > 0 and spend > 0) else None
     bdays_remaining = business_days_between(now_kst.date() + timedelta(days=1), next_month.date())
 

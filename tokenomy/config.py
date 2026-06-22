@@ -32,6 +32,7 @@ def load_config(path: str | Path | None = None) -> dict:
             "tracked_providers": None,           # None → 첫 호출 시 크레덴셜로 시드
             "credit_to_usd": 0.04,
             "official_fetch": {"min_interval_minutes": 10},
+            "forecast_settings": {"rate_window_weeks": 2},
             "pricing_overrides": {}}
     p = _config_path(path)
     if not p.exists():
@@ -75,6 +76,18 @@ def official_fetch_settings(config: dict) -> dict:
     except (TypeError, ValueError):
         mi = 10
     return {"min_interval_minutes": mi if mi > 0 else 10}
+
+
+def forecast_settings(config: dict) -> dict:
+    """전망 소비속도(기울기) 설정. rate_window_weeks="트레일링 창 길이(주)" — 기울기를
+    추정하는 최근 창의 주(週) 수(ADR 0004 후속: 소비속도=리셋 무관 행동 속성, 트레일링 창).
+    1~8주로 clamp, 미설정·오설정은 기본 2주로 폴백한다(오설정으로 전망이 깨지지 않게)."""
+    raw = config.get("forecast_settings") or {}
+    try:
+        w = int(raw.get("rate_window_weeks", 2))
+    except (TypeError, ValueError):
+        w = 2
+    return {"rate_window_weeks": min(max(w, 1), 8)}
 
 
 def tracked_providers(config: dict) -> list[str]:

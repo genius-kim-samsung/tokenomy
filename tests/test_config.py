@@ -84,6 +84,30 @@ def test_load_config_default_auto_interval_is_10(tmp_path):
     assert cfg["official_fetch"]["min_interval_minutes"] == 10
 
 
+from tokenomy.config import forecast_settings
+
+
+def test_forecast_settings_default():
+    # 소비속도 트레일링 창 기본 2주
+    assert forecast_settings({}) == {"rate_window_weeks": 2}
+
+
+def test_forecast_settings_reads_config():
+    assert forecast_settings({"forecast_settings": {"rate_window_weeks": 4}})["rate_window_weeks"] == 4
+
+
+def test_forecast_settings_clamps_and_falls_back():
+    assert forecast_settings({"forecast_settings": {"rate_window_weeks": 0}})["rate_window_weeks"] == 1    # 하한
+    assert forecast_settings({"forecast_settings": {"rate_window_weeks": 99}})["rate_window_weeks"] == 8   # 상한
+    assert forecast_settings({"forecast_settings": {"rate_window_weeks": "x"}})["rate_window_weeks"] == 2  # 이상치→기본
+    assert forecast_settings({"forecast_settings": {"rate_window_weeks": None}})["rate_window_weeks"] == 2
+
+
+def test_load_config_default_forecast_window_is_2(tmp_path):
+    cfg = load_config(tmp_path / "nope.json")
+    assert cfg["forecast_settings"]["rate_window_weeks"] == 2
+
+
 from tokenomy.config import tracked_providers
 from tokenomy import paths
 

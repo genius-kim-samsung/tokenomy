@@ -18,7 +18,7 @@ from tokenomy.archive import archive_tree
 from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns, maybe_reprice, insert_official_buckets
 from tokenomy.freshness import CLEANUP_DAYS, freshness, record_ingest
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
-from tokenomy.config import load_config, user_label, credit_to_usd, tracked_providers
+from tokenomy.config import load_config, user_label, credit_to_usd, forecast_settings, tracked_providers
 from tokenomy.official_parser import parse_claude, parse_codex
 
 CLAUDE_ROOT = Path.home() / ".claude" / "projects"
@@ -67,6 +67,7 @@ def cmd_official_import(conn, provider: str, path: str, *, now_kst=None,
 def cmd_report(conn) -> None:
     config = load_config()
     ctu = credit_to_usd(config)
+    weeks = forecast_settings(config)["rate_window_weeks"]
     now = datetime.now(KST)
 
     print(f"=== Tokenomy — {now:%Y-%m} (KST, 이 머신 데이터만) ===")
@@ -82,7 +83,7 @@ def cmd_report(conn) -> None:
 
     for prov in tracked_providers(config):
         spent = month_spend(conn, prov, now)
-        ov = official_view(conn, prov, now, ctu)
+        ov = official_view(conn, prov, now, ctu, weeks)
         line = f"\n[{prov}] 이번 달 총지출 ${spent:,.2f}"
         if ov.period_limit_usd:
             line += f" · 공식 ${ov.period_used_usd:,.2f}/${ov.period_limit_usd:,.0f}"
