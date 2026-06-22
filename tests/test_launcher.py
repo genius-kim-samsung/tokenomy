@@ -140,3 +140,52 @@ def test_ensure_std_streams_keeps_existing(monkeypatch):
     monkeypatch.setattr(launcher.sys, "stdout", fake)
     launcher._ensure_std_streams()
     assert launcher.sys.stdout is fake  # 살아 있으면 그대로 둔다
+
+
+def test_runtime_roundtrip_and_clear(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
+    launcher._write_runtime(8765)
+    assert launcher._read_runtime() == {"port": 8765, "pid": __import__("os").getpid()}
+    launcher._clear_runtime()
+    assert launcher._read_runtime() is None
+
+
+def test_existing_instance_none_when_no_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
+    assert launcher._existing_instance_port() is None
+
+
+def test_existing_instance_returns_port_when_ping_marker_matches(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
+    launcher._write_runtime(8765)
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"app": "tokenomy"}'
+    monkeypatch.setattr(launcher.urllib.request, "urlopen", lambda url, **k: FakeResp())
+    assert launcher._existing_instance_port() == 8765
+
+
+def test_existing_instance_none_when_ping_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
+    launcher._write_runtime(8765)
+
+    def boom(url, **k): raise OSError("refused")
+    monkeypatch.setattr(launcher.urllib.request, "urlopen", boom)
+    assert launcher._existing_instance_port() is None
+
+
+def test_signal_show_posts_to_show_endpoint(monkeypatch):
+    seen = {}
+    def fake_urlopen(url, data=None, timeout=None):
+        seen["url"] = url
+        seen["is_post"] = data is not None
+        class R:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        return R()
+    monkeypatch.setattr(launcher.urllib.request, "urlopen", fake_urlopen)
+    launcher._signal_show(8765)
+    assert seen["url"] == "http://127.0.0.1:8765/app/show"
+    assert seen["is_post"] is True

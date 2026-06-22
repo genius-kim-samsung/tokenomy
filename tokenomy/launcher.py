@@ -6,10 +6,13 @@ PyInstaller 엔트리 스크립트.
 """
 from __future__ import annotations
 
+import json
+import os
 import socket
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 
 from tokenomy import __version__
@@ -35,6 +38,62 @@ def _ensure_std_streams() -> None:
     for name in ("stdout", "stderr"):
         if getattr(sys, name) is None:
             setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+
+
+def _write_runtime(port: int) -> None:
+    """실행 중 인스턴스의 port/pid를 런타임 파일에 기록(단일 인스턴스 감지용)."""
+    from tokenomy.paths import runtime_path
+    rt = runtime_path()
+    rt.parent.mkdir(parents=True, exist_ok=True)
+    rt.write_text(json.dumps({"port": port, "pid": os.getpid()}), encoding="utf-8")
+
+
+def _clear_runtime() -> None:
+    """런타임 파일 제거(종료 시). 없으면 무시."""
+    from tokenomy.paths import runtime_path
+    try:
+        runtime_path().unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def _read_runtime() -> dict | None:
+    from tokenomy.paths import runtime_path
+    rt = runtime_path()
+    if not rt.exists():
+        return None
+    try:
+        return json.loads(rt.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _existing_instance_port() -> int | None:
+    """런타임 파일이 가리키는 포트가 우리 앱(/app/ping 마커)으로 응답하면 그 포트, 아니면 None.
+    포트가 비었거나(crash 후) 다른 앱이 점유 중이면 None → 본인이 첫 인스턴스로 진행."""
+    data = _read_runtime()
+    if not data:
+        return None
+    try:
+        port = int(data["port"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/app/ping", timeout=1) as r:
+            body = json.loads(r.read().decode("utf-8"))
+        return port if body.get("app") == "tokenomy" else None
+    except Exception:
+        return None
+
+
+def _signal_show(port: int) -> None:
+    """기존 인스턴스에 창 복원을 신호(POST /app/show). 예외는 삼킨다."""
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/app/show", data=b"", timeout=2)
+    except Exception:
+        pass
 
 
 def find_free_port(start: int = 8765, tries: int = 20) -> int:

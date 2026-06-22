@@ -41,6 +41,11 @@ def config_path() -> Path:
     return data_dir() / "config" / "tokenomy.config.json"
 
 
+def runtime_path() -> Path:
+    """실행 중 인스턴스의 런타임 상태(port/pid). data/ 아래라 .gitignore에 이미 포함."""
+    return data_dir() / "data" / "runtime.json"
+
+
 def resource_path(rel: str) -> Path:
     """번들된 읽기전용 리소스. frozen이면 _MEIPASS, 소스면 repo 루트 기준."""
     base = Path(getattr(sys, "_MEIPASS", _REPO_ROOT))

@@ -36,3 +36,9 @@ def test_resource_path_source_finds_real_file(monkeypatch):
     p = paths.resource_path("config/pricing.json")
     assert p.name == "pricing.json"
     assert p.exists()  # 소스 실행: repo의 실제 파일
+
+
+def test_runtime_path_under_data_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
+    from tokenomy import paths
+    assert paths.runtime_path() == tmp_path / "data" / "runtime.json"
