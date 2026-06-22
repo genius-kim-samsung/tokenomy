@@ -757,6 +757,38 @@ def test_settings_post_persists_credit_to_usd(tmp_path, monkeypatch):
     assert "0.05" in g.text
 
 
+# ── 전망 설정: 소비속도 추정 기간(rate_window_weeks) UI ──────────────────────────
+
+def test_settings_get_shows_rate_window(tmp_path, monkeypatch):
+    """설정에 '전망' 카드 + 소비속도 추정 기간 필드(rate_window_weeks)가 렌더돼야 한다."""
+    client, _ = _client_with_config(tmp_path, monkeypatch)
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert "전망" in r.text
+    assert 'name="rate_window_weeks"' in r.text
+    assert "소비속도 추정 기간" in r.text
+
+
+def test_settings_post_persists_rate_window(tmp_path, monkeypatch):
+    """POST /settings에서 rate_window_weeks를 forecast_settings에 영속해야 한다."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"rate_window_weeks": "4"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved["forecast_settings"]["rate_window_weeks"] == 4
+
+
+def test_settings_post_clamps_rate_window(tmp_path, monkeypatch):
+    """범위 밖 rate_window_weeks는 getter 클램프로 정규화(99→8)되어 저장된다(POST→getter 배선)."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"rate_window_weeks": "99"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg.read_text(encoding="utf-8"))
+    assert saved["forecast_settings"]["rate_window_weeks"] == 8
+
+
 # ── Task 4 TDD: official_refresh ──────────────────────────────────────────────────
 
 def test_official_refresh_manual_fetches_and_redirects_without_hx(tmp_path, monkeypatch):

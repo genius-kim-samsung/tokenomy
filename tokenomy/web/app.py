@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
 from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
-from tokenomy.config import credit_to_usd as _credit_to_usd, load_config, official_fetch_settings, tracked_providers, save_config
+from tokenomy.config import credit_to_usd as _credit_to_usd, forecast_settings, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
 from tokenomy.official_fetch import refresh_tracked
@@ -185,6 +185,7 @@ def settings_get(request: Request, saved: int = 0):
         request, "settings.html",
         {"tracked": tracked, "providers": list(PROVIDERS),
          "credit_to_usd": _credit_to_usd(config),
+         "rate_window_weeks": forecast_settings(config)["rate_window_weeks"],
          "official_fetch": ofs,
          "provider_toggles": settings_provider_toggles(config),
          "saved": bool(saved),
@@ -214,6 +215,10 @@ async def settings_post(request: Request):
     config["credit_to_usd"] = ctu if ctu > 0 else 0.04
     mi = int(_to_float(form.get("min_interval")))
     config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 10}
+    # 소비속도 추정 기간(트레일링 창, 주) — getter로 정규화(1~8 clamp·오설정→기본 2) 후 저장.
+    # 클램프 범위를 getter 단일 출처에 두려고 직접 min/max를 두지 않는다.
+    rw = forecast_settings({"forecast_settings": {"rate_window_weeks": form.get("rate_window_weeks")}})
+    config["forecast_settings"] = rw
     # 레거시 키 정리(있으면 제거 — config를 깔끔하게 다시 쓴다)
     for k in ("budget", "budget_start"):
         config.pop(k, None)
