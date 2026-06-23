@@ -89,7 +89,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
   비sidechain(부모)이 sidechain replay를 이긴다.
 - **리셋 주기는 공식 API `resets_at` 기준.** Claude=월간 리셋(공식 API가 `resets_at` 타임스탬프 제공). Codex=주간 리셋(매주 월요일, 공식 API가 남은 크레딧·리셋 시각 제공). 한도·리셋 정보는 모두 공식 취득 스냅샷에서 읽는다 — 수동 예산 입력이나 `budget_start` clamp는 더 이상 없다.
 - **웹은 `127.0.0.1`만 바인딩** — 네트워크 노출 금지. 쿼리 파라미터는 화이트리스트 fallback(`provider`/`sort`/`period` 등).
-  내역·차원별은 주/월 토글 + 사용자 지정 날짜 구간(`start`/`end`) 조회(`views._resolve_range`).
+  사용 이력(로컬)·기준별은 주/월 토글 + 사용자 지정 날짜 구간(`start`/`end`) 조회(`views._resolve_range`).
 - **CSS는 Tailwind(standalone CLI)로 빌드.** `static/src/input.css`(토큰+`@layer components`) → `static/app.css`(커밋). 런타임/exe는 무빌드 유지. htmx는 `static/vendor/`에 vendored(오프라인). Alpine은 실수요 시 추가(현재 미사용).
 - **공식 사용량은 멀티버킷(USD 통일) — Claude 버킷(월간·이벤트·rate-window)/Codex 월간(+개인 구독제 rate-window).** 한도·리셋은 모두 공식 API에서 읽는다(실제 리셋=`resets_at`). 게이지 라벨은 **창 길이 기반**으로 통일: "5시간"·"7일(All)"·"7일(Sonnet)"·"월간"·"이벤트". 옛 Codex "월÷4 주간 추정" 게이지는 로컬 used를 공식 한도에 섞던 위반이라 제거됨(ADR 0012) — 주간 흐름은 공식 글랜스("이번주 $", ADR 0011)가 대신한다. `credit_to_usd`(config, 기본 0.04)로 크레딧 환산, 토큰 cost 경로와 분리. 구 단일값 `official_usage` 테이블은 `_migrate`가 DROP(로컬 단일 사용자라 이관 없음).
 - **공식 사용량 취득(=갱신)은 default-on(tracked providers만)·비차단.** `tracked_providers` 목록에 있는 provider만 공식 API를 호출하고, 첫 실행 시 크레덴셜 파일 존재로 시드한다. 갱신은 **수집(`cmd_ingest`)과 분리** — 수집은 로컬 JSONL 재스캔만, 갱신은 웹 라우트(수동 버튼/자동 폴링)가 담당한다(ADR 0003). 起動 갱신은 대시보드 로드 시 `hx-trigger="load"`가 겸한다(launcher는 수집만 동기 실행).

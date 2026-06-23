@@ -28,7 +28,7 @@ _BASE = resource_path("tokenomy/web")
 
 
 def _nav_context(request: Request) -> dict:
-    """모든 템플릿에 내비 플래그 주입(ADR 0010). 공식 사용 이력 링크는 소진형 풀이
+    """모든 템플릿에 내비 플래그 주입(ADR 0010). 사용 이력(공식) 링크는 소진형 풀이
     있을 때만 — 페이지의 has_pool과 동일 로직(combined_forecast is not None)이라 일관.
     실패 시 보수적으로 노출(빈 페이지가 죽은 숨김보다 안전)."""
     try:
@@ -132,7 +132,7 @@ def history_view(request: Request, anchor: str | None = None, provider: str = ""
 def official_history_view(request: Request, anchor: str | None = None, provider: str = "",
                           period: str | None = None, start: str | None = None,
                           end: str | None = None, notice: str | None = None):
-    """공식 사용 이력(ADR 0010) — 통합 풀 누적 선 + 일별 소비 막대 + 일별 표."""
+    """사용 이력(공식) 화면(ADR 0010) — 통합 풀 누적 선 + 일별 소비 막대 + 일별 표."""
     provider = provider if provider in PROVIDERS else ""
     period = period if period in _PERIODS else "month"
     conn = connect()

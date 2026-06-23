@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-<h1 class="page-title">차원별</h1>
+<h1 class="page-title">기준별</h1>
 
 {% if active_empty %}
 <p class="muted">표시할 AI가 없습니다 — <a href="/settings">설정</a>에서 켜세요.</p>
@@ -38,7 +38,7 @@
     {% endif %}
   </div>
 
-  <nav class="toggle small" aria-label="차원 선택">
+  <nav class="toggle small" aria-label="기준 선택">
     <a href="/analysis?dim=model&anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if dim == 'model' }}">모델</a>
     <a href="/analysis?dim=skill&anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if dim == 'skill' }}">스킬</a>
     <a href="/analysis?dim=branch&anchor={{ anchor }}&period={{ period }}&provider={{ provider }}" class="{{ 'on' if dim == 'branch' }}">브랜치</a>

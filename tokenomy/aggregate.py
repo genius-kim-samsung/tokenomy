@@ -744,7 +744,7 @@ def official_period_glance(conn, provider: str, now_kst: datetime) -> ProviderGl
     """공식 기간 소비(오늘·이번주) 글랜스(ADR 0011, CONTEXT.md 동명 용어).
 
     pool_daily_history(소비 숫자)와 pool_snapshots_by_day(갭/추적시작 신호)를 재사용한다 —
-    새 델타 경로 없음, "공식 사용 이력" 화면과 같은 경로라 어긋나지 않는다. 오늘=KST 달력일
+    새 델타 경로 없음, "사용 이력(공식)" 화면과 같은 경로라 어긋나지 않는다. 오늘=KST 달력일
     0시~지금, 이번주=월요일 0시 KST~지금. USD 풀 스코프 게이트는 호출자(_provider_card)가
     view.pool_limit_usd로 처리한다(여긴 데이터만).
     """

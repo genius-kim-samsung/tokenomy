@@ -540,7 +540,7 @@ def dimension_context(conn, anchor_kst: datetime, provider: str, *,
                       dim: str = "model", now_kst: datetime | None = None,
                       period: str = "month", start: str | None = None,
                       end: str | None = None) -> dict:
-    """차원별(모델/스킬/브랜치) 사용/비용 + 서브에이전트 비중. 주/월 또는 사용자 지정 구간."""
+    """기준별(모델/스킬/브랜치) 사용/비용 + 서브에이전트 비중. 주/월 또는 사용자 지정 구간."""
     dim = dim if dim in DIM_COLUMNS else "model"
     now = now_kst or datetime.now(KST)
     config = load_config()
@@ -731,7 +731,7 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
                     now_kst: datetime | None = None, *,
                     period: str = "month", start: str | None = None,
                     end: str | None = None) -> dict:
-    """내역 — 날짜→폴더→세션 트리. 주/월 기간 또는 사용자 지정 [start, end]."""
+    """사용 이력(로컬) — 날짜→폴더→세션 트리. 주/월 기간 또는 사용자 지정 [start, end]."""
     now = now_kst or datetime.now(KST)
     config = load_config()
     active = tracked_providers(config)
@@ -767,7 +767,7 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
 def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
                              period: str = "month", start: str | None = None,
                              end: str | None = None, now_kst: datetime | None = None) -> dict:
-    """공식 사용 이력(ADR 0010) — 통합 풀의 누적 선 + 일별 소비 막대 + 일별 표.
+    """사용 이력(공식) 화면(ADR 0010) — 통합 풀의 누적 선 + 일별 소비 막대 + 일별 표.
 
     데이터는 공식 사용량 스냅샷 이력(ADR 0007)의 새 표현 — 신규 취득 없음. 소진형
     풀만(rate-window 제외) 보여주며, 소진형 풀이 없으면 has_pool=False(빈 상태).

@@ -319,7 +319,7 @@ def test_root_renders_overview(tmp_path, monkeypatch):
     assert "AI별 사용 현황" not in r.text   # 번다운 카드 섹션 제거
     assert 'class="sidebar"' in r.text
     assert 'href="/history"' in r.text
-    assert 'href="/analysis"' in r.text   # 나브: 모델별→차원별
+    assert 'href="/analysis"' in r.text   # 나브: 모델별→기준별
 
 
 def test_overview_aggregates_providers(tmp_path, monkeypatch):
@@ -402,7 +402,7 @@ def test_history_page_ok(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/history")
     assert r.status_code == 200
-    assert "내역" in r.text
+    assert "사용 이력(로컬)" in r.text
     assert "<th>날짜</th>" in r.text and "<th>세션ID</th>" in r.text
     assert 'class="view-seg"' not in r.text          # 5탭 제거됨
 
@@ -644,7 +644,7 @@ def test_analysis_dim_selector_and_skill(tmp_path, monkeypatch):
     r = client.get("/analysis?anchor=2026-06-10&dim=skill")
     assert r.status_code == 200
     assert "brainstorming" in r.text
-    assert ">스킬</a>" in r.text                       # 차원 선택기 항목
+    assert ">스킬</a>" in r.text                       # 기준 선택기 항목
     assert "Claude 로그 기준" in r.text                # claude_only 안내
 
 
@@ -848,7 +848,7 @@ def test_official_history_route_renders_with_depletion_pool(tmp_path, monkeypatc
     _seed_official(conn, "claude", "claude_enterprise_real.json", parse_claude)
     r = client.get("/official-history")
     assert r.status_code == 200
-    assert "공식 사용 이력" in r.text
+    assert "사용 이력(공식)" in r.text
     assert 'href="/official-history"' in client.get("/").text   # 소진형 풀 → 내비 노출
 
 
