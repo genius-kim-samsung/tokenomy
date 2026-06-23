@@ -13,7 +13,8 @@ from tokenomy.aggregate import (
     token_composition,
 )
 from tokenomy.config import (
-    credit_to_usd, forecast_settings, load_config, official_fetch_settings, tracked_providers, user_label,
+    credit_to_usd, forecast_settings, load_config, official_fetch_settings,
+    onboarding_pending, tracked_providers, user_label,
 )
 from tokenomy.db import get_fetch_state, get_meta
 from tokenomy.freshness import LAST_INGEST_KEY
@@ -476,6 +477,8 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     return {
         "active_nav": "dashboard", "sort": sort,
         "user_label": user_label(config),
+        # 완전 신규(미설정 + 빈 시드) → 빈 껍데기 대신 시작 안내 카드로 대체(A 모집단).
+        "onboarding": onboarding_pending(config),
         "tracked": active,
         "combined": combined, "solo_label": solo_label, "active_empty": not active,
         "month": now.strftime("%Y-%m"),

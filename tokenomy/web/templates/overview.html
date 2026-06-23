@@ -2,6 +2,23 @@
 {% block body %}
 <h1 class="page-title">대시보드 <span class="muted">· {{ month }} (KST){% if user_label %} · {{ user_label }}{% endif %}</span></h1>
 
+{% if onboarding %}
+{# 완전 신규(크레덴셜·config 없음) — 빈 껍데기 대신 시작 안내(A 모집단). official-section 폴링도 숨김. #}
+<section class="card onboarding-card">
+  <h2>Tokenomy 시작하기</h2>
+  <p>이 기기의 Claude Code·Codex 사용 기록을 읽어 비용을 분석합니다.<br>아직 사용 기록이 없어요.</p>
+  <ol class="onboarding-steps">
+    <li>Claude Code나 Codex로 평소처럼 작업하세요 <span class="muted">(채팅 1회 이상)</span></li>
+    <li>아래 <strong>[지금 수집]</strong>을 누르면 프로젝트·세션별 비용이 나타납니다</li>
+    <li>CLI가 로그인돼 있으면 공식 사용량·한도도 자동으로 표시됩니다</li>
+  </ol>
+  <form method="post" action="/ingest">
+    <button class="btn" type="submit">↻ 지금 수집</button>
+  </form>
+  <p class="disclaimer">ⓘ 전부 로컬에서 처리 — 외부 전송은 공식 사용량 취득뿐입니다</p>
+</section>
+{% else %}
+
 {% if forecast %}
 <section class="card forecast-hero" data-level="{{ forecast.level }}">
   <h2>이번 달 전망 <span class="muted">({{ forecast.providers_label }} 통합 · 추정)</span></h2>
@@ -108,5 +125,6 @@
   </table>
   <p class="muted"><a href="/history">사용 이력(로컬) 보기 →</a></p>
 </section>
+{% endif %}
 {% endblock %}
 {% block scripts %}{% include "_trend_chart.html" %}{% endblock %}

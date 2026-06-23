@@ -152,6 +152,38 @@ def test_tracked_providers_empty_list_persists(monkeypatch):
     assert tracked_providers({"tracked_providers": []}) == []
 
 
+from tokenomy.config import onboarding_pending
+
+
+def test_onboarding_pending_when_unconfigured_and_no_creds(monkeypatch):
+    # 미설정(None) + 크레덴셜 없음 = 완전 신규 진입자 → 온보딩.
+    import tokenomy.config as b
+    monkeypatch.setattr(b, "creds_present", lambda p: False)
+    assert onboarding_pending({}) is True
+    assert onboarding_pending({"tracked_providers": None}) is True
+
+
+def test_onboarding_pending_false_when_creds_present(monkeypatch):
+    # 미설정이라도 크레덴셜이 있으면 시드가 비지 않음 → 온보딩 아님(정상 화면).
+    import tokenomy.config as b
+    monkeypatch.setattr(b, "creds_present", lambda p: p == "claude")
+    assert onboarding_pending({}) is False
+
+
+def test_onboarding_pending_false_when_explicitly_empty(monkeypatch):
+    # 명시적 빈 리스트는 '사용자가 전부 끔' — 온보딩이 아니다(기존 '설정에서 켜세요' 유지).
+    import tokenomy.config as b
+    monkeypatch.setattr(b, "creds_present", lambda p: False)
+    assert onboarding_pending({"tracked_providers": []}) is False
+
+
+def test_onboarding_pending_false_when_explicit_list(monkeypatch):
+    # 명시적으로 provider를 고른 사용자는 온보딩 대상이 아니다.
+    import tokenomy.config as b
+    monkeypatch.setattr(b, "creds_present", lambda p: False)
+    assert onboarding_pending({"tracked_providers": ["claude"]}) is False
+
+
 from tokenomy.config import mini_view_settings
 
 

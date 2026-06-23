@@ -131,3 +131,16 @@ def tracked_providers(config: dict) -> list[str]:
         return [p for p in PROVIDERS if p in raw]       # [] → [] 영속(재시드 안 함)
     # None(미설정) → 크레덴셜 파일 존재 기반 시드. 공식 취득 전체 차단은 TOKENOMY_SKIP_OFFICIAL_FETCH.
     return [p for p in PROVIDERS if creds_present(p)]
+
+
+def onboarding_pending(config: dict) -> bool:
+    """완전 신규 진입자(빈 시드) 온보딩 상태인지 판정.
+
+    `tracked_providers` 키가 **미설정(None)**이고 — 즉 사용자가 명시적으로 끄지 않았고 —
+    크레덴셜 기반 시드 결과가 비어 있으면(활성 AI 0개) True. 이는 Claude Code/Codex를
+    한 번도 실행/로그인하지 않은 사용자를 뜻하며, 대시보드를 빈 껍데기 대신 시작 안내로 띄운다.
+    명시적 빈 리스트(`[]`)는 '사용자가 전부 끔'이라 온보딩이 아니다 — 기존 "설정에서 켜세요"를 유지.
+    """
+    if config.get("tracked_providers") is not None:   # 명시 설정(빈 리스트 포함) → 온보딩 아님
+        return False
+    return tracked_providers(config) == []            # 미설정 + 빈 시드 = 크레덴셜 없음

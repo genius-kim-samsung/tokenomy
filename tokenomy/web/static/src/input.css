@@ -389,6 +389,18 @@
   .forecast-hero[data-level="surplus"] .forecast-headline { color: var(--color-ok); }
   .forecast-hero[data-level="shortfall"] .forecast-headline,
   .forecast-hero[data-level="exhausted"] .forecast-headline { color: var(--color-warn); }
+
+  /* ── 완전 신규 진입자 온보딩 카드(빈 시드) ── */
+  .onboarding-card { @apply max-w-2xl; }
+  .onboarding-card > p { @apply text-muted leading-relaxed; }
+  .onboarding-steps {
+    @apply my-4 flex flex-col gap-2 text-[15px];
+    list-style: decimal;
+    padding-left: 1.4rem;
+  }
+  .onboarding-steps li { @apply pl-1; }
+  .onboarding-steps li::marker { color: var(--color-accent); font-weight: 600; }
+  .onboarding-card form { @apply my-4; }
 }
 
 /* ── 세션 표(.sess) 반응형: 기존 동작 그대로 이식(원시 CSS) ── */
