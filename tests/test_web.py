@@ -739,6 +739,33 @@ def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
     assert "이번 주" in r.text       # 주간(월÷4) 추정 게이지도 렌더
 
 
+def test_dashboard_disclaimer_names_surface_axis(tmp_path, monkeypatch):
+    """로컬 사용량 단서가 기기 축뿐 아니라 표면 축(Code/Codex)도 말해야 한다(ADR 0009)."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s','2026-06-10T10:00:00Z',5.0,1)")
+    conn.commit()
+    html = client.get("/").text
+    assert "이 머신의 Code/Codex만" in html
+    assert "이 머신 데이터만" not in html
+
+
+def test_analysis_disclaimer_names_surface_axis(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    html = client.get("/analysis").text
+    assert "이 머신의 Code/Codex만" in html
+    assert "이 머신 데이터만" not in html
+
+
+def test_official_section_legend_names_surface(tmp_path, monkeypatch):
+    """공식 카드 단서의 '추정' 출처도 표면 축(이 머신 Code/Codex)을 동형으로 보강."""
+    client, cfg = _client_with_config(tmp_path, monkeypatch)
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    html = client.get("/official/section").text
+    assert "이 머신 Code/Codex" in html
+
+
 def test_settings_shows_credit_to_usd(tmp_path, monkeypatch):
     """설정 페이지에 credit_to_usd 입력 필드가 있어야 한다."""
     client, _ = _client(tmp_path, monkeypatch)
