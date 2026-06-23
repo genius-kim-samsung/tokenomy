@@ -72,7 +72,7 @@ def cmd_report(conn) -> None:
     weeks = forecast_settings(config)["rate_window_weeks"]
     now = datetime.now(KST)
 
-    print(f"=== Tokenomy — {now:%Y-%m} (KST, 이 머신 데이터만) ===")
+    print(f"=== Tokenomy — {now:%Y-%m} (KST, 이 기기 데이터만) ===")
     print(f"User: {user_label(config)}")
     fr = freshness(conn, CLAUDE_ROOT, now)
     if fr.level == "warn":

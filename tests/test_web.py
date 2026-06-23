@@ -23,7 +23,7 @@ def _client(tmp_path, monkeypatch):
     db = tmp_path / "t.db"
     cfg = tmp_path / "cfg.json"
     # 활성 AI를 claude·codex 둘로 고정 — "전체=활성 합산"(ADR 0005)이라 테스트 결정성을 위해
-    # 명시한다(미지정 시 크레덴셜 존재로 시드돼 CI/머신별로 활성 집합이 갈린다).
+    # 명시한다(미지정 시 크레덴셜 존재로 시드돼 CI/기기별로 활성 집합이 갈린다).
     cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))  # 개인 config 격리
     monkeypatch.setenv("TOKENOMY_SKIP_UPDATE_CHECK", "1")  # 웹 테스트는 업데이트 네트워크 미사용
@@ -747,23 +747,23 @@ def test_dashboard_disclaimer_names_surface_axis(tmp_path, monkeypatch):
                  "VALUES ('a','claude','s','2026-06-10T10:00:00Z',5.0,1)")
     conn.commit()
     html = client.get("/").text
-    assert "이 머신의 Code/Codex만" in html
-    assert "이 머신 데이터만" not in html
+    assert "이 기기의 Claude Code와 Codex만" in html
+    assert "이 기기 데이터만" not in html
 
 
 def test_analysis_disclaimer_names_surface_axis(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     html = client.get("/analysis").text
-    assert "이 머신의 Code/Codex만" in html
-    assert "이 머신 데이터만" not in html
+    assert "이 기기의 Claude Code와 Codex만" in html
+    assert "이 기기 데이터만" not in html
 
 
 def test_official_section_legend_names_surface(tmp_path, monkeypatch):
-    """공식 카드 단서의 '추정' 출처도 표면 축(이 머신 Code/Codex)을 동형으로 보강."""
+    """공식 카드 단서의 '추정' 출처도 표면 축(이 기기 Claude Code와 Codex)을 동형으로 보강."""
     client, cfg = _client_with_config(tmp_path, monkeypatch)
     cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
     html = client.get("/official/section").text
-    assert "이 머신 Code/Codex" in html
+    assert "이 기기 Claude Code와 Codex" in html
 
 
 def test_settings_shows_credit_to_usd(tmp_path, monkeypatch):

@@ -39,7 +39,7 @@ Thumbs.db
 # tool-local (Claude Code / gstack — worktrees·settings 로컬 전용)
 .gstack/
 .claude/*
-# 단, 프로젝트 스킬은 추적해 머신 간(사내 PC↔집 데스크탑) 공유한다.
+# 단, 프로젝트 스킬은 추적해 기기 간(사내 PC↔집 데스크탑) 공유한다.
 # (.claude/는 디렉토리 자체를 ignore하면 하위를 되살릴 수 없어 .claude/* + negation 사용)
 !.claude/skills/
 
