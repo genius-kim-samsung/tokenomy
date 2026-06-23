@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup,
     _provider_where, by_day_session, by_dimension, by_project, by_session,
-    combined_forecast, daily_series, pool_history, pool_daily_history,
+    combined_forecast, daily_series, pool_history, pool_daily_history, pool_snapshots_by_day,
     insights, month_bounds, month_spend, official_view, parse_ts, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
@@ -783,8 +783,16 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
     view_providers = [provider] if provider else pool_providers
 
     interval = official_fetch_settings(config)["min_interval_minutes"]
+    # provider 순서 = _TREND_STYLE(스택/막대/드릴다운 일관) 우선, 나머지는 뒤로.
+    prov_list = ([p for p in _TREND_STYLE if p in view_providers]
+                 + [p for p in view_providers if p not in _TREND_STYLE])
     segments = pool_history(conn, view_providers, max_gap_minutes=interval * 3)
     daily = pool_daily_history(conn, view_providers, start=s, nxt=nxt)
+    detail_by_day = pool_snapshots_by_day(conn, prov_list, start=s, nxt=nxt)   # 일 소비 재구성(드릴다운)
+    prov_label = {p: (_TREND_STYLE[p][0] if p in _TREND_STYLE else p.title()) for p in prov_list}
+    for dets in detail_by_day.values():       # provider 라벨 주입(템플릿 단순화)
+        for pd in dets:
+            pd["label"] = prov_label.get(pd["provider"], pd["provider"])
 
     # 말일 누적/잔여 = 그 날 끝 시점의 통합 풀 used(누적 선과 동일 출처)·한도 잔여(표 컬럼).
     end_cum: dict = {}
@@ -798,11 +806,10 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
         cum = end_cum.get(r["date"])
         table.append({**r, "ymd": r["date"].strftime("%Y-%m-%d"), "md": r["date"].strftime("%m-%d"),
                       "end_cumulative_usd": cum,
-                      "remaining_usd": (round(pool_limit - cum, 4) if (pool_limit and cum is not None) else None)})
+                      "remaining_usd": (round(pool_limit - cum, 4) if (pool_limit and cum is not None) else None),
+                      "detail": detail_by_day.get(r["date"])})   # 펼침 시 스냅샷 재구성(없으면 None)
 
     # 차트용 배열 — 2단 패널(상: 누적 선, 하: provider 스택 막대)이 같은 날짜축 공유.
-    prov_list = ([p for p in _TREND_STYLE if p in view_providers]
-                 + [p for p in view_providers if p not in _TREND_STYLE])
     chart_labels = [r["date"].strftime("%m-%d") for r in daily]
     cum_data = [end_cum.get(r["date"]) for r in daily]   # 누적 선(갱신 없는 날 None=끊김)
     bar_series = [{

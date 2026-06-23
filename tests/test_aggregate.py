@@ -16,6 +16,7 @@ from tokenomy.aggregate import (
     combined_forecast, CombinedForecast,
     _trailing_business_days, trailing_window_spend,
     pool_used_history, _segment_points, pool_history, pool_daily_history,
+    pool_snapshots_by_day,
 )
 from tokenomy.db import connect, insert_official_buckets, ingest_records
 from tokenomy.official_parser import OfficialBucket
@@ -2152,3 +2153,102 @@ def test_pool_daily_history_excludes_rate_window_and_empty_pool():
     empty = pool_daily_history(connect(":memory:"), ["claude", "codex"],
                                start=_JUNE_START, nxt=_JULY_START)
     assert all(not r["covered"] for r in empty)
+
+
+# --- pool_snapshots_by_day: 일 소비 재구성 드릴다운(ADR 0010) ---
+
+
+def _seed_snap(conn, provider, kind, raw, samples, limit=100.0, unit="usd"):
+    """(day, hour, minute, used_usd) 표본을 2026-06 KST 스냅샷으로 적재."""
+    for day, hour, minute, used in samples:
+        dt = datetime(2026, 6, day, hour, minute, tzinfo=KST)
+        insert_official_buckets(
+            conn, provider=provider, fetched_at=dt.isoformat(),
+            buckets=[_ob("monthly", kind, used, limit, raw=raw, unit=unit)], created_at="x")
+
+
+def test_pool_snapshots_by_day_first_ever_two_snaps():
+    """추적 첫날: 직전 기준 없음(first_ever), 첫 표본 델타=누적값 전체, 합=일 소비."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend", [(3, 9, 0, 10.0), (3, 14, 0, 18.0)])
+    by_day = pool_snapshots_by_day(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    detail = by_day[date(2026, 6, 3)]
+    assert len(detail) == 1
+    pd = detail[0]
+    assert pd["provider"] == "claude"
+    assert pd["first_ever"] is True and pd["baseline"] is None and pd["gap_days"] == 0
+    assert [(s["delta"], s["reset"]) for s in pd["snapshots"]] == [(10.0, False), (8.0, False)]
+    assert pd["total_delta"] == 18.0
+
+
+def test_pool_snapshots_by_day_baseline_from_previous_day():
+    """연속일: 직전 기준 = 어제 마지막 표본, 당일 첫 델타 = 당일값 - 기준, gap_days=1."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend",
+               [(3, 23, 0, 10.0), (4, 9, 0, 25.0), (4, 18, 0, 30.0)])
+    by_day = pool_snapshots_by_day(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    pd = by_day[date(2026, 6, 4)][0]
+    assert pd["first_ever"] is False and pd["gap_days"] == 1
+    assert pd["baseline"]["used_usd"] == 10.0
+    assert pd["baseline"]["ts"] == datetime(2026, 6, 3, 23, 0, tzinfo=KST).isoformat()
+    assert [s["delta"] for s in pd["snapshots"]] == [15.0, 5.0]   # 25-10, 30-25
+    assert pd["total_delta"] == 20.0
+
+
+def test_pool_snapshots_by_day_gap_lumps_into_first_post_gap_day():
+    """3일 갭: 기준이 3일 전, gap_days=3 → 그 사이 소비가 이 날 델타에 합산됨을 노출."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend", [(3, 12, 0, 10.0), (6, 12, 0, 52.0)])
+    by_day = pool_snapshots_by_day(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    assert date(2026, 6, 4) not in by_day and date(2026, 6, 5) not in by_day  # 표본 없는 날 키 없음
+    pd = by_day[date(2026, 6, 6)][0]
+    assert pd["gap_days"] == 3 and pd["baseline"]["used_usd"] == 10.0
+    assert pd["snapshots"][0]["delta"] == 42.0   # 52-10, 4·5일치 흡수
+
+
+def test_pool_snapshots_by_day_reset_flag():
+    """리셋(누적 하락): 해당 표본 reset=True, 델타=post-reset 값(음수/거대값 아님)."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend", [(3, 9, 0, 90.0), (4, 9, 0, 5.0)])
+    by_day = pool_snapshots_by_day(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    pd = by_day[date(2026, 6, 4)][0]
+    assert pd["snapshots"][0]["reset"] is True and pd["snapshots"][0]["delta"] == 5.0
+
+
+def test_pool_snapshots_by_day_multi_provider_ordered():
+    """여러 provider는 인자 순서대로 리스트에 분해돼, 합산 일 소비를 provider별로 설명한다."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend", [(3, 9, 0, 10.0), (4, 9, 0, 30.0)])
+    _seed_snap(conn, "codex", "codex_monthly", "individual_limit", [(3, 10, 0, 5.0), (4, 10, 0, 11.0)],
+               limit=80.0, unit="credit")
+    by_day = pool_snapshots_by_day(conn, ["claude", "codex"], start=_JUNE_START, nxt=_JULY_START)
+    detail = by_day[date(2026, 6, 4)]
+    assert [pd["provider"] for pd in detail] == ["claude", "codex"]
+    assert {pd["provider"]: pd["total_delta"] for pd in detail} == {"claude": 20.0, "codex": 6.0}
+
+
+def test_pool_snapshots_by_day_reconciles_with_daily_history():
+    """불변식: 각 날 detail의 per-provider total_delta 합 == pool_daily_history의 일 소비."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend",
+               [(3, 9, 0, 10.0), (3, 20, 0, 14.0), (6, 9, 0, 40.0)])  # 갭(4,5) + 같은날 2표본
+    _seed_snap(conn, "codex", "codex_monthly", "individual_limit",
+               [(3, 9, 0, 5.0), (4, 9, 0, 9.0)], limit=80.0, unit="credit")
+    by_day = pool_snapshots_by_day(conn, ["claude", "codex"], start=_JUNE_START, nxt=_JULY_START)
+    daily = {r["date"]: r["used_usd"] for r in
+             pool_daily_history(conn, ["claude", "codex"], start=_JUNE_START, nxt=_JULY_START)
+             if r["covered"]}
+    for d, detail in by_day.items():
+        assert round(sum(pd["total_delta"] for pd in detail), 6) == daily[d]
+
+
+def test_pool_snapshots_by_day_baseline_can_predate_range_start():
+    """구간 첫날의 기준은 start 이전 표본일 수 있다(경계에서 델타 보존)."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend", [(3, 9, 0, 40.0), (5, 9, 0, 55.0)])
+    start = datetime(2026, 6, 4, tzinfo=KST)   # day3 표본은 구간 밖, 기준으로만 쓰임
+    by_day = pool_snapshots_by_day(conn, ["claude"], start=start, nxt=_JULY_START)
+    assert date(2026, 6, 3) not in by_day
+    pd = by_day[date(2026, 6, 5)][0]
+    assert pd["first_ever"] is False and pd["baseline"]["used_usd"] == 40.0
+    assert pd["snapshots"][0]["delta"] == 15.0   # 55-40

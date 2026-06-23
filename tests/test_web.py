@@ -745,6 +745,63 @@ def test_official_history_subscription_only_empty_and_nav_hidden(tmp_path, monke
     assert 'href="/official-history"' not in client.get("/").text  # 내비 숨김
 
 
+def test_official_history_drilldown_reconstructs_daily_number(tmp_path, monkeypatch):
+    """날짜 행 펼침 = 그 일 소비를 만든 스냅샷 재구성(ADR 0010 드릴다운).
+
+    6/10 첫 표본($100, 추적 시작) + 6/11 표본($130) → 6/11 일 소비 $30이
+    '직전 기준 $100 + 증가분 +$30'으로 분해돼 렌더된다.
+    """
+    from tokenomy.official_parser import OfficialBucket
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+
+    def _snap(ts, used):
+        b = OfficialBucket(
+            bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit",
+            label="spend", native_unit="usd",
+            used_native=used, limit_native=243.0, remaining_native=243.0 - used,
+            used_usd=used, limit_usd=243.0, remaining_usd=243.0 - used,
+            utilization=used / 243.0, resets_at=None)
+        insert_official_buckets(conn, provider="claude", fetched_at=ts,
+                                buckets=[b], created_at=ts)
+
+    _snap("2026-06-10T09:00:00+09:00", 100.0)
+    _snap("2026-06-11T09:00:00+09:00", 130.0)
+    r = client.get("/official-history?period=month&anchor=2026-06-15")
+    assert r.status_code == 200
+    assert 'data-detail="1"' in r.text       # 펼침 가능한 날 행
+    assert "추적 시작" in r.text              # 첫날(6/10) = first_ever
+    assert "직전 기준" in r.text              # 6/11 baseline 표시
+    assert "+$30.00" in r.text               # 6/11 증가분(130-100)
+    assert "위 증가분의 합" in r.text         # 재구성 합계 푸터
+
+
+def test_official_history_drilldown_multi_provider_labels(tmp_path, monkeypatch):
+    """활성 AI 둘(사내망 Claude+Codex)이면 드릴다운이 provider별로 분해·라벨링된다(ADR 0005/0010)."""
+    from tokenomy.official_parser import OfficialBucket
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+
+    def _snap(provider, kind, raw, ts, used, limit):
+        b = OfficialBucket(
+            bucket_key="monthly", raw_key=raw, bucket_kind=kind, label=raw, native_unit="usd",
+            used_native=used, limit_native=limit, remaining_native=limit - used,
+            used_usd=used, limit_usd=limit, remaining_usd=limit - used,
+            utilization=used / limit, resets_at=None)
+        insert_official_buckets(conn, provider=provider, fetched_at=ts, buckets=[b], created_at=ts)
+
+    _snap("claude", "monthly_limit", "spend", "2026-06-10T09:00:00+09:00", 100.0, 243.0)
+    _snap("claude", "monthly_limit", "spend", "2026-06-11T09:00:00+09:00", 130.0, 243.0)
+    _snap("codex", "codex_monthly", "individual_limit", "2026-06-10T09:00:00+09:00", 20.0, 235.0)
+    _snap("codex", "codex_monthly", "individual_limit", "2026-06-11T09:00:00+09:00", 35.0, 235.0)
+    r = client.get("/official-history?period=month&anchor=2026-06-15")
+    assert r.status_code == 200
+    # 6/11 펼침 블록에 두 provider 라벨 + per-provider 합이 분해돼야 한다.
+    assert ">Claude</div>" in r.text and ">Codex</div>" in r.text
+    assert "+$30.00" in r.text and "+$15.00" in r.text   # claude 130-100, codex 35-20
+    assert "위 증가분의 합" in r.text
+
+
 def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
     """엔터프라이즈 Codex(실측): 크레딧 한도가 credit_to_usd 환산 USD 게이지로 렌더되어야 한다.
 

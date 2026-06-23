@@ -38,6 +38,7 @@
 </section>
 
 <section class="card">
+  {% set ncol = 4 + (bar_series|length if bar_series|length >= 2 else 0) %}
   <table class="gtable">
     <thead>
       <tr>
@@ -50,8 +51,8 @@
     </thead>
     <tbody>
       {% for r in table|reverse %}
-      <tr>
-        <td>{{ r.ymd }}</td>
+      <tr class="day-row"{% if r.detail %} data-detail="1"{% endif %}>
+        <td>{% if r.detail %}<span class="caret" aria-hidden="true">▸</span> {% endif %}{{ r.ymd }}</td>
         {% if r.covered %}<td>${{ '%.2f'|format(r.used_usd) }}</td>
         {% else %}<td class="muted">수집 공백</td>{% endif %}
         {% if bar_series|length >= 2 %}{% for s in bar_series %}
@@ -61,16 +62,62 @@
         <td>{{ '$%.2f'|format(r.end_cumulative_usd) if r.end_cumulative_usd is not none else '—' }}</td>
         <td>{{ '$%.2f'|format(r.remaining_usd) if r.remaining_usd is not none else '—' }}</td>
       </tr>
+      {% if r.detail %}
+      <tr class="snap-detail" hidden>
+        <td colspan="{{ ncol }}" style="background:rgba(255,255,255,.03);padding:.5rem .9rem">
+          {% for pd in r.detail %}
+          <div style="margin:.35rem 0">
+            {% if r.detail|length >= 2 %}<div style="font-weight:600">{{ pd.label }}</div>{% endif %}
+            {% if pd.first_ever %}
+              <div class="muted">추적 시작 — 직전 기준 없음. 이 날 소비에는 <strong>추적 이전 누적분</strong>이 포함됩니다(델타 = 누적값 전체).</div>
+            {% else %}
+              <div class="muted">직전 기준 <strong>{{ pd.baseline.ts[5:16]|replace('T',' ') }}</strong> · 누적 ${{ '%.2f'|format(pd.baseline.used_usd) }}{% if pd.gap_days >= 2 %} · <span style="color:#e5a04a">⚠ {{ pd.gap_days }}일 갭 — 그 사이 소비가 이 날에 합산</span>{% endif %}</div>
+            {% endif %}
+            <table class="gtable" style="margin:.3rem 0">
+              <thead><tr><th>표본 시각</th><th>누적</th><th>증가분</th></tr></thead>
+              <tbody>
+                {% for s in pd.snapshots %}
+                <tr>
+                  <td>{{ s.ts[5:16]|replace('T',' ') }}</td>
+                  <td>${{ '%.2f'|format(s.used_usd) }}</td>
+                  <td>+${{ '%.2f'|format(s.delta) }}{% if s.reset %} <span style="color:#e5a04a">리셋</span>{% endif %}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            <div class="muted">합계 +${{ '%.2f'|format(pd.total_delta) }}</div>
+          </div>
+          {% endfor %}
+          <div class="muted" style="border-top:1px solid rgba(255,255,255,.08);margin-top:.4rem;padding-top:.3rem">
+            이 날 일 소비 <strong>${{ '%.2f'|format(r.used_usd) }}</strong> = 위 증가분의 합
+          </div>
+        </td>
+      </tr>
+      {% endif %}
       {% endfor %}
     </tbody>
   </table>
-  <p class="disclaimer">ⓘ 공식 사용량 스냅샷 이력(ADR 0007) 기반 · 소진형·통합 풀 한정(rate-window 제외)</p>
+  <p class="disclaimer">ⓘ 공식 사용량 스냅샷 이력(ADR 0007) 기반 · 소진형·통합 풀 한정(rate-window 제외) · <strong>날짜 행을 누르면</strong> 그 숫자를 만든 스냅샷을 펼쳐 봅니다.</p>
 </section>
 {% endif %}
 {% endblock %}
 
 {% block scripts %}
 {% if has_pool %}
+<script>
+  // 날짜 행 클릭 → 그 날 일 소비를 만든 스냅샷 재구성 행 토글(ADR 0010 드릴다운).
+  document.querySelectorAll('tr.day-row[data-detail]').forEach(function (row) {
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', function () {
+      var det = row.nextElementSibling;
+      if (!det || !det.classList.contains('snap-detail')) return;
+      var opening = det.hasAttribute('hidden');
+      if (opening) det.removeAttribute('hidden'); else det.setAttribute('hidden', '');
+      var caret = row.querySelector('.caret');
+      if (caret) caret.textContent = opening ? '▾' : '▸';
+    });
+  });
+</script>
 <script src="/static/vendor/chart.min.js"></script>
 <script>
   const ohLabels = {{ chart_labels|tojson }};

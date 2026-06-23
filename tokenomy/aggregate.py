@@ -678,6 +678,50 @@ def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: date
     return rows
 
 
+def pool_snapshots_by_day(conn, providers: list[str], *,
+                          start: datetime, nxt: datetime) -> dict:
+    """[start, nxt) 각 날짜의 일 소비를 만든 스냅샷 세부 재구성(ADR 0010 드릴다운).
+
+    `dict[date, list[provider_detail]]` — 표본 있는 날만 키. provider_detail은
+    `pool_daily_history`와 **같은 델타 공식**(첫 표본=누적 전체, 리셋=post-reset 값)을
+    스냅샷 단위로 분해한다. 그래서 detail의 델타 합 = 그 날 per_provider 일 소비와 일치 →
+    "왜 이 숫자인지"를 자기 설명한다. 각 detail:
+      provider / first_ever(직전 기준 없음=추적 시작) / baseline({ts,used_usd}|None) /
+      gap_days(직전 기준과 당일 첫 표본 사이 일수; ≥2면 갭 흡수) /
+      snapshots[{ts,used_usd,delta,reset}] / total_delta.
+    기준(baseline)은 당일 첫 표본 직전 스냅샷 — start 이전이어도 무방(경계 day의 기준 보존).
+    """
+    start_d = start.astimezone(KST).date()
+    nxt_d = nxt.astimezone(KST).date()
+    by_day: dict = {}
+    for p in providers:
+        prev_dt = None
+        prev_v = None
+        for dt, v in pool_used_history(conn, p):   # (dt, 누적 USD) 오름차순, 소진형 버킷만
+            d = dt.astimezone(KST).date()
+            reset = prev_v is not None and v < prev_v
+            delta = v if prev_v is None else (v if reset else v - prev_v)
+            if start_d <= d < nxt_d:
+                entry = by_day.setdefault(d, {})
+                if p not in entry:
+                    first_ever = prev_v is None
+                    entry[p] = {
+                        "provider": p, "first_ever": first_ever,
+                        "baseline": (None if first_ever
+                                     else {"ts": prev_dt.isoformat(), "used_usd": round(prev_v, 4)}),
+                        "gap_days": (0 if first_ever
+                                     else (d - prev_dt.astimezone(KST).date()).days),
+                        "snapshots": [], "total_delta": 0.0,
+                    }
+                pd = entry[p]
+                pd["snapshots"].append({"ts": dt.isoformat(), "used_usd": round(v, 4),
+                                        "delta": round(delta, 4), "reset": reset})
+                pd["total_delta"] = round(pd["total_delta"] + delta, 6)
+            prev_dt, prev_v = dt, v
+    # provider 순서는 인자 순서 보존(뷰가 _TREND_STYLE 순으로 정렬해 전달)
+    return {d: [entry[p] for p in providers if p in entry] for d, entry in by_day.items()}
+
+
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None,
                *, start: datetime | None = None, nxt: datetime | None = None,
                providers: list[str] | None = None) -> list[ProjectRow]:
