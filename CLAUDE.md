@@ -52,7 +52,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
   트리거(ADR 0003): **수동** 갱신 버튼 `POST /official/refresh`(manual=True, throttle bypass) + **자동** 폴링 `GET /official/section`(manual=False, throttle 적용 — 대시보드 `hx-trigger="load, every Nm"`, load가 起動 갱신 겸용). `cmd_ingest`(수집)는 갱신을 트리거하지 않는다. 표준 라이브러리만.
 - **db.py** — SQLite 적재. `messages`(메시지별 토큰/비용, `dedup_key` UNIQUE로 중복 제거),
   `sessions`(메타 + 요약 + 턴수), `session_day_turns`(세션×날짜 턴 수), `scan_offsets`(증분 스캔용 byte-offset),
-  `official_buckets`(공식 사용량 멀티버킷 USD 스냅샷), `official_fetch_state`(자동 취득 상태). 스키마 변경은 `_MIGRATE_COLS`에 ALTER 추가.
+  `official_buckets`(공식 사용량 멀티버킷 USD 스냅샷), `official_fetch_state`(자동 취득 상태), `meta`(key-value — 단가 reprice 핑거프린트 등). 스키마 변경은 `_MIGRATE_COLS`에 ALTER 추가.
 - **aggregate.py** — 공식 사용량 기반 예측(`official_view`+`lens`) · 프로젝트별/세션별 집계 · 사용량 전용 폴백. 월 경계는 **KST** 기준(ts는 UTC라 변환). 공식 데이터가 없으면 로컬 JSONL 기반 사용량 전용 view로 자동 폴백. 집계 함수는 `provider:str|None`(None=DB전체) 외에 키워드 `providers:list[str]|None`(=**활성 AI** 집합)을 받는다 — `provider=None and providers!=None`이면 `WHERE provider IN (...)`로 합산, 빈 집합 `[]`은 `WHERE 0`(빈 결과). 뷰 경계가 활성 집합을 주입하므로 화면의 "전체"는 **DB 전체가 아니라 활성 AI 합산**이다(ADR 0005).
 - **pricing.py + config/pricing.json** — 모델명 매칭으로 토큰→USD. `pricing_overrides`로 사용자 단가 override.
   `cost_usd`는 (토큰×단가)의 **캐시값** — 단가(pricing.json/overrides)가 바뀌면 `ingest`가 단가
@@ -60,6 +60,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
   컬럼에 저장해 재계산도 정확. 증분 적재 + dedup 가드는 옛 행을 다시 안 건드리므로 이 경로가 필수.
 - **web/app.py** — FastAPI 라우트(얇게: 라우팅 + 입력검증만). 데이터 조립은 **web/views.py**.
 - **launcher.py** — exe 진입점. ingest 1회 → 빈 포트 탐색 → uvicorn(127.0.0.1) → pywebview 창(없으면 브라우저 fallback).
+- **web/control.py** — 창 복원 신호용 in-process 콜백 레지스트리. launcher(메인 스레드 webview)와 라우트(데몬 스레드)의 순환 import를 끊는다 — launcher가 `set_show_callback`, `/app/show` 라우트가 `request_show`(ADR 0006).
 - **paths.py** — 경로 중앙 해석. 데이터 위치가 실행 형태로 갈린다(아래 게시).
 - **config.py** — 설정 모델(`config/tokenomy.config.json` 로더). `load_config`/`save_config` ·
   `tracked_providers`(=**활성 AI**; 미설정/None이면 크레덴셜 존재로 시드, 명시적 `[]`는 빈 집합 영속 — 재시드 안 함) · `credit_to_usd`(기본 0.04) ·
@@ -90,7 +91,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **리셋 주기는 공식 API `resets_at` 기준.** Claude=월간 리셋(공식 API가 `resets_at` 타임스탬프 제공). Codex=주간 리셋(매주 월요일, 공식 API가 남은 크레딧·리셋 시각 제공). 한도·리셋 정보는 모두 공식 취득 스냅샷에서 읽는다 — 수동 예산 입력이나 `budget_start` clamp는 더 이상 없다.
 - **웹은 `127.0.0.1`만 바인딩** — 네트워크 노출 금지. 쿼리 파라미터는 화이트리스트 fallback(`provider`/`sort`/`period` 등).
   사용 이력(로컬)·기준별은 주/월 토글 + 사용자 지정 날짜 구간(`start`/`end`) 조회(`views._resolve_range`).
-- **CSS는 Tailwind(standalone CLI)로 빌드.** `static/src/input.css`(토큰+`@layer components`) → `static/app.css`(커밋). 런타임/exe는 무빌드 유지. htmx는 `static/vendor/`에 vendored(오프라인). Alpine은 실수요 시 추가(현재 미사용).
+- **CSS는 Tailwind(standalone CLI)로 빌드.** `tokenomy/web/static/src/input.css`(토큰+`@layer components`) → `tokenomy/web/static/app.css`(커밋). 런타임/exe는 무빌드 유지. htmx는 `tokenomy/web/static/vendor/`에 vendored(오프라인). Alpine은 실수요 시 추가(현재 미사용).
 - **공식 사용량은 멀티버킷(USD 통일) — Claude 버킷(월간·이벤트·rate-window)/Codex 월간(+개인 구독제 rate-window).** 한도·리셋은 모두 공식 API에서 읽는다(실제 리셋=`resets_at`). 게이지 라벨은 **창 길이 기반**으로 통일: "5시간"·"7일(All)"·"7일(Sonnet)"·"월간"·"이벤트". 옛 Codex "월÷4 주간 추정" 게이지는 로컬 used를 공식 한도에 섞던 위반이라 제거됨(ADR 0012) — 주간 흐름은 공식 글랜스("이번주 $", ADR 0011)가 대신한다. `credit_to_usd`(config, 기본 0.04)로 크레딧 환산, 토큰 cost 경로와 분리. 구 단일값 `official_usage` 테이블은 `_migrate`가 DROP(로컬 단일 사용자라 이관 없음).
 - **공식 사용량 취득(=갱신)은 default-on(tracked providers만)·비차단.** `tracked_providers` 목록에 있는 provider만 공식 API를 호출하고, 첫 실행 시 크레덴셜 파일 존재로 시드한다. 갱신은 **수집(`cmd_ingest`)과 분리** — 수집은 로컬 JSONL 재스캔만, 갱신은 웹 라우트(수동 버튼/자동 폴링)가 담당한다(ADR 0003). 起動 갱신은 대시보드 로드 시 `hx-trigger="load"`가 겸한다(launcher는 수집만 동기 실행).
   타임아웃 ≤3s, **백오프 없음**(단발 시도, 실패 즉시 포기). `min_interval_minutes`="자동 갱신 간격"(기본 10) — 자동 폴링 주기이자 자동 호출 최소 간격. **수동 갱신은 이 간격을 무시(throttle bypass)**한다. 엔드포인트 quota는 CLI와 공유 — 충돌 못 막음. `TOKENOMY_SKIP_OFFICIAL_FETCH`로 전체 강제 차단 가능.
