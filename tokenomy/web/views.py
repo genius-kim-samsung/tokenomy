@@ -7,6 +7,7 @@ from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup,
     _provider_where, by_day_session, by_dimension, by_project, by_session,
     combined_forecast, daily_series, pool_history, pool_daily_history, pool_snapshots_by_day,
+    official_period_glance,
     insights, month_bounds, month_spend, official_view, parse_ts, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
@@ -343,6 +344,10 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
             "spark": _sparkline_points(daily_series(conn, provider, now_kst)),
         }
 
+    # 공식 기간 소비 글랜스(ADR 0011) — USD 풀 있는 provider만(스코프 게이트).
+    # rate-window-only(개인 구독제)·공식 미취득은 pool_limit_usd None → 글랜스 줄 숨김.
+    glance = official_period_glance(conn, provider, now_kst) if view.pool_limit_usd is not None else None
+
     return {
         "provider": provider,
         "label": meta["label"],
@@ -353,6 +358,7 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
         "note": note,
         "gauges": gauges,
         "fallback": fallback,
+        "glance": glance,
     }
 
 
@@ -405,6 +411,7 @@ def mini_view_context(conn, config: dict, now_kst: datetime | None = None) -> di
             "status": c["status"], "no_official": no_official,
             "fresh": c["fresh"], "fetched_at": c["fetched_at"], "note": c["note"],
             "gauges": [] if no_official else c["gauges"],   # official-only: 폴백 게이지 없음
+            "glance": c["glance"],                          # 공식 기간 소비(ADR 0011), official-only
         })
     return {
         "cards": cards,

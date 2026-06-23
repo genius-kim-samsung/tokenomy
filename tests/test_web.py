@@ -95,6 +95,58 @@ def test_dashboard_renders_sections_with_data(tmp_path, monkeypatch):
     assert "proj" in r.text                       # 프로젝트별 행
 
 
+def _seed_glance_history(conn, provider, day_used):
+    """USD 버킷 표본을 2026-06-<day> 12:00 KST 스냅샷으로 적재(글랜스 렌더 스모크용)."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.official_parser import OfficialBucket
+    for day, used in day_used:
+        dt = datetime(2026, 6, day, 12, 0, tzinfo=KST)
+        insert_official_buckets(
+            conn, provider=provider, fetched_at=dt.isoformat(), created_at=dt.isoformat(),
+            buckets=[OfficialBucket(
+                bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit",
+                label="월 사용 한도", native_unit="usd",
+                used_native=used, limit_native=100.0, remaining_native=100.0 - used,
+                used_usd=used, limit_usd=100.0, remaining_usd=100.0 - used,
+                utilization=used, resets_at=None)])
+    conn.commit()
+
+
+def test_official_section_renders_period_glance(tmp_path, monkeypatch):
+    """_official_section.html이 공식 기간 소비 글랜스 줄을 Jinja 오류 없이 렌더한다(ADR 0011)."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.official_parser import OfficialBucket
+    from tokenomy.web.views import official_section_context
+
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_glance_history(conn, "claude", [(9, 20.0), (10, 30.0)])   # 어제·오늘(NOW=6/10)
+    ctx = official_section_context(conn, {"tracked_providers": ["claude"]},
+                                   now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
+    html = app_module.templates.env.get_template("_official_section.html").render(ctx)
+    assert "오늘" in html and "이번주" in html
+    assert "공식 · 계정 전체" in html
+    assert "$10.00" in html        # 오늘 = 30-20
+
+
+def test_mini_section_renders_period_glance(tmp_path, monkeypatch):
+    """_mini_section.html이 글랜스 강조 줄을 Jinja 오류 없이 렌더한다(ADR 0011)."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.official_parser import OfficialBucket
+    from tokenomy.web.views import mini_view_context
+
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_glance_history(conn, "claude", [(9, 20.0), (10, 30.0)])
+    ctx = mini_view_context(conn, {"tracked_providers": ["claude"]},
+                            now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
+    html = app_module.templates.env.get_template("_mini_section.html").render(ctx)
+    assert "오늘" in html and "$10.00" in html
+
+
 def test_ingest_failure_shows_banner(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
 

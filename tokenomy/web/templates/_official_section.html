@@ -27,6 +27,26 @@
         </span>
       </header>
 
+      {# 공식 기간 소비 글랜스(ADR 0011) — 게이지 위 한 줄. 출처=공식 스냅샷 델타·계정 전체. #}
+      {% if c.glance %}
+      <div class="glance-line" style="display:flex;gap:1rem;align-items:baseline;margin:.1rem 0 .55rem;font-variant-numeric:tabular-nums">
+        <span><span class="muted">오늘</span>
+          {% if c.glance.today.state == "none" %}<span class="muted">—</span>
+          {% else %}<strong>${{ '%.2f'|format(c.glance.today.usd) }}</strong>{% if c.glance.today.state == "partial" %}<span class="muted" title="이전 구간 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
+        </span>
+        <span><span class="muted">이번주</span>
+          {% if c.glance.week.state == "none" %}<span class="muted">—</span>
+          {% else %}<strong>${{ '%.2f'|format(c.glance.week.usd) }}</strong>{% if c.glance.week.state == "partial" %}<span class="muted" title="이번주 시작 전 관측 없음 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
+        </span>
+        <span class="chip chip-official" style="margin-left:auto" title="공식 API 기준 · 전 기기 합">공식 · 계정 전체</span>
+      </div>
+      {% if c.glance.today.state == "partial" and c.glance.today.observed_from %}
+      <p class="muted" style="font-size:.78rem;margin:-.4rem 0 .55rem">오늘 {{ c.glance.today.observed_from[11:16] }}부터 관측 · 이전 구간 공백으로 부풀 수 있음</p>
+      {% elif c.glance.week.state == "complete" and c.glance.week.covered_days < c.glance.week.total_days %}
+      <p class="muted" style="font-size:.78rem;margin:-.4rem 0 .55rem">이번주 {{ c.glance.week.covered_days }}/{{ c.glance.week.total_days }}일 관측 · 합계는 정확</p>
+      {% endif %}
+      {% endif %}
+
       {% for g in c.gauges %}
       <div class="gauge-row">
         <div class="gauge-line">

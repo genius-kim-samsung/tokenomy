@@ -745,6 +745,80 @@ def pool_snapshots_by_day(conn, providers: list[str], *,
     return {d: [entry[p] for p in providers if p in entry] for d, entry in by_day.items()}
 
 
+@dataclass
+class PeriodSpend:
+    """한 기간(오늘·이번주)의 공식 소비 글랜스(ADR 0011, CONTEXT.md '공식 기간 소비')."""
+    usd: float | None                   # 기간 소비 USD. state="none"이면 None
+    state: str                          # "complete" | "partial" | "none"
+    observed_from: str | None = None    # today partial: 첫 관측 시각 ISO("09:00부터")
+    covered_days: int | None = None     # 기간 내 표본 있는 날 수
+    total_days: int | None = None       # 기간 총 날 수
+
+
+@dataclass
+class ProviderGlance:
+    """provider별 오늘·이번주 글랜스 쌍(ADR 0011)."""
+    today: PeriodSpend
+    week: PeriodSpend
+
+
+def _glance_detail(snaps_for_day: list, provider: str) -> dict | None:
+    """pool_snapshots_by_day의 하루 detail 리스트에서 provider 항목을 고른다."""
+    for d in snaps_for_day:
+        if d["provider"] == provider:
+            return d
+    return None
+
+
+def _period_spend(rows: list, snaps: dict, provider: str, *, is_today: bool) -> PeriodSpend:
+    """pool_daily_history 행 + pool_snapshots_by_day로 한 기간의 PeriodSpend 산출.
+
+    합 = covered 행 used_usd 합(이번주는 주중 갭이 있어도 미관측분이 다음 표본 날에 합산되어
+    총량 보존). 상태는 기간 **첫 covered 날의 baseline 신뢰도**로 갈린다: 직전 baseline
+    없음(first_ever)이거나 직전이 2일+ 전(gap_days≥2)이면 partial(△ — 갭 흡수로 부풀 수
+    있음), 깨끗하면 complete. covered 0이면 none(관측 자체 없음 — "$0"과 구분).
+    """
+    total_days = len(rows)
+    covered = [r for r in rows if r["covered"]]
+    if not covered:
+        return PeriodSpend(usd=None, state="none", observed_from=None,
+                           covered_days=0, total_days=total_days)
+    usd = round(sum(r["used_usd"] for r in covered), 4)
+    detail = _glance_detail(snaps.get(covered[0]["date"], []), provider)
+    state = "complete"
+    observed_from = None
+    if detail is not None and (detail["first_ever"] or detail["gap_days"] >= 2):
+        state = "partial"
+        if is_today and detail["snapshots"]:
+            observed_from = detail["snapshots"][0]["ts"]
+    return PeriodSpend(usd=usd, state=state, observed_from=observed_from,
+                       covered_days=len(covered), total_days=total_days)
+
+
+def official_period_glance(conn, provider: str, now_kst: datetime) -> ProviderGlance:
+    """공식 기간 소비(오늘·이번주) 글랜스(ADR 0011, CONTEXT.md 동명 용어).
+
+    pool_daily_history(소비 숫자)와 pool_snapshots_by_day(갭/추적시작 신호)를 재사용한다 —
+    새 델타 경로 없음, "공식 사용 이력" 화면과 같은 경로라 어긋나지 않는다. 오늘=KST 달력일
+    0시~지금, 이번주=월요일 0시 KST~지금. USD 풀 스코프 게이트는 호출자(_provider_card)가
+    view.pool_limit_usd로 처리한다(여긴 데이터만).
+    """
+    now = now_kst.astimezone(KST)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_d = today_start.date()
+    week_start = today_start - timedelta(days=today_start.weekday())   # 월요일 0시 KST
+    nxt = today_start + timedelta(days=1)
+
+    week_rows = pool_daily_history(conn, [provider], start=week_start, nxt=nxt)
+    snaps = pool_snapshots_by_day(conn, [provider], start=week_start, nxt=nxt)
+    today_rows = [r for r in week_rows if r["date"] == today_d]
+
+    return ProviderGlance(
+        today=_period_spend(today_rows, snaps, provider, is_today=True),
+        week=_period_spend(week_rows, snaps, provider, is_today=False),
+    )
+
+
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None,
                *, start: datetime | None = None, nxt: datetime | None = None,
                providers: list[str] | None = None) -> list[ProjectRow]:

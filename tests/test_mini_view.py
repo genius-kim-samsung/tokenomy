@@ -96,3 +96,25 @@ def test_interval_reflects_config():
     conn = _conn()
     ctx = mini_view_context(conn, {"tracked_providers": [], "official_fetch": {"min_interval_minutes": 15}}, NOW)
     assert ctx["interval"] == 15
+
+
+def _seed_day(conn, provider, day, used):
+    """USD 버킷 1개를 2026-06-<day> 12:00 KST 스냅샷으로 적재(글랜스 이력용)."""
+    dt = datetime(2026, 6, day, 12, 0, tzinfo=KST)
+    insert_official_buckets(
+        conn, provider=provider, fetched_at=dt.isoformat(), created_at=dt.isoformat(),
+        buckets=[_bucket(used_usd=used, used_native=used,
+                         remaining_usd=100.0 - used, remaining_native=100.0 - used,
+                         utilization=used)])
+
+
+def test_mini_card_carries_period_glance_with_partial_marker():
+    """미니 카드도 공식 기간 소비 글랜스를 갖는다(ADR 0011) — 갭이면 today partial(△ 신호)."""
+    conn = _conn()
+    _seed_day(conn, "claude", 18, 20.0)   # 목 baseline
+    _seed_day(conn, "claude", 21, 50.0)   # 일(오늘=NOW), 19·20 갭 → today partial
+    card = _card(mini_view_context(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    assert card["glance"] is not None
+    assert card["glance"].today.state == "partial"
+    assert card["glance"].today.usd == 30.0           # 50-20
+    assert card["glance"].today.observed_from is not None

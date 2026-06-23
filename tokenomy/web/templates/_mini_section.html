@@ -14,6 +14,13 @@
   {% if c.no_official %}
   <p class="mini-empty">공식 데이터 없음 · <a href="/">큰 창</a>에서 확인</p>
   {% else %}
+  {# 공식 기간 소비 글랜스(ADR 0011) — 게이지 위 강조 한 줄. △=관측 공백으로 부풀 수 있음. #}
+  {% if c.glance %}
+  <div class="mini-glance" style="display:flex;gap:.7rem;font-weight:600;font-variant-numeric:tabular-nums;margin:.1rem 0 .35rem">
+    <span><span class="mini-glance-k" style="font-weight:400;opacity:.7">오늘 </span>{% if c.glance.today.state == "none" %}—{% else %}${{ '%.2f'|format(c.glance.today.usd) }}{% if c.glance.today.state == "partial" %}<span title="관측 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}</span>
+    <span><span class="mini-glance-k" style="font-weight:400;opacity:.7">주 </span>{% if c.glance.week.state == "none" %}—{% else %}${{ '%.2f'|format(c.glance.week.usd) }}{% if c.glance.week.state == "partial" %}<span title="관측 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}</span>
+  </div>
+  {% endif %}
   {% for g in c.gauges %}
   <div class="mini-gauge">
     <div class="mini-gauge-line">

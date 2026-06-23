@@ -17,6 +17,7 @@ from tokenomy.aggregate import (
     _trailing_business_days, trailing_window_spend,
     pool_used_history, _segment_points, pool_history, pool_daily_history,
     pool_snapshots_by_day,
+    official_period_glance, ProviderGlance, PeriodSpend,
 )
 from tokenomy.db import connect, insert_official_buckets, ingest_records
 from tokenomy.official_parser import OfficialBucket
@@ -2286,3 +2287,77 @@ def test_pool_snapshots_by_day_baseline_can_predate_range_start():
     pd = by_day[date(2026, 6, 5)][0]
     assert pd["first_ever"] is False and pd["baseline"]["used_usd"] == 40.0
     assert pd["snapshots"][0]["delta"] == 15.0   # 55-40
+
+
+# --- official_period_glance: 공식 오늘·이번주 소비 글랜스(ADR 0011) ---
+
+_NOW_WED = datetime(2026, 6, 10, 15, 0, tzinfo=KST)   # 수 15:00 — 주 시작=월 06-08
+
+
+def test_period_glance_today_complete():
+    """어제 baseline + 오늘 표본 → today.usd=오늘 델타, state=complete."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend", [(9, 20.0), (10, 30.0)])
+    g = official_period_glance(conn, "claude", _NOW_WED)
+    assert g.today.usd == 10.0           # 30-20
+    assert g.today.state == "complete"
+
+
+def test_period_glance_week_sums_covered_days():
+    """이번주 = 월~오늘 covered 합. 주말 baseline(일) 있으면 complete."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend",
+               [(7, 10.0), (8, 15.0), (9, 22.0), (10, 30.0)])   # 일 baseline + 월·화·수
+    g = official_period_glance(conn, "claude", _NOW_WED)
+    assert g.week.usd == 20.0            # (15-10)+(22-15)+(30-22)
+    assert g.week.state == "complete"
+    assert g.week.covered_days == 3 and g.week.total_days == 3   # 월·화·수
+
+
+def test_period_glance_today_none_when_no_sample_today():
+    """오늘 표본이 없으면 today.state=none, usd=None('$0'과 구분)."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend", [(8, 10.0), (9, 18.0)])  # 오늘(10) 없음
+    g = official_period_glance(conn, "claude", _NOW_WED)
+    assert g.today.state == "none"
+    assert g.today.usd is None
+
+
+def test_period_glance_today_partial_on_gap():
+    """오늘 직전 baseline이 3일 전(gap_days≥2)이면 today partial + observed_from."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend", [(7, 10.0), (10, 40.0)])   # 8,9 갭
+    g = official_period_glance(conn, "claude", _NOW_WED)
+    assert g.today.state == "partial"
+    assert g.today.usd == 30.0       # 40-10 (8,9,10 lump)
+    assert g.today.observed_from == datetime(2026, 6, 10, 12, 0, tzinfo=KST).isoformat()
+
+
+def test_period_glance_week_gap_robust_sum_preserved():
+    """주중 하루 갭이어도 주 합계는 정확(총량 보존), covered_days<total_days로 노출."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend",
+               [(7, 10.0), (8, 15.0), (10, 30.0)])   # 화(9) 갭
+    g = official_period_glance(conn, "claude", _NOW_WED)
+    assert g.week.usd == 20.0        # 30-10, 합 보존
+    assert g.week.state == "complete"
+    assert g.week.covered_days == 2 and g.week.total_days == 3
+
+
+def test_period_glance_week_partial_when_first_ever():
+    """주 시작 전 baseline이 전무(첫 표본이 이번주)면 week partial(추적 시작 — 이전 미분리)."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend", [(8, 10.0), (9, 18.0), (10, 30.0)])
+    g = official_period_glance(conn, "claude", _NOW_WED)
+    assert g.week.state == "partial"
+    assert g.week.usd == 30.0        # 추적 시작분 포함
+
+
+def test_period_glance_handles_reset_within_week():
+    """기간 내 리셋(누적 하락)은 post-reset만 계상 — 거대/음수 막대 없음."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend",
+               [(7, 80.0), (8, 90.0), (9, 5.0), (10, 12.0)])   # 화(9) 리셋 90→5
+    g = official_period_glance(conn, "claude", _NOW_WED)
+    assert g.week.usd == 22.0        # (90-80)+5+(12-5)
+    assert g.today.usd == 7.0        # 12-5

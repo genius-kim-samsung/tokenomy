@@ -230,6 +230,40 @@ def test_untracked_no_data_provider_omitted():
     assert [c["provider"] for c in cards] == ["claude"]   # codex는 생략
 
 
+# ── 공식 기간 소비 글랜스(ADR 0011) ───────────────────────────────────────────
+def _seed_day(conn, provider, day, used):
+    """USD 버킷 1개를 2026-06-<day> 12:00 KST 스냅샷으로 적재(글랜스 이력용)."""
+    dt = datetime(2026, 6, day, 12, 0, tzinfo=KST)
+    insert_official_buckets(
+        conn, provider=provider, fetched_at=dt.isoformat(), created_at=dt.isoformat(),
+        buckets=[_bucket(used_usd=used, used_native=used,
+                         remaining_usd=100.0 - used, remaining_native=100.0 - used,
+                         utilization=used)])
+
+
+def test_card_has_period_glance_for_usd_pool():
+    """USD 풀 provider 카드에 공식 기간 소비 글랜스(오늘·이번주)가 붙는다."""
+    conn = _conn()
+    _seed_day(conn, "claude", 9, 20.0)    # 어제 baseline
+    _seed_day(conn, "claude", 10, 30.0)   # 오늘(NOW6=6/10)
+    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW6), "claude")
+    assert card["glance"] is not None
+    assert card["glance"].today.usd == 10.0           # 30-20
+    assert card["glance"].today.state == "complete"
+
+
+def test_card_no_glance_for_rate_window_only():
+    """rate-window-only(개인 구독제)는 USD 풀 없음 → 글랜스 None(줄 숨김, 스코프 게이트)."""
+    conn = _conn()
+    _seed(conn, "claude", [_bucket(
+        bucket_key="rate_window", raw_key="five_hour", bucket_kind="rate_window",
+        label="5시간 한도", native_unit="percent",
+        used_usd=None, limit_usd=None, remaining_usd=None,
+        used_native=50.0, limit_native=100.0, remaining_native=50.0, utilization=50.0)])
+    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    assert card["glance"] is None
+
+
 # ── 통합 월말 전망 히어로 ─────────────────────────────────────────────────────
 def _fc(**kw) -> CombinedForecast:
     base = dict(
