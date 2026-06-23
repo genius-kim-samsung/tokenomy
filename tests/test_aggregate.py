@@ -15,7 +15,7 @@ from tokenomy.aggregate import (
     week_count,
     combined_forecast, CombinedForecast,
     _trailing_business_days, trailing_window_spend,
-    pool_used_history, _segment_points, pool_history,
+    pool_used_history, _segment_points, pool_history, pool_daily_history,
 )
 from tokenomy.db import connect, insert_official_buckets, ingest_records
 from tokenomy.official_parser import OfficialBucket
@@ -2074,3 +2074,81 @@ def test_pool_history_to_daily_empty():
     now = datetime(2026, 6, 10, 12, 0, tzinfo=KST)
     days = list(range(1, 31))
     assert pool_history_to_daily([], days, now) == [None] * 30
+
+
+# --- pool_daily_history: 날짜별 통합 풀 소비 델타 + 커버리지(ADR 0010) ---
+
+_JUNE_START = datetime(2026, 6, 1, tzinfo=KST)
+_JULY_START = datetime(2026, 7, 1, tzinfo=KST)
+
+
+def _seed_days(conn, provider, kind, raw, day_used, limit=100.0, unit="usd"):
+    """(day, used_usd) 표본을 2026-06-<day> 12:00 KST 스냅샷으로 적재."""
+    for day, used in day_used:
+        dt = datetime(2026, 6, day, 12, 0, tzinfo=KST)
+        insert_official_buckets(
+            conn, provider=provider, fetched_at=dt.isoformat(),
+            buckets=[_ob("monthly", kind, used, limit, raw=raw, unit=unit)], created_at="x")
+
+
+def test_pool_daily_history_basic_deltas():
+    """일별 소비 = 인접 누적차. 첫 표본은 기준 0에서의 누적(=그 값)."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend", [(3, 10.0), (4, 25.0), (5, 40.0)])
+    rows = pool_daily_history(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    covered = {r["date"]: r["used_usd"] for r in rows if r["covered"]}
+    assert covered == {date(2026, 6, 3): 10.0, date(2026, 6, 4): 15.0, date(2026, 6, 5): 15.0}
+
+
+def test_pool_daily_history_reset_counts_post_reset_only():
+    """리셋(누적 하락)은 음수/거대 막대를 만들지 않고 post-reset 값만 계상한다."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend", [(3, 80.0), (4, 90.0), (5, 5.0)])
+    rows = pool_daily_history(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    covered = {r["date"]: r["used_usd"] for r in rows if r["covered"]}
+    assert covered[date(2026, 6, 3)] == 80.0
+    assert covered[date(2026, 6, 4)] == 10.0
+    assert covered[date(2026, 6, 5)] == 5.0   # 리셋: 90→5, -85이나 95가 아니라 5
+
+
+def test_pool_daily_history_gap_lumps_and_marks_uncovered():
+    """갭 가로지른 소비는 첫 post-gap 날에 합산, 표본 없는 날은 covered=False·used=None(0 아님)."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend", [(3, 10.0), (6, 40.0)])  # day4,5 표본 없음
+    rows = pool_daily_history(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    by_d = {r["date"]: r for r in rows}
+    assert by_d[date(2026, 6, 3)]["used_usd"] == 10.0
+    assert by_d[date(2026, 6, 6)]["used_usd"] == 30.0    # day4,5,6 소비가 day6에 lump
+    assert by_d[date(2026, 6, 4)]["covered"] is False and by_d[date(2026, 6, 4)]["used_usd"] is None
+    assert by_d[date(2026, 6, 1)]["covered"] is False    # 첫 표본 이전도 미커버
+    assert len(rows) == 30                                # 구간 모든 날이 행으로(막대 x축)
+
+
+def test_pool_daily_history_per_provider_breakdown_sums():
+    """provider별 일별 델타가 분해로 노출되고, 통합 델타는 그 합과 정확히 일치(스택 무결성)."""
+    conn = connect(":memory:")
+    _seed_days(conn, "claude", "monthly_limit", "spend", [(3, 10.0), (4, 30.0)])
+    _seed_days(conn, "codex", "codex_monthly", "individual_limit", [(3, 5.0), (4, 11.0)],
+               limit=80.0, unit="credit")
+    rows = pool_daily_history(conn, ["claude", "codex"], start=_JUNE_START, nxt=_JULY_START)
+    by_d = {r["date"]: r for r in rows}
+    assert by_d[date(2026, 6, 3)]["per_provider"] == {"claude": 10.0, "codex": 5.0}
+    assert by_d[date(2026, 6, 4)]["per_provider"] == {"claude": 20.0, "codex": 6.0}  # 30-10, 11-5
+    for r in rows:
+        if r["covered"]:
+            assert r["used_usd"] == round(sum(r["per_provider"].values()), 6)
+
+
+def test_pool_daily_history_excludes_rate_window_and_empty_pool():
+    """rate_window-only provider는 소진형 풀에 0 기여, 빈 풀은 전부 미커버(라우트 숨김 근거)."""
+    conn = connect(":memory:")
+    dt = datetime(2026, 6, 3, 12, 0, tzinfo=KST)
+    insert_official_buckets(   # rate_window만(limit_usd None) — 소진형 아님
+        conn, provider="claude", fetched_at=dt.isoformat(),
+        buckets=[_ob("rate_window", "rate_window", None, None, raw="five_hour",
+                     unit="percent", util=50.0)], created_at="x")
+    rows = pool_daily_history(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    assert all(not r["covered"] for r in rows)
+    empty = pool_daily_history(connect(":memory:"), ["claude", "codex"],
+                               start=_JUNE_START, nxt=_JULY_START)
+    assert all(not r["covered"] for r in empty)

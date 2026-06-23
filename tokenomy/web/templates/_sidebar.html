@@ -6,6 +6,7 @@
   <nav class="nav">
     <a href="/"         class="nav-item {{ 'on' if active_nav == 'dashboard' }}">대시보드</a>
     <a href="/history"  class="nav-item {{ 'on' if active_nav == 'history' }}">내역</a>
+    {% if show_official_history %}<a href="/official-history" class="nav-item {{ 'on' if active_nav == 'official_history' }}">공식 사용 이력</a>{% endif %}
     <a href="/analysis" class="nav-item {{ 'on' if active_nav == 'analysis' }}">차원별</a>
     <a href="/settings" class="nav-item {{ 'on' if active_nav == 'settings' }}">설정</a>
   </nav>

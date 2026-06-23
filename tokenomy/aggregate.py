@@ -645,6 +645,39 @@ def pool_history(conn, providers: list[str], *, max_gap_minutes: int | None = No
     return segments
 
 
+def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: datetime) -> list:
+    """[start, nxt) 구간의 날짜별 통합 풀 소비 델타 + 커버리지(ADR 0010).
+
+    각 행 = {date, covered, used_usd, per_provider}. 일별 소비 = 각 provider 누적
+    시계열의 인접 누적차 합(첫 표본은 기준 0에서의 누적, 리셋=누적 하락은 post-reset
+    값만 계상). 표본 있는 날만 covered=True로 돌려준다.
+    """
+    start_d = start.astimezone(KST).date()
+    nxt_d = nxt.astimezone(KST).date()
+    per_prov: dict[str, dict] = {}
+    for p in providers:
+        daily: dict = {}
+        prev = None
+        for dt, v in pool_used_history(conn, p):   # (dt, 누적 USD) 오름차순, 소진형 버킷만
+            cons = v if prev is None else (v - prev if v >= prev else v)
+            d = dt.astimezone(KST).date()
+            daily[d] = daily.get(d, 0.0) + cons
+            prev = v
+        per_prov[p] = daily
+
+    rows = []
+    d = start_d
+    while d < nxt_d:
+        pp = {p: round(daily[d], 6) for p, daily in per_prov.items() if d in daily}
+        if pp:
+            rows.append({"date": d, "covered": True,
+                         "used_usd": round(sum(pp.values()), 6), "per_provider": pp})
+        else:   # 표본 없는 날 — 수집 공백(0 아님, ADR 0007)
+            rows.append({"date": d, "covered": False, "used_usd": None, "per_provider": {}})
+        d += timedelta(days=1)
+    return rows
+
+
 def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | None = None,
                *, start: datetime | None = None, nxt: datetime | None = None,
                providers: list[str] | None = None) -> list[ProjectRow]:

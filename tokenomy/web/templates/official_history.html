@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block body %}
+<h1 class="page-title">공식 사용 이력</h1>
+
+{% if not has_pool %}
+<section class="card">
+  <p class="muted">소진형 한도(엔터프라이즈 USD·Codex 월간 크레딧)가 있는 활성 AI가 없어 표시할 이력이 없습니다.
+    이 화면은 한도가 차오르는 공식 사용량의 시간 궤적을 보여줍니다 — 개인 구독제(rate-window)는 제외됩니다.</p>
+</section>
+{% else %}
+
+<section class="card">
+  <div class="card-head">
+    <div class="period-nav">
+      <a class="btn" href="/official-history?period={{ period }}&anchor={{ prev_anchor }}&provider={{ provider }}">‹ 이전</a>
+      <span class="label">{{ period_label }}</span>
+      {% if has_next %}<a class="btn" href="/official-history?period={{ period }}&anchor={{ next_anchor }}&provider={{ provider }}">다음 ›</a>{% endif %}
+    </div>
+    <form class="filters" method="get" action="/official-history">
+      <input type="hidden" name="provider" value="{{ provider }}">
+      <span class="range">
+        <input type="date" name="start" value="{{ start }}">
+        <input type="date" name="end" value="{{ end }}">
+        <button class="btn" type="submit">조회</button>
+      </span>
+    </form>
+  </div>
+  <nav class="toggle small" aria-label="기간 단위">
+    <a href="/official-history?period=month&anchor={{ anchor }}&provider={{ provider }}" class="{{ 'on' if period == 'month' and not custom }}">월</a>
+    <a href="/official-history?period=week&anchor={{ anchor }}&provider={{ provider }}" class="{{ 'on' if period == 'week' and not custom }}">주</a>
+  </nav>
+
+  {# 상단 패널: 누적 선(+한도선) / 하단 패널: provider 스택 막대 — 같은 날짜축 공유(ADR 0010) #}
+  <div><canvas id="oh-cum" height="120"></canvas></div>
+  <div><canvas id="oh-bar" height="120"></canvas></div>
+  <p class="muted">막대는 마지막 표본 기준 <strong>일별 증가분</strong> — 앱이 꺼진 구간 소비는 다음 표본 날짜에 합산됩니다.
+    표본 없는 날은 “수집 공백”으로, 0이 아닙니다.</p>
+</section>
+
+<section class="card">
+  <table class="gtable">
+    <thead>
+      <tr>
+        <th>날짜</th>
+        <th>일 소비</th>
+        {% if bar_series|length >= 2 %}{% for s in bar_series %}<th>{{ s.label }}</th>{% endfor %}{% endif %}
+        <th>말일 누적</th>
+        <th>잔여</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in table|reverse %}
+      <tr>
+        <td>{{ r.ymd }}</td>
+        {% if r.covered %}<td>${{ '%.2f'|format(r.used_usd) }}</td>
+        {% else %}<td class="muted">수집 공백</td>{% endif %}
+        {% if bar_series|length >= 2 %}{% for s in bar_series %}
+          {% set v = r.per_provider.get(s.key) %}
+          <td>{{ '$%.2f'|format(v) if v is not none else '—' }}</td>
+        {% endfor %}{% endif %}
+        <td>{{ '$%.2f'|format(r.end_cumulative_usd) if r.end_cumulative_usd is not none else '—' }}</td>
+        <td>{{ '$%.2f'|format(r.remaining_usd) if r.remaining_usd is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="disclaimer">ⓘ 공식 사용량 스냅샷 이력(ADR 0007) 기반 · 소진형·통합 풀 한정(rate-window 제외)</p>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if has_pool %}
+<script src="/static/vendor/chart.min.js"></script>
+<script>
+  const ohLabels = {{ chart_labels|tojson }};
+  const ohCum = {{ cum_data|tojson }};        // 일별 말일 누적(없는 날 null=끊김)
+  const ohLimit = {{ pool_limit|tojson }};    // 통합 풀 한도(수평선)
+  const ohBars = {{ bar_series|tojson }};      // [{key,label,color,data}] provider 스택
+
+  // 상단: 누적 선 + 한도 수평선(자기 축)
+  const cumSets = [{
+    label: '공식 누적(USD)', data: ohCum,
+    borderColor: 'rgba(122,162,247,0.95)', borderWidth: 2,
+    backgroundColor: 'transparent', fill: false, tension: .1, pointRadius: 0, spanGaps: false,
+  }];
+  if (ohLimit != null) {
+    cumSets.push({
+      label: '통합 한도', data: ohLabels.map(() => ohLimit),
+      borderColor: 'rgba(229,107,84,0.9)', borderWidth: 1.5, borderDash: [2, 2],
+      backgroundColor: 'transparent', fill: false, pointRadius: 0,
+    });
+  }
+  new Chart(document.getElementById('oh-cum'), {
+    type: 'line',
+    data: { labels: ohLabels, datasets: cumSets },
+    options: {
+      plugins: { legend: { labels: { color: '#faf9f5' } } },
+      scales: { x: { ticks: { color: '#a09d96' } }, y: { ticks: { color: '#a09d96' }, beginAtZero: true } },
+    },
+  });
+
+  // 하단: provider 스택 막대(자기 축) — 같은 날짜 라벨 공유
+  new Chart(document.getElementById('oh-bar'), {
+    type: 'bar',
+    data: {
+      labels: ohLabels,
+      datasets: ohBars.map((s) => ({
+        label: s.label, data: s.data,
+        backgroundColor: s.color, stack: 'pool',
+      })),
+    },
+    options: {
+      plugins: { legend: { labels: { color: '#faf9f5' } } },
+      scales: {
+        x: { stacked: true, ticks: { color: '#a09d96' } },
+        y: { stacked: true, beginAtZero: true, ticks: { color: '#a09d96' } },
+      },
+    },
+  });
+</script>
+{% endif %}
+{% endblock %}

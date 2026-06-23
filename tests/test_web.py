@@ -721,6 +721,30 @@ def test_overview_enterprise_claude_dollar_buckets_render(tmp_path, monkeypatch)
     assert "사용 한도(Enterprise)" in r.text and "243" in r.text
 
 
+def test_official_history_route_renders_with_depletion_pool(tmp_path, monkeypatch):
+    """소진형 풀이 있으면 /official-history가 200 + 제목 렌더(ADR 0010)."""
+    from tokenomy.official_parser import parse_claude
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_official(conn, "claude", "claude_enterprise_real.json", parse_claude)
+    r = client.get("/official-history")
+    assert r.status_code == 200
+    assert "공식 사용 이력" in r.text
+    assert 'href="/official-history"' in client.get("/").text   # 소진형 풀 → 내비 노출
+
+
+def test_official_history_subscription_only_empty_and_nav_hidden(tmp_path, monkeypatch):
+    """구독제-only(rate-window)는 소진형 풀이 없어 빈 상태 + 내비 링크 숨김(ADR 0010)."""
+    from tokenomy.official_parser import parse_claude
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_official(conn, "claude", "claude_personal.json", parse_claude)
+    r = client.get("/official-history")
+    assert r.status_code == 200
+    assert "표시할 이력이 없습니다" in r.text                     # 페이지 빈 상태
+    assert 'href="/official-history"' not in client.get("/").text  # 내비 숨김
+
+
 def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
     """엔터프라이즈 Codex(실측): 크레딧 한도가 credit_to_usd 환산 USD 게이지로 렌더되어야 한다.
 

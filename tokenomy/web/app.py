@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
-from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
+from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts, official_view, combined_forecast
 from tokenomy.config import credit_to_usd as _credit_to_usd, forecast_settings, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
@@ -20,12 +20,31 @@ from tokenomy.update import check_update
 from tokenomy.web import control
 from tokenomy.web.views import (
     coverage_card_context, dimension_context, history_context, mini_view_context,
-    official_section_context, overview_context, session_context, settings_provider_toggles,
-    sidebar_freshness,
+    official_history_context, official_section_context, overview_context, session_context,
+    settings_provider_toggles, sidebar_freshness,
 )
 
 _BASE = resource_path("tokenomy/web")
-templates = Jinja2Templates(directory=str(_BASE / "templates"))
+
+
+def _nav_context(request: Request) -> dict:
+    """모든 템플릿에 내비 플래그 주입(ADR 0010). 공식 사용 이력 링크는 소진형 풀이
+    있을 때만 — 페이지의 has_pool과 동일 로직(combined_forecast is not None)이라 일관.
+    실패 시 보수적으로 노출(빈 페이지가 죽은 숨김보다 안전)."""
+    try:
+        conn = connect()
+        config = load_config()
+        now = datetime.now(KST)
+        active = tracked_providers(config)
+        ctu = _credit_to_usd(config)
+        weeks = forecast_settings(config)["rate_window_weeks"]
+        fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks) for p in active], now, weeks)
+        return {"show_official_history": fobj is not None}
+    except Exception:
+        return {"show_official_history": True}
+
+
+templates = Jinja2Templates(directory=str(_BASE / "templates"), context_processors=[_nav_context])
 templates.env.globals["app_version"] = __version__
 
 
@@ -106,6 +125,22 @@ def history_view(request: Request, anchor: str | None = None, provider: str = ""
     template = "_history_body.html" if is_partial else "history.html"
     return templates.TemplateResponse(
         request, template, {**ctx, "notice": notice, "update_tag": update_tag},
+    )
+
+
+@app.get("/official-history")
+def official_history_view(request: Request, anchor: str | None = None, provider: str = "",
+                          period: str | None = None, start: str | None = None,
+                          end: str | None = None, notice: str | None = None):
+    """공식 사용 이력(ADR 0010) — 통합 풀 누적 선 + 일별 소비 막대 + 일별 표."""
+    provider = provider if provider in PROVIDERS else ""
+    period = period if period in _PERIODS else "month"
+    conn = connect()
+    update_tag = check_update(conn)
+    ctx = official_history_context(conn, _parse_anchor(anchor), provider,
+                                   period=period, start=start, end=end)
+    return templates.TemplateResponse(
+        request, "official_history.html", {**ctx, "notice": notice, "update_tag": update_tag},
     )
 
 

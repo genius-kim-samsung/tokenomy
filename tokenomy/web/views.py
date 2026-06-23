@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup,
     _provider_where, by_day_session, by_dimension, by_project, by_session,
-    combined_forecast, daily_series, pool_history,
+    combined_forecast, daily_series, pool_history, pool_daily_history,
     insights, month_bounds, month_spend, official_view, parse_ts, period_bounds,
     pricing_coverage, session_detail, sidechain_split, stacked_trend,
     token_composition,
@@ -756,4 +756,77 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
         "tree": tree,
         "count": len(rows),
         "total": round(sum(r.cost for r in rows), 4),
+    }
+
+
+def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
+                             period: str = "month", start: str | None = None,
+                             end: str | None = None, now_kst: datetime | None = None) -> dict:
+    """공식 사용 이력(ADR 0010) — 통합 풀의 누적 선 + 일별 소비 막대 + 일별 표.
+
+    데이터는 공식 사용량 스냅샷 이력(ADR 0007)의 새 표현 — 신규 취득 없음. 소진형
+    풀만(rate-window 제외) 보여주며, 소진형 풀이 없으면 has_pool=False(빈 상태).
+    """
+    now = now_kst or datetime.now(KST)
+    config = load_config()
+    active = tracked_providers(config)
+    provider = _active_provider(provider, active)   # 비활성 provider 요청 → 전체 폴백
+    s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
+
+    # 소진형 풀 판정 + 한도선 값 — combined_forecast가 None이면 소진형 풀 없음(빈 상태).
+    ctu = credit_to_usd(config)
+    weeks = forecast_settings(config)["rate_window_weeks"]
+    fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks) for p in active], now, weeks)
+    has_pool = fobj is not None
+    pool_limit = fobj.limit_usd if fobj else None
+    pool_providers = fobj.providers if fobj else active
+    view_providers = [provider] if provider else pool_providers
+
+    interval = official_fetch_settings(config)["min_interval_minutes"]
+    segments = pool_history(conn, view_providers, max_gap_minutes=interval * 3)
+    daily = pool_daily_history(conn, view_providers, start=s, nxt=nxt)
+
+    # 말일 누적/잔여 = 그 날 끝 시점의 통합 풀 used(누적 선과 동일 출처)·한도 잔여(표 컬럼).
+    end_cum: dict = {}
+    for seg in segments:
+        for pt in seg:
+            dt = parse_ts(pt["ts"])
+            if dt is not None:
+                end_cum[dt.astimezone(KST).date()] = pt["used_usd"]   # 오름차순이라 last-wins
+    table = []
+    for r in daily:
+        cum = end_cum.get(r["date"])
+        table.append({**r, "ymd": r["date"].strftime("%Y-%m-%d"), "md": r["date"].strftime("%m-%d"),
+                      "end_cumulative_usd": cum,
+                      "remaining_usd": (round(pool_limit - cum, 4) if (pool_limit and cum is not None) else None)})
+
+    # 차트용 배열 — 2단 패널(상: 누적 선, 하: provider 스택 막대)이 같은 날짜축 공유.
+    prov_list = ([p for p in _TREND_STYLE if p in view_providers]
+                 + [p for p in view_providers if p not in _TREND_STYLE])
+    chart_labels = [r["date"].strftime("%m-%d") for r in daily]
+    cum_data = [end_cum.get(r["date"]) for r in daily]   # 누적 선(갱신 없는 날 None=끊김)
+    bar_series = [{
+        "key": p,
+        "label": _TREND_STYLE[p][0] if p in _TREND_STYLE else p.title(),
+        "color": _TREND_STYLE[p][1] if p in _TREND_STYLE else "#8a8a8a",
+        "data": [r["per_provider"].get(p) for r in daily],   # provider 일별 소비(미커버 None)
+    } for p in prov_list]
+
+    return {
+        "active_nav": "official_history",
+        "user_label": user_label(config),
+        "provider": provider,
+        "filter_providers": _filter_options(active), "show_filter": len(active) >= 2,
+        "active_empty": not active,
+        "has_pool": has_pool, "pool_limit": pool_limit,
+        "segments": segments, "daily": daily, "table": table,
+        "chart_labels": chart_labels, "cum_data": cum_data, "bar_series": bar_series,
+        "period": period, "custom": custom, "period_label": label,
+        "anchor": anchor_kst.strftime("%Y-%m-%d"),
+        "start": start or "", "end": end or "",
+        "prev_anchor": (s - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "next_anchor": nxt.strftime("%Y-%m-%d"),
+        "has_next": nxt <= now,
+        "interval": interval,
+        "last_ingest_at": sidebar_freshness(conn),
     }
