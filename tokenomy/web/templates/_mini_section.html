@@ -18,19 +18,18 @@
   {% if c.glance %}
   <div class="mini-glance" style="display:flex;gap:.7rem;font-weight:600;font-variant-numeric:tabular-nums;margin:.1rem 0 .35rem">
     <span><span class="mini-glance-k" style="font-weight:400;opacity:.7">오늘 </span>{% if c.glance.today.state == "none" %}—{% else %}${{ '%.2f'|format(c.glance.today.usd) }}{% if c.glance.today.state == "partial" %}<span title="관측 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}</span>
-    <span><span class="mini-glance-k" style="font-weight:400;opacity:.7">주 </span>{% if c.glance.week.state == "none" %}—{% else %}${{ '%.2f'|format(c.glance.week.usd) }}{% if c.glance.week.state == "partial" %}<span title="관측 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}</span>
+    <span><span class="mini-glance-k" style="font-weight:400;opacity:.7">이번주 </span>{% if c.glance.week.state == "none" %}—{% else %}${{ '%.2f'|format(c.glance.week.usd) }}{% if c.glance.week.state == "partial" %}<span title="관측 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}</span>
   </div>
   {% endif %}
+  {# 게이지는 명칭·bar·% 한 줄 인라인(ADR 0008 개정) — 명칭 열 정렬, bar는 가운데 채움.
+     $used/$limit은 캡션 줄 대신 bar title 툴팁으로(hover 시 절대액). #}
   {% for g in c.gauges %}
   <div class="mini-gauge">
-    <div class="mini-gauge-line">
-      <span class="mini-gauge-label">{{ g.label }}</span>
-      <span class="mini-gauge-pct lvl-{{ g.level }}">{{ g.util }}%{% if g.exhausted %} 소진{% endif %}</span>
-    </div>
-    <span class="gauge{% if g.estimated %} gauge-est{% endif %}">
+    <span class="mini-gauge-label" title="{{ g.label }}">{{ g.label }}</span>
+    <span class="gauge{% if g.estimated %} gauge-est{% endif %}"{% if g.caption %} title="{{ g.caption }}"{% endif %}>
       <span class="gauge-fill s-{{ g.level }}{% if g.estimated %} est{% endif %}" style="width: {{ g.fill_pct }}%"></span>
     </span>
-    {% if g.caption %}<span class="mini-gauge-caption">{{ g.caption }}</span>{% endif %}
+    <span class="mini-gauge-pct lvl-{{ g.level }}">{{ g.util }}%{% if g.exhausted %} 소진{% endif %}</span>
   </div>
   {% endfor %}
   {% endif %}

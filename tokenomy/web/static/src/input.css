@@ -283,22 +283,25 @@
   .mini-ctl { @apply px-1.5 py-px rounded text-[12px] leading-none text-muted bg-elev; cursor: pointer; border: none; }
   .mini-ctl:hover { @apply text-fg; }
 
-  .mini-card { @apply mb-2; }
+  /* provider 프레임(ADR 0008 개정) — 큰 창 .provider-card 미러: 면(bg-elev) + 좌측 액센트 바.
+     테두리는 생략(면 색 + gap + wrap 외곽선이 이미 분리). 면이 게이지 트랙(bg-card)보다
+     짙어 0%에서도 레일이 보인다 — provider 경계 + 빈 게이지 어색함을 한 번에 해결. */
+  .mini-card { @apply bg-elev rounded-lg p-2 mb-2; border-left: 3px solid var(--accent, var(--color-muted)); }
   .mini-card:last-child { @apply mb-0; }
-  .mini-card-head { @apply flex items-center gap-1.5 mb-0.5; }
+  .mini-card-head { @apply flex items-center gap-1.5 mb-1; }
   .mini-mark { @apply inline-block w-2 h-2 rounded-full shrink-0; background: var(--accent, var(--color-muted)); }
   .mini-name { @apply text-[12px] font-semibold truncate; }
   .mini-warn { @apply ml-auto text-exceeds text-[12px]; }
   .mini-fresh { @apply ml-auto text-[10px] text-muted tabular-nums; }
 
-  .mini-gauge { @apply mt-1; }
-  .mini-gauge-line { @apply flex items-center gap-2 text-[12px]; }
-  .mini-gauge-label { @apply truncate text-body; }
-  .mini-gauge-pct { @apply ml-auto shrink-0 tabular-nums font-semibold; }
+  /* 게이지 한 줄 인라인 — 명칭(열 정렬·고정폭·truncate, 풀 명칭은 title) · bar(flex로 채움) · %(우측). */
+  .mini-gauge { @apply flex items-center gap-2 mt-1 text-[12px]; }
+  .mini-gauge-label { @apply shrink-0 truncate text-body; width: 7em; }
+  .mini-gauge .gauge { @apply flex-1 my-0; width: auto; min-width: 2.5em; box-shadow: inset 0 0 0 1px rgba(120,110,90,0.12); }
+  .mini-gauge-pct { @apply shrink-0 tabular-nums font-semibold; }
   .mini-gauge-pct.lvl-ok { @apply text-ok; }
   .mini-gauge-pct.lvl-warn { @apply text-warn; }
   .mini-gauge-pct.lvl-exceeds { @apply text-exceeds; }
-  .mini-gauge-caption { @apply block text-[10px] text-muted tabular-nums mt-px; }
   .mini-empty { @apply text-[11px] text-muted my-1; }
 
   /* ── 설정 화면 재구성 ──

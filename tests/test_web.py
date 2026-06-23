@@ -145,6 +145,26 @@ def test_mini_section_renders_period_glance(tmp_path, monkeypatch):
                             now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
     html = app_module.templates.env.get_template("_mini_section.html").render(ctx)
     assert "오늘" in html and "$10.00" in html
+    assert "이번주" in html        # 미니 글랜스 라벨 "주"→"이번주"(정본 통일, ADR 0008 개정)
+
+
+def test_mini_gauge_caption_moves_to_bar_tooltip(tmp_path, monkeypatch):
+    """미니 게이지의 $used/$limit은 별도 캡션 줄이 아니라 bar 툴팁(title)으로(ADR 0008 개정).
+
+    한 줄 인라인 압축의 핵심 — 캡션 줄을 빼고 hover로 절대액을 확인한다.
+    """
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import mini_view_context
+
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_glance_history(conn, "claude", [(10, 30.0)])   # 월 사용 한도 30/100 → caption "$30.00 / $100"
+    ctx = mini_view_context(conn, {"tracked_providers": ["claude"]},
+                            now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
+    html = app_module.templates.env.get_template("_mini_section.html").render(ctx)
+    assert 'title="$30.00 / $100"' in html        # $used/$limit → bar 툴팁
+    assert "mini-gauge-caption" not in html        # 별도 캡션 줄 제거(한 줄 압축)
 
 
 def test_ingest_failure_shows_banner(tmp_path, monkeypatch):
