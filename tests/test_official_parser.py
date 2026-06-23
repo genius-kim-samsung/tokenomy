@@ -27,9 +27,11 @@ def test_claude_enterprise_buckets():
     assert m.used_usd == 30.0          # amount_minor 3000 / 10**2
     assert m.limit_usd == 100.0        # amount_minor 10000 / 10**2
     assert m.bucket_key == "monthly"
+    assert m.label == "월간"            # 기간 기반 라벨(구 "사용 한도(Enterprise)")
     e = kinds["event_credit"]
     assert e.used_usd == 125.0 and e.limit_usd == 500.0
     assert e.bucket_key == "event" and e.raw_key == "cinder_cove"
+    assert e.label == "이벤트"          # 구 "일회성 크레딧"
     assert isinstance(e.resets_at, datetime)
 
 
@@ -53,12 +55,12 @@ def test_claude_personal_rate_windows():
         assert b.native_unit == "percent"
         assert b.used_usd is None       # % 창은 USD 없음
         assert b.utilization > 0
-    # 창별 서술 라벨 — 세 창이 구분되어야 한다(five_hour는 창 길이 표기 "5시간 한도")
+    # 창별 서술 라벨 — 세 창이 구분되어야 한다(창 길이 표기 "5시간"·"7일(범위)")
     labels = {b.raw_key: b.label for b in rw}
     assert labels == {
-        "five_hour": "5시간 한도",
-        "seven_day": "주간 · 모든 모델",
-        "seven_day_opus": "주간 · Opus 전용",
+        "five_hour": "5시간",
+        "seven_day": "7일(All)",
+        "seven_day_opus": "7일(Opus)",
     }
 
 
@@ -71,10 +73,10 @@ def test_claude_rate_window_label_variants():
         "seven_day_some_new_model": {"utilization": 5.0},
     }
     labels = {b.raw_key: b.label for b in parse_claude(raw, credit_to_usd=0.04)}
-    assert labels["five_hour"] == "5시간 한도"
-    assert labels["seven_day"] == "주간 · 모든 모델"
-    assert labels["seven_day_sonnet"] == "주간 · Sonnet 전용"
-    assert labels["seven_day_some_new_model"] == "주간 · Some New Model 전용"
+    assert labels["five_hour"] == "5시간"
+    assert labels["seven_day"] == "7일(All)"
+    assert labels["seven_day_sonnet"] == "7일(Sonnet)"
+    assert labels["seven_day_some_new_model"] == "7일(Some New Model)"
 
 
 def test_codex_enterprise_credit_to_usd():
@@ -87,15 +89,16 @@ def test_codex_enterprise_credit_to_usd():
     assert b.used_usd == 20.0           # 500 * 0.04
     assert b.limit_usd == 80.0          # 2000 * 0.04
     assert b.utilization == 25
+    assert b.label == "월간"            # 구 "월간 크레딧 한도"
     assert isinstance(b.resets_at, datetime)
 
 
 def test_codex_personal_rate_windows():
     buckets = parse_codex(_load("codex_personal.json"), credit_to_usd=0.04)
     by_key = {b.raw_key: b for b in buckets}
-    # Claude 5시간 창 라벨과 통일: 5시간 창=5시간 한도, 7일 창=주간 한도.
+    # Claude 5시간 창 라벨과 통일: 5시간 창=5시간, 7일 창=7일(All).
     assert {k: b.label for k, b in by_key.items()} == {
-        "primary_window": "5시간 한도", "secondary_window": "주간 한도"}
+        "primary_window": "5시간", "secondary_window": "7일(All)"}
     for b in buckets:
         assert b.bucket_kind == "rate_window" and b.native_unit == "percent"
         assert b.used_usd is None
@@ -114,10 +117,10 @@ def test_codex_rate_window_label_variants():
         "no_window": {"used_percent": 5.0},                                       # 폴백
     }}
     labels = {b.raw_key: b.label for b in parse_codex(raw, credit_to_usd=0.04)}
-    assert labels["primary_window"] == "5시간 한도"
-    assert labels["secondary_window"] == "주간 한도"
-    assert labels["mystery_short"] == "5시간 한도"
-    assert labels["mystery_long"] == "주간 한도"
+    assert labels["primary_window"] == "5시간"
+    assert labels["secondary_window"] == "7일(All)"
+    assert labels["mystery_short"] == "5시간"
+    assert labels["mystery_long"] == "7일(All)"
     assert labels["no_window"] == "이용률 창"
 
 

@@ -167,6 +167,53 @@ def test_mini_gauge_caption_moves_to_bar_tooltip(tmp_path, monkeypatch):
     assert "mini-gauge-caption" not in html        # 별도 캡션 줄 제거(한 줄 압축)
 
 
+def test_mini_gauge_shows_reset_countdown(tmp_path, monkeypatch):
+    """미니 rate_window 게이지는 % 뒤에 거친 리셋 카운트다운(· N단위, muted)을 인라인으로 보여준다."""
+    from datetime import datetime, timedelta
+    from tokenomy.aggregate import KST
+    from tokenomy.db import insert_official_buckets
+    from tokenomy.official_parser import OfficialBucket
+    from tokenomy.web.views import mini_view_context
+
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    now = datetime(2026, 6, 10, 12, 0, tzinfo=KST)
+    reset = now + timedelta(hours=2, minutes=35)
+    insert_official_buckets(
+        conn, provider="claude", fetched_at=now.isoformat(),
+        buckets=[OfficialBucket(
+            bucket_key="rate_window", raw_key="five_hour", bucket_kind="rate_window",
+            label="5시간", native_unit="percent",
+            used_native=None, limit_native=None, remaining_native=None,
+            used_usd=None, limit_usd=None, remaining_usd=None,
+            utilization=42.0, resets_at=reset)],
+        created_at=now.isoformat())
+    ctx = mini_view_context(conn, {"tracked_providers": ["claude"]}, now_kst=now)
+    html = app_module.templates.env.get_template("_mini_section.html").render(ctx)
+    assert "mini-reset" in html
+    assert "· 2시간" in html        # 2h35m → 최대 단위 1개
+
+
+def test_mini_freshness_uses_updated_variant(tmp_path, monkeypatch):
+    """미니 갱신 신선도는 '갱신됨' 변형(data-rel-style=updated)으로 렌더된다.
+
+    큰 창은 '갱신:' 접두를 붙이지만(rel-time 기본형), 미니는 접두 없이 자체 설명형
+    'N분전 갱신됨'을 쓴다 — 공유 rel-time.js를 data 속성으로 분기(사이드바·큰 창 불변).
+    """
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import mini_view_context
+
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_glance_history(conn, "claude", [(10, 30.0)])
+    ctx = mini_view_context(conn, {"tracked_providers": ["claude"]},
+                            now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
+    html = app_module.templates.env.get_template("_mini_section.html").render(ctx)
+    assert 'class="mini-fresh rel-time"' in html
+    assert 'data-rel-style="updated"' in html
+
+
 def test_ingest_failure_shows_banner(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
 
@@ -785,12 +832,12 @@ def test_overview_enterprise_claude_dollar_buckets_render(tmp_path, monkeypatch)
     r = client.get("/")
     assert r.status_code == 200
     # cinder_cove 이벤트 크레딧(달러 본체) — 코드네임 비의존 라벨 + USD 게이지
-    assert "일회성 크레딧" in r.text
+    assert "이벤트" in r.text
     assert "$393.10" in r.text and "1,000" in r.text
     assert "39%" in r.text                       # 게이지 utilization 표시
     assert "만료 2026-09-10" in r.text            # 만료일은 라벨이 아니라 sub로 이동
-    # spend 사용 한도(Enterprise) ($0/$243) — used 0도 게이지로 렌더
-    assert "사용 한도(Enterprise)" in r.text and "243" in r.text
+    # spend 월간 ($0/$243) — used 0도 게이지로 렌더
+    assert "월간" in r.text and "243" in r.text
 
 
 def test_official_history_route_renders_with_depletion_pool(tmp_path, monkeypatch):
@@ -878,7 +925,7 @@ def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
     """엔터프라이즈 Codex(실측): 크레딧 한도가 credit_to_usd 환산 USD 게이지로 렌더되어야 한다.
 
     individual_limit used 1073.94 / limit 5875 credits → ×0.04 = $42.96 / $235 월간 게이지.
-    주간(월÷4) 추정 게이지도 함께. 개인 구독 % 창이 아니라 USD 월간 분기 검증.
+    추정 주간 게이지는 제거됨(ADR 0012). 개인 구독 % 창이 아니라 USD 월간 분기 검증.
     """
     from tokenomy.official_parser import parse_codex
     client, conn_factory = _client(tmp_path, monkeypatch)
@@ -886,10 +933,10 @@ def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
     _seed_official(conn, "codex", "codex_enterprise_real.json", parse_codex)
     r = client.get("/")
     assert r.status_code == 200
-    assert "월간 크레딧 한도" in r.text   # codex_monthly 버킷 라벨(공식 게이지)
+    assert "월간" in r.text             # codex_monthly 버킷 라벨(공식 게이지)
     assert "$42.96" in r.text and "235" in r.text
     assert "크레딧 1,074 / 5,875" in r.text   # USD는 환산값 — 원본 크레딧 병기
-    assert "이번 주" in r.text       # 주간(월÷4) 추정 게이지도 렌더
+    assert "이번 주" not in r.text     # 추정 주간 게이지 제거(ADR 0012)
 
 
 def test_dashboard_disclaimer_names_surface_axis(tmp_path, monkeypatch):

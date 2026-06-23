@@ -109,19 +109,21 @@ def test_card_stale_gauge_on_fetch_error():
     assert "Codex CLI" in (card["note"] or "")
 
 
-# ── 카드: Codex 주간 추정 게이지(해치) ────────────────────────────────────────
-def test_codex_card_has_weekly_estimate_gauge():
+# ── 카드: 추정 주간 게이지 제거(ADR 0012) — 공식 카드는 공식 수치만 ──────────────
+def test_codex_card_has_no_weekly_estimate_gauge():
     conn = _conn()
-    _seed(conn, "codex", [_bucket(bucket_kind="codex_monthly", label="월간 크레딧 한도",
+    _seed(conn, "codex", [_bucket(bucket_kind="codex_monthly", label="월간",
                                   native_unit="credit", utilization=20.0,
                                   used_usd=40.0, limit_usd=200.0, remaining_usd=160.0)])
+    # 로컬 Codex 사용이 있어도 월÷4 추정 게이지를 만들지 않는다(로컬 used를 공식 한도에 섞지 않음).
     conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
                  "VALUES ('a','codex','s1','2026-06-20T10:00:00Z',3.0,1)")
     conn.commit()
     card = _card(official_cards(conn, {"tracked_providers": ["codex"]}, NOW), "codex")
-    est = [g for g in card["gauges"] if g["estimated"]]
-    assert est and est[0]["label"] == "이번 주"
-    assert est[0]["caption"].endswith("/ $50")   # 200 ÷ 4 = 50 추정 한도
+    labels = [g["label"] for g in card["gauges"]]
+    assert labels == ["월간"]                      # 월간 단일 게이지뿐
+    assert not any(g["estimated"] for g in card["gauges"])
+    assert "이번 주" not in labels
 
 
 # ── 카드: 공식 없음 → 사용량 전용 폴백 ────────────────────────────────────────
@@ -205,6 +207,49 @@ def test_weekly_window_sub_has_time_and_day_countdown():
     card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
     g = next(x for x in card["gauges"] if x["label"] == "주간 · Opus 전용")
     assert g["sub"] == "리셋 2026-06-25 11:12 · 3일 23시간 후"   # 분은 노이즈라 생략
+
+
+# ── 미니 카운트다운(reset_in): rate_window만, 최대 단위 1개(floor) ──────────────────
+def _gauge(conn, label):
+    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    return next(x for x in card["gauges"] if x["label"] == label)
+
+
+def test_rate_window_reset_in_coarse_hours():
+    conn = _conn()
+    reset = NOW + timedelta(hours=2, minutes=35)
+    _seed(conn, "claude", [_bucket(
+        bucket_key="rate_window", raw_key="five_hour", bucket_kind="rate_window",
+        label="5시간", native_unit="percent", used_usd=None, limit_usd=None,
+        remaining_usd=None, utilization=42.0, resets_at=reset)])
+    assert _gauge(conn, "5시간")["reset_in"] == "2시간"   # 2h35m → 최대 단위 1개(floor)
+
+
+def test_rate_window_reset_in_minutes_under_hour():
+    conn = _conn()
+    reset = NOW + timedelta(minutes=40)
+    _seed(conn, "claude", [_bucket(
+        bucket_key="rate_window", raw_key="five_hour", bucket_kind="rate_window",
+        label="5시간", native_unit="percent", used_usd=None, limit_usd=None,
+        remaining_usd=None, utilization=10.0, resets_at=reset)])
+    assert _gauge(conn, "5시간")["reset_in"] == "40분"
+
+
+def test_rate_window_reset_in_days():
+    conn = _conn()
+    reset = NOW + timedelta(days=3, hours=23, minutes=12)
+    _seed(conn, "claude", [_bucket(
+        bucket_key="rate_window", raw_key="seven_day_opus", bucket_kind="rate_window",
+        label="7일(Opus)", native_unit="percent", used_usd=None, limit_usd=None,
+        remaining_usd=None, utilization=30.0, resets_at=reset)])
+    assert _gauge(conn, "7일(Opus)")["reset_in"] == "3일"   # 일 단위만(시 생략)
+
+
+def test_monthly_bucket_has_no_reset_in():
+    # 월간은 카운트다운 불필요(rate_window 아님) — reset_in None.
+    conn = _conn()
+    _seed(conn, "claude", [_bucket(utilization=30.0)])   # monthly_limit, 다음 달 경계로 resets_at 채워짐
+    assert _gauge(conn, "월 사용 한도")["reset_in"] is None
 
 
 # ── 사이드바 신선도: 마지막 수집 실행 시각(최신 메시지 ts 아님) ─────────────────

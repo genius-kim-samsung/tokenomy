@@ -2,11 +2,19 @@
 // "방금/N분 전/N시간 전/N일 전"으로 렌더하고 주기적으로 갱신한다(표시만, 네트워크 무관).
 // 서버는 절대 ISO를 data-ts로 심고 초기 텍스트(폴백)를 채운다 — JS는 그 위를 덮어쓴다.
 // 임계 기준은 views._fresh_label과 동일하게 유지한다(수집/갱신 신선도 대칭, ADR 0003).
+// data-rel-style="updated"가 붙은 요소(미니 뷰)는 접두 없이 자체 설명형 "N분전 갱신됨"으로
+// 렌더한다 — 큰 창("갱신: N분 전")·사이드바("수집: N분 전")는 기본형 유지(공유 JS, 분기만).
 (function () {
-  function rel(iso) {
+  function rel(iso, style) {
     var t = Date.parse(iso);
     if (isNaN(t)) return "";
     var m = Math.max(0, Math.floor((Date.now() - t) / 60000));
+    if (style === "updated") {
+      if (m < 1) return "방금 갱신됨";
+      if (m < 60) return m + "분전 갱신됨";
+      if (m < 1440) return Math.floor(m / 60) + "시간전 갱신됨";
+      return Math.floor(m / 1440) + "일전 갱신됨";
+    }
     if (m < 1) return "방금";
     if (m < 60) return m + "분 전";
     if (m < 1440) return Math.floor(m / 60) + "시간 전";
@@ -15,7 +23,7 @@
   function tick() {
     var els = document.querySelectorAll("time.rel-time[data-ts]");
     for (var i = 0; i < els.length; i++) {
-      var s = rel(els[i].getAttribute("data-ts"));
+      var s = rel(els[i].getAttribute("data-ts"), els[i].getAttribute("data-rel-style"));
       if (s) els[i].textContent = s;
     }
   }

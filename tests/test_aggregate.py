@@ -3,7 +3,6 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from tokenomy.aggregate import (
-    codex_weekly_window,
     DayPoint, DaySessionRow, KST,
     add_business_days, business_days_between, by_day_session,
     by_dimension, by_model, by_project, by_session, daily_series,
@@ -1268,33 +1267,7 @@ def test_add_business_days_zero_returns_same():
     assert add_business_days(date(2026, 6, 15), 0) == date(2026, 6, 15)
 
 
-# --- Task 4: Codex 주간 윈도우 헬퍼 ---
-
-
-def test_codex_weekly_window_anchors_on_first_use():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-08T01:00:00Z", 5.0, provider="codex", session="a")  # 첫 사용
-    _insert(conn, "2026-06-10T01:00:00Z", 5.0, provider="codex", session="b")
-    start, end = codex_weekly_window(conn)
-    assert start.date().isoformat() == "2026-06-08"   # 첫 사용 KST 날짜(+9 → 10:00)
-    assert (end - start) == timedelta(days=7)
-
-
-def test_codex_weekly_window_reanchors_after_idle():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-01T01:00:00Z", 5.0, provider="codex", session="a")
-    _insert(conn, "2026-06-12T01:00:00Z", 5.0, provider="codex", session="b")  # 11일 뒤(>7) → 재앵커
-    start, _ = codex_weekly_window(conn)
-    assert start.date().isoformat() == "2026-06-12"   # 마지막 사용으로 재앵커
-
-
-def test_codex_weekly_window_none_without_usage():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-08T01:00:00Z", 5.0, provider="claude", session="a")  # claude만
-    assert codex_weekly_window(conn) is None
-
-
-# --- Task 5: official_view (Claude 버킷 + Codex 2게이지 + 예측 렌즈) ---
+# --- official_view (Claude 버킷 + Codex 월간 + 예측 렌즈) ---
 
 
 def _ob(key, kind, used_usd, limit_usd, raw="r", unit="usd", util=0.0, resets=None):
@@ -1333,11 +1306,10 @@ def test_official_view_claude_monthly_period():
     assert monthly["resets_at"].startswith("2026-07-01")
 
 
-def test_official_view_codex_weekly_from_local():
+def test_official_view_codex_monthly_only_no_weekly():
+    # 추정 주간 게이지 제거(ADR 0012) — 로컬 Codex 사용이 있어도 월간 버킷만 노출.
     conn = connect(":memory:")
-    # 로컬 Codex 사용(주간 used 근거)
     _insert(conn, "2026-06-09T01:00:00Z", 12.0, provider="codex", session="a")
-    # 공식 월간 한도(주간 한도 = 80/4 = 20)
     insert_official_buckets(
         conn, provider="codex", fetched_at="2026-06-10T09:00:00+09:00",
         buckets=[_ob("monthly", "codex_monthly", 20.0, 80.0, raw="individual_limit",
@@ -1347,20 +1319,8 @@ def test_official_view_codex_weekly_from_local():
     now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
     v = official_view(conn, "codex", now, 0.04)
     assert v.period_used_usd == 20.0 and v.period_limit_usd == 80.0  # 월간(공식)
-    assert v.weekly_limit_usd == 20.0      # 공식 월 한도 80 ÷ 4
-    assert v.weekly_used_usd == 12.0       # 로컬 윈도우 합(첫 사용 6/9~)
-    assert v.weekly_estimated is True
-
-
-def test_official_view_codex_weekly_no_budget_fallback():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-09T01:00:00Z", 5.0, provider="codex", session="a")
-    now = datetime(2026, 6, 11, 12, 0, tzinfo=KST)
-    # 공식 없음 → 주간 한도 없음(budget 폴백 제거), 월간은 no_data
-    v = official_view(conn, "codex", now, 0.04)
-    assert v.weekly_limit_usd is None      # 공식 period_limit 없음 → 주간 한도 없음
-    assert v.weekly_used_usd == 5.0
-    assert v.period_used_usd is None       # 공식 월간 없음
+    assert not hasattr(v, "weekly_used_usd")    # 주간 필드 제거됨
+    assert {b["bucket_key"] for b in v.buckets} == {"monthly"}
 
 
 def test_official_view_lens_uses_local_rate():
@@ -1399,15 +1359,6 @@ def test_lens_none_rate_without_local_spend():
     assert v.lens.daily_rate_usd is None
 
 
-def test_official_view_codex_idle_window_empty():
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-01T01:00:00Z", 9.0, provider="codex", session="a")  # 마지막 사용
-    now = datetime(2026, 6, 12, 12, 0, tzinfo=KST)  # 윈도우(6/1~6/8) 종료 후
-    v = official_view(conn, "codex", now, 0.04)
-    assert v.weekly_used_usd == 0.0
-    assert v.weekly_window_end is None
-
-
 def test_official_view_active_bucket_largest_diff():
     conn = connect(":memory:")
     # Claude: event + monthly 둘 다 활성. monthly의 최근 차분이 더 커서 active=monthly(이벤트가 tie-break 우선임에도)
@@ -1441,7 +1392,7 @@ def _conn_with_official_codex_monthly(limit_usd: float):
 def test_official_view_no_budget_arg():
     conn = _conn_with_official_codex_monthly(limit_usd=80)
     ov = official_view(conn, "codex", NOW, 0.04)
-    assert ov.weekly_limit_usd == 20.0   # period_limit 80 ÷ 4
+    assert ov.period_limit_usd == 80.0   # 공식 월간 한도(수동 예산 인자 없음)
 
 
 def test_daily_series_calendar_month():

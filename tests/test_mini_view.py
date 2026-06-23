@@ -63,10 +63,10 @@ def test_no_official_omits_local_fallback():
     assert card.get("fallback") is None          # 불변식: 로컬 추정 미표시
 
 
-def test_all_gauges_shown_codex_monthly_plus_weekly():
-    # provider당 모든 게이지(모든 버킷) 노출 — Codex는 월간 + 주간 추정 둘 다.
+def test_codex_no_weekly_estimate_gauge():
+    # 추정 주간 게이지 제거(ADR 0012) — 미니도 공식 수치만. 로컬 사용이 있어도 안 만든다.
     conn = _conn()
-    _seed(conn, "codex", [_bucket(bucket_kind="codex_monthly", label="월간 크레딧 한도",
+    _seed(conn, "codex", [_bucket(bucket_kind="codex_monthly", label="월간",
                                   native_unit="credit", utilization=20.0,
                                   used_usd=40.0, limit_usd=200.0, remaining_usd=160.0)])
     conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
@@ -74,7 +74,8 @@ def test_all_gauges_shown_codex_monthly_plus_weekly():
     conn.commit()
     card = _card(mini_view_context(conn, {"tracked_providers": ["codex"]}, NOW), "codex")
     labels = [g["label"] for g in card["gauges"]]
-    assert "월간 크레딧 한도" in labels and "이번 주" in labels   # 두 게이지 모두
+    assert labels == ["월간"]                       # 월간만 — 주간 추정 게이지 없음
+    assert "이번 주" not in labels
 
 
 def test_inactive_provider_omitted():

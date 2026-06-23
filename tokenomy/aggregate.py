@@ -181,30 +181,6 @@ def month_spend(conn, provider: str | None, now_kst: datetime,
     return round(sum((r["cost_usd"] or 0) for r in _month_rows(conn, provider, now_kst, providers=providers)), 4)
 
 
-def codex_weekly_window(conn) -> tuple[datetime, datetime] | None:
-    """사용 이력 기준 가장 최근 7일 윈도우 [start, end).
-
-    메시지 ts(KST)를 오름차순 순회하며, 현재 윈도우(start)에서 7일 이상 벗어난 첫
-    메시지마다 그 시점으로 재앵커한다. 연속 사용이면 7일마다 타일링되고, 7일+ 유휴면
-    다음 사용일이 새 앵커가 된다(유휴 기간은 윈도우를 소비하지 않음). end = start + 7일.
-    Codex 사용이 전혀 없으면 None. 공식 누적 스냅샷은 cadence가 희소해 앵커 관측에
-    부적합하므로 로컬 메시지 ts를 1차 근거로 쓴다.
-    """
-    rows = conn.execute(
-        "SELECT ts FROM messages WHERE provider='codex' ORDER BY ts ASC"
-    ).fetchall()
-    ws: datetime | None = None
-    for r in rows:
-        dt = parse_ts(r["ts"])
-        if dt is None:
-            continue
-        if ws is None or dt >= ws + timedelta(days=7):
-            ws = dt
-    if ws is None:
-        return None
-    return ws, ws + timedelta(days=7)
-
-
 # 공식 미러 패널의 버킷 표시 순서(공식 앱 미러).
 _BUCKET_ORDER = {"monthly_limit": 0, "codex_monthly": 0, "event_credit": 1, "promo": 2, "rate_window": 3}
 
@@ -230,10 +206,6 @@ class OfficialView:
     period_limit_usd: float | None
     pool_used_usd: float | None         # 통합 전망 풀 기여 = 월간+포함크레딧 등 USD 한도 버킷 used 합(ADR 0004)
     pool_limit_usd: float | None        # 동 limit 합. USD 한도 버킷이 없으면 None
-    weekly_used_usd: float | None       # Codex 주간(로컬 추정). Claude=None
-    weekly_limit_usd: float | None
-    weekly_estimated: bool
-    weekly_window_end: date | None
     fetched_at: str | None
     stale_minutes: int | None
     status: str                         # "ok" | "no_data" | fetch_state.last_status
@@ -277,11 +249,9 @@ def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
 
 def official_view(conn, provider: str, now_kst: datetime,
                   credit_to_usd: float, weeks: int = 2) -> OfficialView:
-    """공식 미러 패널 컨텍스트. 최신 스냅샷(공식) + 로컬 주간 윈도우(Codex)를 합친다.
+    """공식 미러 패널 컨텍스트. 최신 스냅샷(공식)에서 버킷·풀·예측 렌즈를 조립한다.
 
     - period_used/limit = 월간 버킷(공식 ground truth). 없으면 None.
-    - Codex weekly_used = 로컬 CLI 첫-사용 7일 윈도우 합(추정), weekly_limit = 공식 월÷4(있을 때만). 예산 폴백 없음.
-      유휴 상태(마지막 사용 7일+ 경과로 윈도우가 닫힌 경우) weekly_used=0, weekly_window_end=None.
     - Claude 월 버킷 resets_at None은 다음 달 경계(KST)로 채운다.
     - 활성 버킷 선정(1차): 후보(monthly_limit/event_credit/codex_monthly 중 stale 제외)의
       series 최근 두 스냅샷 used 양의 차분이 가장 큰 버킷 — 동률은 tie-break(event<monthly).
@@ -318,29 +288,6 @@ def official_view(conn, provider: str, now_kst: datetime,
     else:
         st = get_fetch_state(conn, provider)
         status = (st["last_status"] if st else None) or "no_data"
-
-    # Codex 주간(로컬 추정)
-    weekly_used = weekly_limit = None
-    weekly_estimated = False
-    weekly_end: date | None = None
-    if provider == "codex":
-        win = codex_weekly_window(conn)
-        if win is not None:
-            ws, we = win
-            if now_kst >= we:
-                # 윈도우 닫힘(유휴): 마지막 사용 7일+ 경과 → 현재 주간 데이터 없음
-                weekly_used = 0.0
-                weekly_estimated = True
-                weekly_end = None
-            else:
-                # 현재 윈도우 활성
-                wrows = _range_rows(conn, "codex", ws, we)
-                weekly_used = round(sum((r["cost_usd"] or 0) for r in wrows), 4)
-                weekly_estimated = True
-                weekly_end = we.date()
-        # 주간 한도 = 공식 월 한도 ÷ 4(있을 때만). 예산 폴백 없음.
-        if period_limit:
-            weekly_limit = round(period_limit / 4, 4)
 
     # 활성 버킷 + 렌즈
     # stale 제외: resets_at이 설정됐고 이미 과거면 후보에서 뺀다
@@ -393,8 +340,6 @@ def official_view(conn, provider: str, now_kst: datetime,
         provider=provider, buckets=buckets, active_key=active_key, lens=lens,
         period_used_usd=period_used, period_limit_usd=period_limit,
         pool_used_usd=pool_used, pool_limit_usd=pool_limit,
-        weekly_used_usd=weekly_used, weekly_limit_usd=weekly_limit,
-        weekly_estimated=weekly_estimated, weekly_window_end=weekly_end,
         fetched_at=fetched_at, stale_minutes=stale_minutes, status=status, note=note,
     )
 

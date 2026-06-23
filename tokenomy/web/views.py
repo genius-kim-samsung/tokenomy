@@ -240,6 +240,26 @@ def _reset_with_countdown(resets_at: str, now_kst: datetime) -> str:
     return f"리셋 {stamp} · {rel}"
 
 
+def _reset_remaining_coarse(resets_at: str, now_kst: datetime) -> str | None:
+    """rate-limit 창 리셋까지 남은 시간을 **최대 단위 1개**로(미니 글랜스용).
+
+    "3일"·"2시간"·"40분"·"곧"(1분 미만). floor라 표시값보다 실제 잔여가 더 길 수 있다
+    (한 줄 공간에 맞춘 거친 카운트다운 — 정밀 시각·잔여는 큰 창의 _reset_with_countdown).
+    파싱 실패면 None(만료 버킷은 호출 전에 이미 걸러진다).
+    """
+    dt = parse_ts(resets_at)
+    if dt is None:
+        return None
+    mins = int((dt - now_kst).total_seconds() // 60)
+    if mins <= 0:
+        return "곧"
+    if mins < 60:
+        return f"{mins}분"
+    if mins < 1440:
+        return f"{mins // 60}시간"
+    return f"{mins // 1440}일"
+
+
 def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
     """공식 버킷 dict → 게이지 표시 모델. active 버킷이면 렌즈로 고스트(예측) 채움."""
     util = b["utilization"] or 0.0
@@ -247,9 +267,12 @@ def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
     # 리셋/만료 날짜는 모두 sub 한 자리에 표시(정렬 일관). event_credit은 '만료', 그 외는 '리셋'.
     # rate 창(5시간·주간 등)은 날짜만으론 무의미 — 분 단위 시각 + 잔여 시간을 병기한다.
     sub = None
+    # reset_in = 미니 전용 거친 카운트다운(rate_window만 — 월간·이벤트는 None).
+    reset_in = None
     if b["resets_at"]:
         if b["bucket_kind"] == "rate_window":
             sub = _reset_with_countdown(b["resets_at"], now_kst)
+            reset_in = _reset_remaining_coarse(b["resets_at"], now_kst)
         else:
             d = b["resets_at"][:10]
             sub = f"만료 {d}" if b["bucket_kind"] == "event_credit" else f"리셋 {d}"
@@ -283,6 +306,7 @@ def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
         "caption": _gauge_caption(used, limit, used_native=b["used_native"],
                                   limit_native=b["limit_native"], native_unit=b["native_unit"]),
         "sub": sub,
+        "reset_in": reset_in,
         "ghost_pct": ghost_pct,
         "ghost_warn": ghost_warn,
         "forecast": forecast,
@@ -290,33 +314,10 @@ def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
     }
 
 
-def _weekly_gauge(view) -> dict | None:
-    """Codex 주간(월÷4) 추정 게이지. weekly 한도 없으면 None. estimated=True(해치)."""
-    limit = view.weekly_limit_usd
-    if not limit:
-        return None
-    used = view.weekly_used_usd or 0.0
-    util = used / limit * 100 if limit else 0.0
-    sub = f"리셋 {view.weekly_window_end.isoformat()}" if view.weekly_window_end else None
-    return {
-        "label": "이번 주",
-        "util": round(util),
-        "fill_pct": round(min(util, 100), 1),
-        "level": _gauge_level(util),
-        "estimated": True,
-        "caption": _gauge_caption(used, limit),
-        "sub": sub,
-        "ghost_pct": None,
-        "ghost_warn": False,
-        "forecast": None,
-        "exhausted": util >= 100,
-    }
-
-
 def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) -> dict:
     """OfficialView + fetch 상태 → 카드 1개 표시 모델.
 
-    공식 버킷이 있으면 게이지(만료 버킷 제외) + Codex 주간 추정. fetch 실패면 스탈+경고.
+    공식 버킷이 있으면 게이지(만료 버킷 제외)를 보여준다. fetch 실패면 스탈+경고.
     공식 데이터가 전혀 없으면 사용량 전용 폴백(로컬 추정 + 스파크라인).
     """
     meta = _PROVIDER_META.get(provider, {"label": provider.title(), "accent": "#6c6a64"})
@@ -333,9 +334,6 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
             if r is not None and r < now_kst:
                 continue
             gauges.append(_bucket_gauge(b, view, now_kst))
-        wk = _weekly_gauge(view)
-        if wk:
-            gauges.append(wk)
         status = "error" if fs_status in ("auth_error", "http_error") else "ok"
     else:
         status = "no_data"

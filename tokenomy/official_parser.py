@@ -23,37 +23,36 @@ _WINDOW_MODEL_NAMES = {"opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku"}
 def _rate_window_label(key: str) -> str:
     """Claude rate-limit 창 키 → 서술 라벨.
 
-    주간 창은 공식 앱과 동형으로 라벨링한다. 단 five_hour는 공식 앱이 "현재 세션"으로
-    부르지만, 우리는 창 길이가 곧 드러나는 "5시간 한도"로 표기한다(리셋 시각·잔여를
-    분 단위로 병기하므로 "세션"보다 창 길이가 더 actionable하다 — views._reset_with_countdown).
-    five_hour/seven_day는 안정 키라 이름 매칭하고, seven_day_<model>의 접미사는
+    라벨은 **창 길이**를 그대로 드러낸다("5시간"·"7일(범위)") — 공식 앱이 five_hour를
+    "현재 세션"이라 부르는 것과 달리, 창 길이가 리셋 잔여시간(views의 카운트다운)과 함께
+    더 actionable하다. seven_day는 모델 범위를 괄호로 병기한다(전 모델="All", 모델 전용=
+    모델명). five_hour/seven_day는 안정 키라 이름 매칭하고, seven_day_<model>의 접미사는
     모델 슬러그로 보아 표기명으로 환산하되 미지/회전 접미사는 타이틀케이스로 폴백한다.
     """
     if key.startswith("five_hour"):
-        return "5시간 한도"
+        return "5시간"
     if key == "seven_day":
-        return "주간 · 모든 모델"
+        return "7일(All)"
     if key.startswith("seven_day_"):
         slug = key[len("seven_day_"):]
         name = _WINDOW_MODEL_NAMES.get(slug, slug.replace("_", " ").title())
-        return f"주간 · {name} 전용"
+        return f"7일({name})"
     if key.startswith("seven_day"):
-        return "주간"
+        return "7일"
     return "이용률 창"
 
 
 # Codex rate-limit 창의 안정 키 → 표기. five_hour/seven_day처럼 회전 코드네임이 아니다.
-# Claude five_hour와 라벨을 통일한다(같은 5시간 창인데 표현이 갈리지 않게).
-_CODEX_WINDOW_LABELS = {"primary_window": "5시간 한도", "secondary_window": "주간 한도"}
+# Claude rate 창과 라벨을 통일한다(같은 5시간/7일 창인데 표현이 갈리지 않게).
+_CODEX_WINDOW_LABELS = {"primary_window": "5시간", "secondary_window": "7일(All)"}
 
 
 def _codex_rate_window_label(key: str, window_seconds) -> str:
     """Codex rate-limit 창 → 서술 라벨.
 
-    공식 앱(Codex CLI/ChatGPT)은 5시간 창을 "현재 세션"이라 부르지만, Claude의 5시간 창
-    라벨(_rate_window_label의 "5시간 한도")과 통일해 창 길이가 드러나는 "5시간 한도"·"주간
-    한도"로 표기한다. primary_window/secondary_window는 안정 키라 이름 매칭하고, 미지/회전
-    키는 응답의 limit_window_seconds로 창 길이를 도출(≤6h→5시간 한도, ≥6d→주간 한도)해
+    Claude rate 창 라벨(_rate_window_label의 "5시간"·"7일(All)")과 통일한다 — 창 길이가
+    그대로 드러난다. primary_window/secondary_window는 안정 키라 이름 매칭하고, 미지/회전
+    키는 응답의 limit_window_seconds로 창 길이를 도출(≤6h→5시간, ≥6d→7일(All))해
     폴백한다. 둘 다 실패하면 "이용률 창"(코드 라벨일 뿐 — CONTEXT.md의 rate-window 참조).
     """
     label = _CODEX_WINDOW_LABELS.get(key)
@@ -62,9 +61,9 @@ def _codex_rate_window_label(key: str, window_seconds) -> str:
     secs = _to_float(window_seconds)
     if secs is not None:
         if secs <= 6 * 3600:
-            return "5시간 한도"
+            return "5시간"
         if secs >= 6 * 86400:
-            return "주간 한도"
+            return "7일(All)"
     return "이용률 창"
 
 
@@ -129,7 +128,7 @@ def parse_claude(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
         util = (used_usd / limit_usd * 100) if limit_usd > 0 else 0.0
         out.append(OfficialBucket(
             bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit",
-            label="사용 한도(Enterprise)", native_unit="usd",
+            label="월간", native_unit="usd",
             used_native=used_usd, limit_native=limit_usd,
             remaining_native=round(limit_usd - used_usd, 6),
             used_usd=used_usd, limit_usd=limit_usd,
@@ -162,7 +161,7 @@ def parse_claude(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
             # 만료일은 라벨이 아니라 sub('만료 YYYY-MM-DD')에 표시 — 다른 게이지의 리셋 위치와 정렬(views).
             out.append(OfficialBucket(
                 bucket_key="event", raw_key=key, bucket_kind="event_credit",
-                label="일회성 크레딧", native_unit="usd",
+                label="이벤트", native_unit="usd",
                 used_native=used, limit_native=limit, remaining_native=rem,
                 used_usd=used, limit_usd=limit, remaining_usd=rem,
                 utilization=round(used / limit * 100, 4) if limit > 0 else 0.0,
@@ -195,7 +194,7 @@ def parse_codex(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
             rem = round(limit - used, 6)
         out.append(OfficialBucket(
             bucket_key="monthly", raw_key="individual_limit", bucket_kind="codex_monthly",
-            label="월간 크레딧 한도", native_unit="credit",
+            label="월간", native_unit="credit",
             used_native=used, limit_native=limit, remaining_native=rem,
             used_usd=round(used * credit_to_usd, 6),
             limit_usd=round(limit * credit_to_usd, 6),
