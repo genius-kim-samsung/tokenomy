@@ -403,7 +403,7 @@ def _isolate_config(monkeypatch, tmp_path, body="{}"):
 def _fresh_state(quitting=False):
     """_launch_window용 초기 _tray_state(배타 전환 — current_view/port 포함, 미니 미생성)."""
     return {"window": None, "icon": None, "quitting": quitting,
-            "mini": None, "current_view": "main", "port": None}
+            "mini": None, "current_view": "main", "mini_visible": False, "port": None}
 
 
 def test_launch_window_wires_tray_and_stops_on_exit(monkeypatch, tmp_path):
@@ -491,10 +491,11 @@ def test_launch_window_degrades_to_single_shot_when_tray_unavailable(monkeypatch
 # ──────────────────────────────────────────────
 
 def _reset_mini_state(monkeypatch, window=None, mini=None, current_view="main",
-                      quitting=False, port=9999):
+                      quitting=False, port=9999, mini_visible=False):
     monkeypatch.setattr(launcher, "_tray_state",
                         {"window": window, "icon": None, "quitting": quitting,
-                         "mini": mini, "current_view": current_view, "port": port})
+                         "mini": mini, "current_view": current_view,
+                         "mini_visible": mini_visible, "port": port})
 
 
 # ── 위치 계산(순수) ──────────────────────────────────────────────────────────
@@ -583,6 +584,7 @@ def test_to_mini_hides_main_shows_mini_persists(monkeypatch):
     launcher._to_mini()
     assert "hide" in w_main.calls and "show" in w_mini.calls
     assert launcher._tray_state["current_view"] == "mini"
+    assert launcher._tray_state["mini_visible"] is True
     assert {"last_view": "mini"} in saved
 
 
@@ -595,18 +597,33 @@ def test_to_main_hides_mini_restores_main_persists(monkeypatch):
     launcher._to_main()
     assert "hide" in w_mini.calls
     assert launcher._tray_state["current_view"] == "main"
+    assert launcher._tray_state["mini_visible"] is False
     assert {"last_view": "main"} in saved
     assert shown == [True]                               # 큰 창 복원(ingest 1회 동반)
+
+
+def test_resize_mini_ignored_after_returning_to_main(monkeypatch):
+    """미니 내부 폴링의 늦은 resize 요청이 일반뷰 상태에서 숨긴 미니창을 건드리면 안 된다."""
+    w_main, w_mini = _FakeWindow(), _FakeWindow()
+    _reset_mini_state(monkeypatch, window=w_main, mini=w_mini, current_view="mini")
+    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: None)
+    monkeypatch.setattr(launcher, "_show_window", lambda: None)
+
+    launcher._to_main()
+    launcher._resize_mini(222)
+
+    assert w_mini.calls == ["hide"]
 
 
 def test_hide_mini_to_tray_keeps_view_mini(monkeypatch):
     """미니 ✕/X → 트레이 숨김. current_view는 'mini' 유지 → 다음 복원도 미니."""
     w_mini = _FakeWindow()
-    _reset_mini_state(monkeypatch, mini=w_mini, current_view="mini")
+    _reset_mini_state(monkeypatch, mini=w_mini, current_view="mini", mini_visible=True)
     monkeypatch.setattr(launcher, "_maybe_first_time_notice", lambda: None)
     launcher._hide_mini_to_tray()
     assert "hide" in w_mini.calls
     assert launcher._tray_state["current_view"] == "mini"
+    assert launcher._tray_state["mini_visible"] is False
 
 
 def test_on_mini_closing_hides_to_tray_and_cancels(monkeypatch):
@@ -644,7 +661,7 @@ def test_restore_last_view_mini(monkeypatch):
 
 def test_resize_mini_uses_mini_width(monkeypatch):
     w = _FakeWindow()
-    _reset_mini_state(monkeypatch, mini=w)
+    _reset_mini_state(monkeypatch, mini=w, current_view="mini", mini_visible=True)
     launcher._resize_mini(150)
     assert ("resize", launcher.MINI_WIDTH, 150) in w.calls
 

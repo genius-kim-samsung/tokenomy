@@ -51,9 +51,10 @@ class Api:
         _resize_mini(height)
 
 
-# 상주 모드 상태 — 큰 창/미니 창/pystray 아이콘 + 종료 플래그 + 현재 뷰(배타 전환)·서버 포트(lazy 생성)·백그라운드 폴 stop(ADR 0007).
+# 상주 모드 상태 — 큰 창/미니 창/pystray 아이콘 + 종료 플래그 + 현재 뷰(배타 전환)·미니 표시 여부·서버 포트(lazy 생성)·백그라운드 폴 stop(ADR 0007).
 _tray_state: dict = {"window": None, "icon": None, "quitting": False,
-                     "mini": None, "current_view": "main", "port": None, "poll_stop": None}
+                     "mini": None, "current_view": "main", "mini_visible": False,
+                     "port": None, "poll_stop": None}
 
 
 def _on_closing() -> bool:
@@ -229,6 +230,7 @@ def _ensure_mini():
 def _show_mini_window() -> None:
     """미니 창 표시(없으면 lazy 생성)."""
     _ensure_mini().show()
+    _tray_state["mini_visible"] = True
 
 
 def _to_mini() -> None:
@@ -245,6 +247,7 @@ def _to_main() -> None:
     mini = _tray_state.get("mini")
     if mini is not None:
         mini.hide()
+    _tray_state["mini_visible"] = False
     _set_view("main")
     _show_window()
 
@@ -254,6 +257,7 @@ def _hide_mini_to_tray() -> None:
     mini = _tray_state.get("mini")
     if mini is not None:
         mini.hide()
+    _tray_state["mini_visible"] = False
     _maybe_first_time_notice()
 
 
@@ -280,7 +284,7 @@ def _resize_mini(height) -> None:
         h = int(height)
     except (TypeError, ValueError):
         return
-    if win is not None and h > 0:
+    if win is not None and h > 0 and _tray_state.get("mini_visible"):
         win.resize(MINI_WIDTH, h)
 
 
@@ -440,6 +444,7 @@ def _launch_window(port: int) -> None:
     _tray_state["window"] = window
     _tray_state["quitting"] = False
     _tray_state["mini"] = None
+    _tray_state["mini_visible"] = False
     _tray_state["port"] = port      # 미니 lazy 생성 시 /mini URL 구성에 사용
     icon = None
     try:
