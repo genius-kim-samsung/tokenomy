@@ -2005,6 +2005,18 @@ def test_segment_points_none_gap_only_reset_breaks():
         [(_t(0), 10.0), (_t(500), 20.0)], [(_t(510), 5.0)]]
 
 
+def test_segment_points_noise_dip_stays_one_segment():
+    """미세 하락(누적값 진동 노이즈)은 리셋이 아니라 한 세그먼트 유지(ADR 0007)."""
+    p = [(_t(0), 44.88), (_t(10), 44.87), (_t(20), 44.88), (_t(30), 44.87)]
+    assert _segment_points(p, max_gap_minutes=60) == [p]
+
+
+def test_segment_points_drop_above_half_not_reset():
+    """절반 이상 남은 하락은 리셋 아님 — 청구 리셋은 절반 미만 급락으로만 판정."""
+    p = [(_t(0), 100.0), (_t(10), 60.0)]   # 40% 하락(60 > 50)
+    assert _segment_points(p, max_gap_minutes=60) == [p]
+
+
 # --- 통합 풀 과거 곡선(pool_history): forward-fill 합산 + 갭/리셋 끊기(ADR 0007) ---
 
 
@@ -2112,6 +2124,17 @@ def test_pool_daily_history_reset_counts_post_reset_only():
     assert covered[date(2026, 6, 5)] == 5.0   # 리셋: 90→5, -85이나 95가 아니라 5
 
 
+def test_pool_daily_history_noise_dip_offsets_not_reset():
+    """누적값 미세 진동(44.88↔44.87)은 리셋 오판 없이 상계되어 그날 소비≈0(ADR 0010)."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend",
+               [(3, 23, 0, 44.88),                                  # 전날 마지막(기준)
+                (4, 0, 0, 44.88), (4, 1, 0, 44.87), (4, 2, 0, 44.88)])  # 진동(노이즈)
+    rows = pool_daily_history(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    covered = {r["date"]: r["used_usd"] for r in rows if r["covered"]}
+    assert covered[date(2026, 6, 4)] == pytest.approx(0.0, abs=1e-9)  # 거대값(44.87) 아님
+
+
 def test_pool_daily_history_gap_lumps_and_marks_uncovered():
     """갭 가로지른 소비는 첫 post-gap 날에 합산, 표본 없는 날은 covered=False·used=None(0 아님)."""
     conn = connect(":memory:")
@@ -2213,6 +2236,17 @@ def test_pool_snapshots_by_day_reset_flag():
     by_day = pool_snapshots_by_day(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
     pd = by_day[date(2026, 6, 4)][0]
     assert pd["snapshots"][0]["reset"] is True and pd["snapshots"][0]["delta"] == 5.0
+
+
+def test_pool_snapshots_by_day_noise_dip_not_reset():
+    """미세 하락(노이즈)은 reset=False·델타는 부호 그대로 음수(post-reset 거대값 아님, ADR 0010)."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend",
+               [(3, 23, 0, 44.88), (4, 9, 0, 44.87)])   # 0.01 하락 = 노이즈
+    by_day = pool_snapshots_by_day(conn, ["claude"], start=_JUNE_START, nxt=_JULY_START)
+    pd = by_day[date(2026, 6, 4)][0]
+    assert pd["snapshots"][0]["reset"] is False
+    assert pd["snapshots"][0]["delta"] == pytest.approx(-0.01, abs=1e-6)
 
 
 def test_pool_snapshots_by_day_multi_provider_ordered():

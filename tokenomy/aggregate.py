@@ -555,6 +555,30 @@ def pool_used_history(conn, provider: str) -> list[tuple[datetime, float]]:
     return out
 
 
+# 누적 used 진동 노이즈(공식 API 반올림/집계 흔들림, 예 44.88↔44.87)를 청구 리셋으로
+# 오판하지 않기 위한 임계. 진짜 리셋은 누적이 직전의 절반 미만으로 급락한다 — 그 미만
+# 하락만 리셋으로 보고, 그 이상(미세 하락 포함)은 정상 변동으로 처리한다(ADR 0007/0010).
+_RESET_RATIO = 0.5
+
+
+def _is_reset(prev_v: float | None, v: float) -> bool:
+    """누적값이 직전의 절반 미만으로 급락하면 청구 리셋(노이즈 진동은 제외)."""
+    return prev_v is not None and v < prev_v * _RESET_RATIO
+
+
+def _consumption_delta(prev_v: float | None, v: float) -> tuple[float, bool]:
+    """인접 누적값 → (일 소비 델타, 리셋 여부).
+
+    첫 표본=누적 전체. 리셋(급락)=post-reset 누적값(새 주기 사용분). 그 외(정상 증가 또는
+    노이즈/소폭 감소)=부호 그대로의 차이 — 미세 진동(±0.01)은 같은 구간에서 자연 상계된다.
+    """
+    if prev_v is None:
+        return v, False
+    if _is_reset(prev_v, v):
+        return v, True
+    return v - prev_v, False
+
+
 def _segment_points(points: list, max_gap_minutes: int | None) -> list:
     """오름차순 [(dt, val)]을 연속 세그먼트로 분할한다(공식 스냅샷 이력 정직성, ADR 0007).
 
@@ -569,7 +593,7 @@ def _segment_points(points: list, max_gap_minutes: int | None) -> list:
     prev_val = None
     for dt, val in points:
         if cur:
-            reset = val < prev_val
+            reset = _is_reset(prev_val, val)
             gap = (max_gap_minutes is not None
                    and (dt - prev_dt).total_seconds() > max_gap_minutes * 60)
             if reset or gap:
@@ -659,7 +683,7 @@ def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: date
         daily: dict = {}
         prev = None
         for dt, v in pool_used_history(conn, p):   # (dt, 누적 USD) 오름차순, 소진형 버킷만
-            cons = v if prev is None else (v - prev if v >= prev else v)
+            cons, _ = _consumption_delta(prev, v)
             d = dt.astimezone(KST).date()
             daily[d] = daily.get(d, 0.0) + cons
             prev = v
@@ -699,8 +723,7 @@ def pool_snapshots_by_day(conn, providers: list[str], *,
         prev_v = None
         for dt, v in pool_used_history(conn, p):   # (dt, 누적 USD) 오름차순, 소진형 버킷만
             d = dt.astimezone(KST).date()
-            reset = prev_v is not None and v < prev_v
-            delta = v if prev_v is None else (v if reset else v - prev_v)
+            delta, reset = _consumption_delta(prev_v, v)
             if start_d <= d < nxt_d:
                 entry = by_day.setdefault(d, {})
                 if p not in entry:
