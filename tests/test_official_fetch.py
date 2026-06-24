@@ -18,6 +18,15 @@ from tokenomy.official_fetch import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config(tmp_path_factory, monkeypatch):
+    """기본 config 경로 격리 — refresh_tracked가 성공 취득 후 account_mode를 자동 시드·영속하므로
+    (ADR 0015) 이 모듈의 어떤 테스트도 개인/레포 config를 건드리지 않게 한다. 명시적으로
+    TOKENOMY_CONFIG를 다시 setenv하는 테스트는 그 값이 우선한다(나중 호출이 이김)."""
+    monkeypatch.setenv("TOKENOMY_CONFIG",
+                       str(tmp_path_factory.mktemp("of_cfg") / "tokenomy.config.json"))
+
+
 def test_read_claude_token_ok(tmp_path):
     p = tmp_path / "creds.json"
     p.write_text(json.dumps({"claudeAiOauth": {"accessToken": "sk-abc"}}), encoding="utf-8")
@@ -498,3 +507,84 @@ def test_background_poll_loop_closes_conn():
         refresh_fn=lambda *a, **k: None,
     )
     assert fc.closed is True
+
+
+# ---------------------------------------------------------------------------
+# refresh_tracked — account_mode 자동 시드(첫 공식 취득 성공 때, ADR 0015 1단계)
+# ---------------------------------------------------------------------------
+
+from tokenomy.config import account_mode, load_config
+from tokenomy.db import insert_official_buckets
+from tokenomy.official_parser import OfficialBucket
+
+
+def _ob(key, kind, used_usd, limit_usd, raw="r", resets=None):
+    """테스트용 official 버킷 — USD 단위. limit_usd None이면 한도 없는 버킷(rate_window 등)."""
+    return OfficialBucket(
+        bucket_key=key, raw_key=raw, bucket_kind=kind, label=key, native_unit="usd",
+        used_native=used_usd, limit_native=limit_usd,
+        remaining_native=(limit_usd - used_usd) if limit_usd else None,
+        used_usd=used_usd, limit_usd=limit_usd,
+        remaining_usd=(limit_usd - used_usd) if limit_usd else None,
+        utilization=0.0, resets_at=resets,
+    )
+
+
+def _seed_buckets(conn, provider, buckets):
+    insert_official_buckets(conn, provider=provider, fetched_at=_NOW.isoformat(),
+                            buckets=buckets, created_at=_NOW.isoformat())
+
+
+def _stub_fetch(monkeypatch, status="ok"):
+    """fetch_provider를 네트워크 없이 status 결과로 스텁(버킷은 테스트가 미리 적재)."""
+    monkeypatch.setattr("tokenomy.official_fetch.fetch_provider",
+                        lambda p, **k: FetchResult(p, status))
+
+
+def test_refresh_tracked_seeds_enterprise_on_usd_budget(tmp_path, monkeypatch):
+    # 첫 공식 취득 성공 + USD 예산 버킷 존재 → account_mode 자동 시드 enterprise·영속(sticky).
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "c.json"))
+    _stub_fetch(monkeypatch, "ok")
+    conn = _memory_conn()
+    _seed_buckets(conn, "claude", [_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")])
+    from tokenomy.official_fetch import refresh_tracked
+    cfg = {"tracked_providers": ["claude"], "credit_to_usd": 0.04}
+    refresh_tracked(cfg, now_kst=_NOW, conn=conn)
+    assert account_mode(cfg) == "enterprise"
+    assert load_config(tmp_path / "c.json")["account_mode"] == "enterprise"   # 파일에 영속
+
+
+def test_refresh_tracked_seeds_subscription_when_no_usd_budget(tmp_path, monkeypatch):
+    # 성공했으나 USD 한도 버킷 없음(rate_window만) → subscription으로 시드.
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "c.json"))
+    _stub_fetch(monkeypatch, "ok")
+    conn = _memory_conn()
+    _seed_buckets(conn, "codex", [_ob("rate_window", "rate_window", None, None, raw="five_hour")])
+    from tokenomy.official_fetch import refresh_tracked
+    cfg = {"tracked_providers": ["codex"], "credit_to_usd": 0.04}
+    refresh_tracked(cfg, now_kst=_NOW, conn=conn)
+    assert account_mode(cfg) == "subscription"
+
+
+def test_refresh_tracked_respects_explicit_account_mode(tmp_path, monkeypatch):
+    # 명시 설정이면 USD 예산이 와도 덮어쓰지 않는다(사용자 토글 우선·sticky).
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "c.json"))
+    _stub_fetch(monkeypatch, "ok")
+    conn = _memory_conn()
+    _seed_buckets(conn, "claude", [_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")])
+    from tokenomy.official_fetch import refresh_tracked
+    cfg = {"tracked_providers": ["claude"], "credit_to_usd": 0.04,
+           "account_mode": "subscription"}
+    refresh_tracked(cfg, now_kst=_NOW, conn=conn)
+    assert account_mode(cfg) == "subscription"
+
+
+def test_refresh_tracked_no_seed_without_successful_fetch(tmp_path, monkeypatch):
+    # 이번 사이클에 성공(ok)이 없으면(전부 실패) 미확정 유지 — 콜드 실패에 subscription 오시드 방지.
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(tmp_path / "c.json"))
+    _stub_fetch(monkeypatch, "http_error")
+    conn = _memory_conn()
+    from tokenomy.official_fetch import refresh_tracked
+    cfg = {"tracked_providers": ["claude"], "credit_to_usd": 0.04}
+    refresh_tracked(cfg, now_kst=_NOW, conn=conn)
+    assert account_mode(cfg) is None

@@ -236,3 +236,60 @@ def test_mini_view_settings_bad_coords_fall_back_to_none():
     assert mini_view_settings({"mini_view": {"last_view": "mini", "x": "nope"}})["x"] is None
     assert mini_view_settings({"mini_view": {"last_view": "mini", "y": None}})["y"] is None
     assert mini_view_settings({"mini_view": {"last_view": "mini"}}) == {"last_view": "mini", "x": None, "y": None}
+
+
+from tokenomy.config import account_mode
+
+
+def test_account_mode_unset_is_none():
+    # 미설정(키 없음/None)은 None — 첫 공식 취득 때 데이터로 자동 시드될 상태(ADR 0015).
+    assert account_mode({}) is None
+    assert account_mode({"account_mode": None}) is None
+
+
+def test_account_mode_reads_explicit_values():
+    assert account_mode({"account_mode": "enterprise"}) == "enterprise"
+    assert account_mode({"account_mode": "subscription"}) == "subscription"
+
+
+def test_account_mode_unknown_value_is_none():
+    # 오타·알 수 없는 값은 미설정 취급(None) — 오설정으로 모드 게이트가 깨지지 않게.
+    assert account_mode({"account_mode": "enterpryse"}) is None
+    assert account_mode({"account_mode": ""}) is None
+    assert account_mode({"account_mode": 1}) is None
+
+
+def test_load_config_default_account_mode_is_none(tmp_path):
+    # 파일 없을 때 기본 account_mode 키는 존재하되 미설정(None) — tracked_providers None 동형.
+    cfg = load_config(tmp_path / "nope.json")
+    assert "account_mode" in cfg
+    assert cfg["account_mode"] is None
+
+
+from tokenomy.config import seed_account_mode
+
+
+def test_seed_account_mode_seeds_enterprise_when_usd_budget(tmp_path):
+    # 미설정 + USD 예산 버킷 존재 → enterprise로 시드·영속(save_config), load로 왕복 확인.
+    p = tmp_path / "c.json"
+    cfg = load_config(p)
+    assert seed_account_mode(cfg, has_usd_budget=True, path=p) == "enterprise"
+    assert cfg["account_mode"] == "enterprise"          # in-memory dict도 갱신
+    assert load_config(p)["account_mode"] == "enterprise"  # 파일에 영속(sticky)
+
+
+def test_seed_account_mode_seeds_subscription_when_no_usd_budget(tmp_path):
+    # 미설정 + USD 예산 없음(rate-window만) → subscription으로 시드·영속.
+    p = tmp_path / "c.json"
+    cfg = load_config(p)
+    assert seed_account_mode(cfg, has_usd_budget=False, path=p) == "subscription"
+    assert load_config(p)["account_mode"] == "subscription"
+
+
+def test_seed_account_mode_respects_explicit_value(tmp_path):
+    # 이미 명시 설정이면 데이터와 무관하게 존중·반환하고 덮어쓰지 않는다(sticky·사용자 토글 우선).
+    p = tmp_path / "c.json"
+    cfg = {"account_mode": "subscription"}
+    assert seed_account_mode(cfg, has_usd_budget=True, path=p) == "subscription"
+    assert cfg["account_mode"] == "subscription"
+    assert not p.exists()                               # 존중 경로는 영속하지 않는다(쓰기 없음)

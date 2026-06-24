@@ -16,8 +16,10 @@ from pathlib import Path
 
 from tokenomy import paths
 from tokenomy.paths import CLAUDE_CREDS, CODEX_AUTH
-from tokenomy.aggregate import parse_ts
-from tokenomy.config import credit_to_usd, official_fetch_settings, tracked_providers
+from tokenomy.aggregate import official_view, parse_ts
+from tokenomy.config import (
+    account_mode, credit_to_usd, official_fetch_settings, seed_account_mode, tracked_providers,
+)
 from tokenomy.db import (
     get_fetch_state, insert_official_buckets, insert_official_raw, upsert_fetch_state,
 )
@@ -263,7 +265,33 @@ def refresh_tracked(config, *, now_kst, conn, manual=False, providers=None):
                                           conn=conn, manual=manual))
         except Exception:
             pass
+    _maybe_seed_account_mode(config, now_kst=now_kst, conn=conn, results=results)
     return results
+
+
+def _maybe_seed_account_mode(config, *, now_kst, conn, results) -> None:
+    """account_mode 미설정이고 이번 사이클에 공식 취득 성공(ok)이 있으면 데이터로 자동 시드(ADR 0015).
+
+    판별자는 **tracked 전체**의 OfficialView.pool_limit_usd(USD 예산 한도 버킷 유무) — 하나라도
+    있으면 enterprise, 아니면 subscription. official_view는 영속 스냅샷(latest_official_snapshot)을
+    읽으므로 한 provider가 이번 사이클에 실패해도 과거 성공분으로 견고하게 판별된다.
+    'ok가 하나라도'를 게이트로 둬 콜드 실패 사이클(데이터 0)에 subscription을 오시드하지 않는다.
+    명시값은 seed_account_mode가 존중하므로 사용자 토글을 덮어쓰지 않는다(sticky). 시드 영속은
+    save_config(기본 경로)로 일어난다. **비차단** — 시드 중 어떤 예외도 갱신 자체를 막지 않는다.
+    """
+    if account_mode(config) is not None:
+        return
+    if not any(getattr(r, "status", None) == "ok" for r in results):
+        return
+    try:
+        cu = credit_to_usd(config)
+        has_budget = any(
+            official_view(conn, p, now_kst, cu).pool_limit_usd is not None
+            for p in tracked_providers(config)
+        )
+        seed_account_mode(config, has_usd_budget=has_budget)
+    except Exception:
+        pass
 
 
 def background_poll_loop(config, *, conn_factory, now_fn, stop_event, sleep_fn,

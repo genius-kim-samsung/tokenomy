@@ -30,6 +30,7 @@ def _config_path(path: str | Path | None = None) -> Path:
 def load_config(path: str | Path | None = None) -> dict:
     base = {"user_label": _default_label(),
             "tracked_providers": None,           # None → 첫 호출 시 크레덴셜로 시드
+            "account_mode": None,                # None → 첫 공식 취득 성공 때 데이터로 자동 시드(ADR 0015)
             "credit_to_usd": 0.04,
             "official_fetch": {"min_interval_minutes": 10},
             "forecast_settings": {"rate_window_weeks": 2},
@@ -141,6 +142,41 @@ def tracked_providers(config: dict) -> list[str]:
         return [p for p in PROVIDERS if p in raw]       # [] → [] 영속(재시드 안 함)
     # None(미설정) → 크레덴셜 파일 존재 기반 시드. 공식 취득 전체 차단은 TOKENOMY_SKIP_OFFICIAL_FETCH.
     return [p for p in PROVIDERS if creds_present(p)]
+
+
+ACCOUNT_MODES = ("enterprise", "subscription")
+
+
+def account_mode(config: dict) -> str | None:
+    """확정된 계정 사용 형태("enterprise"|"subscription"). 미설정/알 수 없으면 None(ADR 0015).
+
+    공식 USD 예산 한도가 있는 형태(엔터프라이즈/API)와 정액 구독제를 가르는 계정 단위 단일
+    토글이다(per-provider/혼합 모드는 만들지 않는다). 미설정(키 없음·None)이거나 오타·알 수 없는
+    값이면 None을 돌려준다 — None은 "첫 공식 취득 성공 때 데이터로 자동 시드될 미확정 상태"를 뜻하고,
+    오설정으로 모드 게이트가 깨지지 않게 한다(tracked_providers None 시드 패턴과 동형).
+    """
+    raw = config.get("account_mode")
+    return raw if raw in ACCOUNT_MODES else None
+
+
+def seed_account_mode(config: dict, *, has_usd_budget: bool,
+                      path: str | Path | None = None) -> str:
+    """미설정이면 공식 데이터로 계정 모드를 자동 시드·영속하고, 명시값이면 존중한다(ADR 0015).
+
+    이미 명시 설정(account_mode가 enterprise|subscription)이면 데이터와 무관하게 그대로
+    반환하고 **덮어쓰지 않는다** — 사용자가 토글로 정한 값이 정본(sticky). 미설정이면
+    `has_usd_budget`(공식 USD 예산 한도 버킷이 하나라도 왔는가)으로 enterprise/subscription을
+    확정해 config dict에 기록하고 `save_config`로 파일에 영속한 뒤 반환한다.
+    `has_usd_budget`은 호출자(첫 공식 취득 성공 경로)가 OfficialView.pool_limit_usd로 판별해 넘긴다.
+    반환값은 항상 확정 모드("enterprise"|"subscription").
+    """
+    existing = account_mode(config)
+    if existing is not None:                  # 명시값 존중 — 영속하지 않음
+        return existing
+    mode = "enterprise" if has_usd_budget else "subscription"
+    config["account_mode"] = mode
+    save_config(config, path)
+    return mode
 
 
 def onboarding_pending(config: dict) -> bool:
