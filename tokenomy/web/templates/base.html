@@ -35,6 +35,23 @@
     window.addEventListener('pywebviewready', _revealMiniSwitch);
     if (window.pywebview && window.pywebview.api) _revealMiniSwitch();
 
+    // 버전 라벨 7회 탭 → 디버그 모드 ON(Android 개발자모드式, ADR 0014). 1.5s 안에 연속 7회.
+    (function () {
+      var el = document.getElementById('version-tap');
+      if (!el) return;
+      var taps = 0, timer = null;
+      el.addEventListener('click', function () {
+        taps++;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function () { taps = 0; }, 1500);
+        if (taps >= 7) {
+          taps = 0;
+          var f = document.getElementById('debug-on-form');
+          if (f) f.submit();
+        }
+      });
+    })();
+
     // 외부 링크(비 localhost http/https)는 네이티브 창 대신 기본 브라우저로.
     document.addEventListener('click', function (e) {
       var a = e.target.closest && e.target.closest('a[href]');

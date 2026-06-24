@@ -1,10 +1,38 @@
 import json
 
 from tokenomy.config import (
+    debug_mode,
     load_config,
     save_config,
     user_label,
 )
+
+
+def test_debug_mode_default_false():
+    assert debug_mode({}) is False
+
+
+def test_debug_mode_default_in_loaded_config(tmp_path):
+    cfg = load_config(tmp_path / "nope.json")
+    assert cfg["debug_mode"] is False
+
+
+def test_debug_mode_reads_true():
+    assert debug_mode({"debug_mode": True}) is True
+
+
+def test_debug_mode_coerces_truthy():
+    assert debug_mode({"debug_mode": 1}) is True
+    assert debug_mode({"debug_mode": 0}) is False
+    assert debug_mode({"debug_mode": None}) is False
+
+
+def test_debug_mode_roundtrips(tmp_path):
+    p = tmp_path / "c.json"
+    cfg = load_config(p)
+    cfg["debug_mode"] = True
+    save_config(cfg, p)
+    assert debug_mode(load_config(p)) is True
 
 
 def test_load_config_missing_file_returns_zero_tracking(tmp_path):

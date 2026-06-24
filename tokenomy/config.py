@@ -33,6 +33,7 @@ def load_config(path: str | Path | None = None) -> dict:
             "credit_to_usd": 0.04,
             "official_fetch": {"min_interval_minutes": 10},
             "forecast_settings": {"rate_window_weeks": 2},
+            "debug_mode": False,                 # 디버그 관측 게이트(ADR 0014) — 숨겨진 7탭으로 토글
             "pricing_overrides": {}}
     p = _config_path(path)
     if not p.exists():
@@ -64,6 +65,15 @@ def credit_to_usd(config: dict) -> float:
     except (TypeError, ValueError):
         return 0.04
     return f if f > 0 else 0.04
+
+
+def debug_mode(config: dict) -> bool:
+    """디버그 관측 모드(ADR 0014)가 켜졌는지. 기본 False.
+
+    켜지면 사용 이력(공식) 화면의 raw 링크와 `/official/raw` 라우트가 노출된다(포착 자체는
+    이 값과 무관하게 항상 ON). 사이드바 버전 7회 탭으로 토글하고 config에 영속한다.
+    """
+    return bool(config.get("debug_mode"))
 
 
 def official_fetch_settings(config: dict) -> dict:

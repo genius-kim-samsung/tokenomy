@@ -1,6 +1,7 @@
 """DB → 화면용 dict 조립. 라우트(app.py)와 집계(aggregate.py)를 분리한다."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -17,7 +18,9 @@ from tokenomy.config import (
     credit_to_usd, forecast_settings, load_config, official_fetch_settings,
     onboarding_pending, tracked_providers, user_label,
 )
-from tokenomy.db import get_fetch_state, get_meta
+from tokenomy.db import (
+    get_fetch_state, get_meta, get_official_raw, list_official_raw, official_buckets_at,
+)
 from tokenomy.freshness import LAST_INGEST_KEY
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 
@@ -380,6 +383,62 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[
         view = official_view(conn, p, now, ctu, weeks)
         cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now))
     return cards
+
+
+# --- 공식 raw 디버그 페이지(official raw capture, ADR 0014) ---
+
+
+def _pretty_json(text: str | None) -> str:
+    """raw 텍스트를 보기 좋게 — JSON이면 indent=2, 아니면(에러 HTML 등) 원문 그대로."""
+    if not text:
+        return ""
+    try:
+        return json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+    except (ValueError, TypeError):
+        return text
+
+
+def official_raw_context(conn, config: dict, provider: str | None = None,
+                         fetched_at: str | None = None) -> dict:
+    """디버그 raw 페이지 데이터 — raw 원문 + 그 스냅샷의 파싱 버킷 + 메타 + 7일 피커.
+
+    raw가 잡힌 provider만 탭으로 노출한다(없으면 빈 상태). 선택 fetched_at은 쿼리값이
+    유효하면 그것, 아니면 해당 provider의 최신 스냅샷. 버킷은 official_buckets에 저장된
+    값(=게이지를 실제로 구동한 ground truth)이라 'raw는 X인데 표시는 Y'를 바로 대조한다.
+    """
+    providers = [p for p in PROVIDERS if list_official_raw(conn, p)]
+    empty = {"active_nav": "official_raw", "providers": providers,
+             "selected_provider": None, "snapshots": [], "selected_fetched_at": None,
+             "raw_pretty": None, "buckets": [], "meta": None}
+    if not providers:
+        return empty
+
+    if provider not in providers:
+        provider = providers[0]
+    snaps = list_official_raw(conn, provider)            # 최신순
+
+    chosen = get_official_raw(conn, provider, fetched_at) if fetched_at else None
+    if chosen is None:
+        chosen = snaps[0]                                # 기본 = 최신
+    fa = chosen["fetched_at"]
+
+    fs = get_fetch_state(conn, provider)
+    return {
+        "active_nav": "official_raw",
+        "providers": providers,
+        "selected_provider": provider,
+        "snapshots": [{"fetched_at": r["fetched_at"], "status": r["status"],
+                       "http_code": r["http_code"], "byte_len": r["byte_len"]}
+                      for r in snaps],
+        "selected_fetched_at": fa,
+        "raw_pretty": _pretty_json(chosen["raw_text"]),
+        "buckets": [dict(b) for b in official_buckets_at(conn, provider, fa)],
+        "meta": {
+            "status": chosen["status"], "http_code": chosen["http_code"],
+            "byte_len": chosen["byte_len"], "created_at": chosen["created_at"],
+            "fetch_state": dict(fs) if fs else None,
+        },
+    }
 
 
 # --- 사용량 공유 문구(usage share snapshot, CONTEXT.md 동명 용어) ---

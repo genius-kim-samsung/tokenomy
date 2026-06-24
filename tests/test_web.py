@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from tokenomy.db import connect, insert_official_buckets
+from tokenomy.db import connect, insert_official_buckets, insert_official_raw
 from tokenomy.web import app as app_module
 
 _FIX = Path(__file__).parent / "fixtures" / "official"
@@ -1532,3 +1532,69 @@ def test_mini_section_empty_active_shows_settings_prompt(tmp_path, monkeypatch):
     r = client.get("/mini/section")
     assert r.status_code == 200
     assert "/settings" in r.text
+
+
+# ---------------------------------------------------------------------------
+# 디버그 모드 + /official/raw (ADR 0014)
+# ---------------------------------------------------------------------------
+
+def _seed_raw_row(conn, provider="claude", ts="2026-06-24T10:00:00+09:00",
+                  raw='{"hello":"world"}', status="ok", http_code=200):
+    insert_official_raw(conn, provider=provider, fetched_at=ts, status=status,
+                        http_code=http_code, raw_text=raw, created_at=ts)
+
+
+def test_official_raw_404_when_debug_off(tmp_path, monkeypatch):
+    """디버그 OFF(기본)면 라우트 자체가 404 — 완전한 숨김(ADR 0014)."""
+    client, _ = _client(tmp_path, monkeypatch)
+    assert client.get("/official/raw").status_code == 404
+
+
+def test_debug_toggle_on_unlocks_official_raw(tmp_path, monkeypatch):
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    _seed_raw_row(conn_factory())
+    r = client.post("/app/debug-toggle", data={"enabled": "1"}, follow_redirects=False)
+    assert r.status_code == 303
+    r2 = client.get("/official/raw")
+    assert r2.status_code == 200
+    assert "hello" in r2.text          # raw 원문 노출
+
+
+def test_debug_toggle_off_relocks_official_raw(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    client.post("/app/debug-toggle", data={"enabled": "1"})
+    assert client.get("/official/raw").status_code == 200   # 빈 상태도 200
+    client.post("/app/debug-toggle", data={"enabled": "0"})
+    assert client.get("/official/raw").status_code == 404
+
+
+def test_debug_toggle_flip_without_param(tmp_path, monkeypatch):
+    """enabled 파라미터 없으면 현재 상태를 뒤집는다(7탭 fallback)."""
+    client, _ = _client(tmp_path, monkeypatch)
+    client.post("/app/debug-toggle")                        # off→on
+    assert client.get("/official/raw").status_code == 200
+    client.post("/app/debug-toggle")                        # on→off
+    assert client.get("/official/raw").status_code == 404
+
+
+def test_sidebar_shows_debug_badge_when_on(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    assert "DEBUG" not in client.get("/").text              # off면 배지 없음
+    client.post("/app/debug-toggle", data={"enabled": "1"})
+    assert "DEBUG" in client.get("/").text                  # on이면 사이드바 배지
+
+
+def test_official_history_shows_raw_button_when_debug_on(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    assert "raw 보기" not in client.get("/official-history").text
+    client.post("/app/debug-toggle", data={"enabled": "1"})
+    assert "raw 보기" in client.get("/official-history").text
+
+
+def test_settings_shows_debug_off_when_on(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    assert "디버그 모드 끄기" not in client.get("/settings").text   # off면 노출 안 함
+    client.post("/app/debug-toggle", data={"enabled": "1"})
+    html = client.get("/settings").text
+    assert "디버그 모드 끄기" in html
+    assert 'value="0"' in html                              # OFF 버튼이 enabled=0 전송

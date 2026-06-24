@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block body %}
+<style>.bkt{border-collapse:collapse}.bkt th,.bkt td{padding:3px 16px 3px 0;white-space:nowrap;text-align:left}</style>
+<h1 class="page-title">공식 raw 응답 <span class="muted" style="font-size:13px">디버그</span></h1>
+<p class="muted" style="margin-top:-6px">
+  공식 API가 실제로 돌려준 응답 원문(PII 스크럽)과 그 스냅샷이 만든 파싱 버킷을 나란히 본다.
+  최근 7일치만 보관된다. 끄려면 설정 → 디버그 모드.
+</p>
+
+{% if not selected_provider %}
+<section class="card">
+  <p class="muted">아직 포착된 raw가 없습니다. 공식 갱신이 한 번 일어나면(대시보드 로드·수동 갱신) 여기에 쌓입니다.</p>
+</section>
+{% else %}
+
+{# provider 탭 #}
+<nav class="toggle small" aria-label="provider" style="margin-bottom:12px">
+  {% for p in providers %}
+  <a href="/official/raw?provider={{ p }}" class="{{ 'on' if p == selected_provider }}">{{ p }}</a>
+  {% endfor %}
+</nav>
+
+<div style="display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:16px;align-items:start">
+
+  {# 좌: raw 원문 + 메타 #}
+  <section class="card" style="min-width:0">
+    <div class="card-head">
+      <span class="label">raw 원문</span>
+      <span class="muted" style="font-size:12px">
+        {% set badge = {'ok':'#3a8a5f','parse_error':'#b8893a','http_error':'#b85a5a'} %}
+        <span style="font-weight:700;color:{{ badge.get(meta.status, '#6c6a64') }}">{{ meta.status }}</span>
+        {% if meta.http_code %} · HTTP {{ meta.http_code }}{% endif %}
+        · {{ meta.byte_len }} B
+      </span>
+    </div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">
+      as-of <time class="rel-time" data-ts="{{ selected_fetched_at }}">{{ selected_fetched_at|kstfmt }}</time>
+      {% if meta.fetch_state and meta.fetch_state.last_error %}
+      <span style="color:#b85a5a">· last_error: {{ meta.fetch_state.last_error }}</span>
+      {% endif %}
+    </div>
+    <pre style="overflow:auto;max-height:560px;background:#1e1c1a;color:#e6e1d8;padding:12px;border-radius:8px;font-size:12px;line-height:1.5;margin:0">{{ raw_pretty }}</pre>
+  </section>
+
+  {# 우: 파싱된 버킷(ground truth) + 7일 피커 #}
+  <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+    <section class="card" style="min-width:0">
+      <div class="card-head"><span class="label">파싱된 버킷</span>
+        <span class="muted" style="font-size:12px">official_buckets에 저장된 값(=게이지 구동)</span></div>
+      {% if buckets %}
+      <table class="data bkt" style="font-size:12px">
+        <thead><tr><th>label</th><th>kind</th><th>used</th><th>limit</th><th>util%</th></tr></thead>
+        <tbody>
+          {% for b in buckets %}
+          <tr>
+            <td>{{ b.label }}</td>
+            <td class="muted">{{ b.bucket_kind }}</td>
+            <td>{{ '%.4g'|format(b.used_native) if b.used_native is not none else '—' }} {{ b.native_unit }}</td>
+            <td>{{ '%.4g'|format(b.limit_native) if b.limit_native is not none else '—' }}</td>
+            <td>{{ '%.1f'|format(b.utilization) if b.utilization is not none else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted" style="font-size:12px">이 스냅샷엔 버킷이 없습니다(파싱 실패·에러 응답이면 정상 — 좌측 status 참고).</p>
+      {% endif %}
+    </section>
+
+    <section class="card" style="min-width:0">
+      <div class="card-head"><span class="label">최근 7일 스냅샷</span>
+        <span class="muted" style="font-size:12px">{{ snapshots|length }}건</span></div>
+      <ul style="list-style:none;margin:0;padding:0;max-height:320px;overflow:auto">
+        {% for s in snapshots %}
+        <li>
+          <a href="/official/raw?provider={{ selected_provider }}&fetched_at={{ s.fetched_at }}"
+             class="snap-row {{ 'on' if s.fetched_at == selected_fetched_at }}"
+             style="display:flex;justify-content:space-between;gap:8px;padding:5px 8px;border-radius:6px;text-decoration:none;font-size:12px;{{ 'background:rgba(204,120,92,.12)' if s.fetched_at == selected_fetched_at }}">
+            <span><time class="rel-time" data-ts="{{ s.fetched_at }}">{{ s.fetched_at|kstfmt }}</time></span>
+            <span class="muted">{{ s.status }}{% if s.http_code %} {{ s.http_code }}{% endif %} · {{ s.byte_len }}B</span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

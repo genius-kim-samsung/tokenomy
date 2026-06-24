@@ -21,10 +21,18 @@
     <button id="mini-switch" class="btn" type="button" onclick="switchToMini()"
             title="작게 흘끗 보는 미니 뷰로 전환" style="display:none">⊟ 미니뷰</button>
     {% endif %}
-    <div class="muted">v{{ app_version }}</div>
+    <div class="muted">
+      {# 버전 라벨 7회 탭 → 디버그 모드 ON(Android 개발자모드式, ADR 0014). 포착은 늘 켜져 있고 가시성만 토글. #}
+      <span id="version-tap" data-taps="0" style="cursor:default;user-select:none">v{{ app_version }}</span>
+      {% if debug_mode %}<a href="/official/raw" title="디버그 모드 ON — 공식 raw 보기(설정에서 끌 수 있음)"
+        style="margin-left:6px;font-size:10px;font-weight:700;letter-spacing:.06em;padding:1px 5px;border-radius:4px;background:#cc785c;color:#fff;text-decoration:none">DEBUG</a>{% endif %}
+    </div>
     {% if update_tag %}
     <a class="update-link" href="https://github.com/genius-kim-samsung/tokenomy/releases/latest"
        target="_blank" rel="noopener">새 버전 {{ update_tag }}</a>
     {% endif %}
   </div>
+  <form id="debug-on-form" method="post" action="/app/debug-toggle" hidden>
+    <input type="hidden" name="enabled" value="1">
+  </form>
 </aside>

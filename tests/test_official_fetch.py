@@ -9,7 +9,10 @@ from pathlib import Path
 import pytest
 
 from tokenomy.aggregate import KST
-from tokenomy.db import connect, get_fetch_state, latest_official_snapshot
+from tokenomy.db import (
+    connect, get_fetch_state, latest_official_snapshot,
+    get_official_raw, list_official_raw,
+)
 from tokenomy.official_fetch import (
     AuthError, FetchResult, _read_claude_token, _read_codex_auth, fetch_provider,
 )
@@ -196,6 +199,93 @@ def test_fetch_throttled_keeps_window(monkeypatch, tmp_path):
     assert r.status == "throttled"
     # state의 last_attempt_at이 미끄러지지 않았다(윈도우 보존)
     assert get_fetch_state(conn, "claude")["last_attempt_at"] == prev
+
+
+# ---------------------------------------------------------------------------
+# 공식 raw 포착(official_raw) — ADR 0014. 성공/PII스크럽/parse_error/http_error 바디.
+# ---------------------------------------------------------------------------
+
+class _TextResp:
+    """비-JSON 응답 바디 stub(파싱 실패 경로용)."""
+    def __init__(self, text): self._b = text.encode("utf-8")
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self): return self._b
+
+
+def _text_opener(text):
+    def _open(req, timeout=None): return _TextResp(text)
+    return _open
+
+
+def test_fetch_success_captures_scrubbed_raw(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
+    _patch_creds(monkeypatch, tmp_path)
+    conn = connect(":memory:")
+    fetch_provider("claude", now_kst=_NOW, config=_CFG_ON, conn=conn,
+                   urlopen=_opener(payload=_CLAUDE_RAW))
+    row = get_official_raw(conn, "claude", _NOW.isoformat())
+    assert row is not None
+    assert row["status"] == "ok" and row["http_code"] == 200
+    assert json.loads(row["raw_text"])["spend"]["used"]["amount_minor"] == 3000
+
+
+def test_fetch_codex_raw_redacts_pii(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
+    _patch_creds(monkeypatch, tmp_path)
+    conn = connect(":memory:")
+    # PII 값은 키 이름과 겹치지 않게(값만 가려지는지 정확히 보려고).
+    payload = {"user_id": "USERZZZ", "account_id": "ACCTZZZ",
+               "email": "secret@x.z", **_CODEX_RAW}
+    fetch_provider("codex", now_kst=_NOW, config=_CFG_ON, conn=conn,
+                   urlopen=_opener(payload=payload))
+    row = get_official_raw(conn, "codex", _NOW.isoformat())
+    assert row is not None
+    # PII 값이 사라지고 [redacted]로 대체
+    assert "USERZZZ" not in row["raw_text"]
+    assert "ACCTZZZ" not in row["raw_text"]
+    assert "secret@x.z" not in row["raw_text"]
+    assert json.loads(row["raw_text"])["user_id"] == "[redacted]"
+    assert json.loads(row["raw_text"])["account_id"] == "[redacted]"
+    # 사용량 수치는 보존
+    assert json.loads(row["raw_text"])["spend_control"]["individual_limit"]["used"] == "500.0"
+
+
+def test_fetch_non_json_200_is_parse_error_and_captures_body(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
+    _patch_creds(monkeypatch, tmp_path)
+    conn = connect(":memory:")
+    r = fetch_provider("claude", now_kst=_NOW, config=_CFG_ON, conn=conn,
+                       urlopen=_text_opener("<html>oops</html>"))
+    assert r.status == "http_error"   # 외부 동작은 그대로(파싱 실패=http_error)
+    row = get_official_raw(conn, "claude", _NOW.isoformat())
+    assert row is not None and row["status"] == "parse_error"
+    assert "<html>oops</html>" in row["raw_text"]
+
+
+def test_fetch_http_error_captures_error_body(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
+    _patch_creds(monkeypatch, tmp_path)
+    conn = connect(":memory:")
+    import io
+    err = urllib.error.HTTPError("u", 500, "err", {}, io.BytesIO(b'{"error":"boom"}'))
+    r = fetch_provider("claude", now_kst=_NOW, config=_CFG_ON, conn=conn,
+                       urlopen=_opener(exc=err))
+    assert r.status == "http_error"
+    row = get_official_raw(conn, "claude", _NOW.isoformat())
+    assert row is not None and row["status"] == "http_error" and row["http_code"] == 500
+    assert "boom" in row["raw_text"]
+
+
+def test_fetch_bodiless_401_skips_raw_capture(monkeypatch, tmp_path):
+    """빈 바디(fp=None) 401은 official_raw에 빈 행을 남기지 않는다(상태는 fetch_state에)."""
+    monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
+    _patch_creds(monkeypatch, tmp_path)
+    conn = connect(":memory:")
+    err = urllib.error.HTTPError("u", 401, "unauth", {}, None)
+    fetch_provider("codex", now_kst=_NOW, config=_CFG_ON, conn=conn,
+                   urlopen=_opener(exc=err))
+    assert get_official_raw(conn, "codex", _NOW.isoformat()) is None
 
 
 # ---------------------------------------------------------------------------

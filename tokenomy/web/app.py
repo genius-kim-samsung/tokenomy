@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
 from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts, official_view, combined_forecast
-from tokenomy.config import credit_to_usd as _credit_to_usd, forecast_settings, load_config, official_fetch_settings, tracked_providers, save_config
+from tokenomy.config import credit_to_usd as _credit_to_usd, debug_mode, forecast_settings, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
 from tokenomy.official_fetch import refresh_tracked
@@ -20,8 +20,8 @@ from tokenomy.update import check_update
 from tokenomy.web import control
 from tokenomy.web.views import (
     coverage_card_context, dimension_context, history_context, mini_view_context,
-    official_history_context, official_section_context, overview_context, session_context,
-    settings_provider_toggles, sidebar_freshness,
+    official_history_context, official_raw_context, official_section_context,
+    overview_context, session_context, settings_provider_toggles, sidebar_freshness,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -39,9 +39,9 @@ def _nav_context(request: Request) -> dict:
         ctu = _credit_to_usd(config)
         weeks = forecast_settings(config)["rate_window_weeks"]
         fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks) for p in active], now, weeks)
-        return {"show_official_history": fobj is not None}
+        return {"show_official_history": fobj is not None, "debug_mode": debug_mode(config)}
     except Exception:
-        return {"show_official_history": True}
+        return {"show_official_history": True, "debug_mode": False}
 
 
 templates = Jinja2Templates(directory=str(_BASE / "templates"), context_processors=[_nav_context])
@@ -145,6 +145,40 @@ def official_history_view(request: Request, anchor: str | None = None, provider:
     return templates.TemplateResponse(
         request, "official_history.html", {**ctx, "notice": notice, "update_tag": update_tag},
     )
+
+
+@app.get("/official/raw")
+def official_raw_view(request: Request, provider: str = "", fetched_at: str = ""):
+    """공식 raw 디버그 페이지(ADR 0014). 디버그 OFF면 404 — 완전한 숨김 패리티.
+
+    포착 자체는 debug와 무관하게 항상 ON이므로, 켜는 즉시 지난 7일 raw가 이미 보인다.
+    """
+    config = load_config()
+    if not debug_mode(config):
+        raise HTTPException(status_code=404)
+    conn = connect()
+    ctx = official_raw_context(conn, config, provider=provider or None,
+                               fetched_at=fetched_at or None)
+    return templates.TemplateResponse(
+        request, "official_raw.html", {**ctx, "update_tag": check_update(conn)},
+    )
+
+
+@app.post("/app/debug-toggle")
+def debug_toggle(enabled: str = Form(None)):
+    """디버그 모드 토글(ADR 0014). enabled 명시(1/0)면 그 값으로, 없으면 현재를 뒤집는다.
+
+    사이드바 버전 7회 탭(JS)이 enabled=1로, 설정 화면 OFF 버튼이 enabled=0으로 호출한다.
+    켜면 새로 열린 raw 페이지로, 끄면 설정으로 보낸다(맥락에 맞는 착지).
+    """
+    config = load_config()
+    if enabled is None:
+        new = not debug_mode(config)
+    else:
+        new = enabled in ("1", "true", "True", "on")
+    config["debug_mode"] = new
+    save_config(config)
+    return RedirectResponse("/official/raw" if new else "/settings?saved=1", status_code=303)
 
 
 @app.get("/models")

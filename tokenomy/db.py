@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from tokenomy.parser import (
@@ -106,6 +107,22 @@ CREATE TABLE IF NOT EXISTS official_fetch_state (
     last_status TEXT,
     last_error TEXT
 );
+
+-- 공식 API raw 응답 디버그 포착(ADR 0014). PII 스크럽된 원문을 fetch마다 보관(7일 롤링).
+-- official_buckets와 (provider, fetched_at)로 1:1 정렬. 디버그 보조라 버킷 영구이력과 분리.
+CREATE TABLE IF NOT EXISTS official_raw (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT,
+    fetched_at TEXT,        -- 스냅샷 as-of(official_buckets와 동일 키)
+    status TEXT,            -- 'ok'|'parse_error'|'http_error'
+    http_code INTEGER,      -- HTTP 상태코드(네트워크 에러 등은 NULL)
+    raw_text TEXT,          -- PII 스크럽 + 8KB cap된 응답 원문
+    byte_len INTEGER,       -- 저장된 raw_text 바이트 길이
+    created_at TEXT,
+    UNIQUE(provider, fetched_at)
+);
+CREATE INDEX IF NOT EXISTS idx_official_raw_lookup
+    ON official_raw(provider, fetched_at);
 """
 
 
@@ -436,6 +453,14 @@ def latest_official_snapshot(conn, provider: str) -> list:
     ).fetchall()
 
 
+def official_buckets_at(conn, provider: str, fetched_at: str) -> list:
+    """특정 스냅샷(provider, fetched_at)의 버킷 행 전부 — raw 디버그 페이지의 '파싱 결과'용."""
+    return conn.execute(
+        "SELECT * FROM official_buckets WHERE provider=? AND fetched_at=? ORDER BY id",
+        (provider, fetched_at),
+    ).fetchall()
+
+
 def official_bucket_series(conn, provider: str, bucket_key: str) -> list:
     """provider·bucket_key의 (fetched_at, used_usd, used_native) 시계열(오름차순).
 
@@ -470,4 +495,49 @@ def upsert_fetch_state(conn, provider: str, *, last_attempt_at: str | None,
         (provider, last_attempt_at, last_success_at, last_status, last_error),
     )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# 공식 raw 포착(official_raw) — 디버그용 응답 원문 보관(ADR 0014)
+# ---------------------------------------------------------------------------
+
+def insert_official_raw(conn, *, provider: str, fetched_at: str, status: str,
+                        http_code: int | None, raw_text: str, created_at: str,
+                        retain_days: int = 7) -> int:
+    """스크럽된 raw 응답 1건을 적재하고 7일 지난 행을 prune. 저장 byte 길이 반환.
+
+    UNIQUE(provider, fetched_at) + INSERT OR REPLACE로 같은 스냅샷 재취득이 멱등.
+    prune 기준은 이번 fetched_at − retain_days(모든 KST ISO라 문자열 비교가 유효).
+    """
+    byte_len = len(raw_text.encode("utf-8")) if raw_text is not None else 0
+    with conn:   # 트랜잭션
+        conn.execute(
+            "INSERT OR REPLACE INTO official_raw "
+            "(provider, fetched_at, status, http_code, raw_text, byte_len, created_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (provider, fetched_at, status, http_code, raw_text, byte_len, created_at),
+        )
+        try:
+            cutoff = (datetime.fromisoformat(fetched_at)
+                      - timedelta(days=retain_days)).isoformat()
+            conn.execute("DELETE FROM official_raw WHERE fetched_at < ?", (cutoff,))
+        except (ValueError, TypeError):
+            pass   # fetched_at 파싱 실패 시 prune만 건너뜀(적재는 보존)
+    return byte_len
+
+
+def get_official_raw(conn, provider: str, fetched_at: str):
+    """한 스냅샷의 raw 행(없으면 None)."""
+    return conn.execute(
+        "SELECT * FROM official_raw WHERE provider=? AND fetched_at=?",
+        (provider, fetched_at),
+    ).fetchone()
+
+
+def list_official_raw(conn, provider: str) -> list:
+    """provider의 보관 중인 raw 스냅샷 행 전부(최신순) — 7일 피커용."""
+    return conn.execute(
+        "SELECT * FROM official_raw WHERE provider=? ORDER BY fetched_at DESC, id DESC",
+        (provider,),
+    ).fetchall()
 

@@ -18,7 +18,9 @@ from tokenomy import paths
 from tokenomy.paths import CLAUDE_CREDS, CODEX_AUTH
 from tokenomy.aggregate import parse_ts
 from tokenomy.config import credit_to_usd, official_fetch_settings, tracked_providers
-from tokenomy.db import get_fetch_state, insert_official_buckets, upsert_fetch_state
+from tokenomy.db import (
+    get_fetch_state, insert_official_buckets, insert_official_raw, upsert_fetch_state,
+)
 from tokenomy.official_parser import parse_claude, parse_codex
 
 # 공식 사용량 API 엔드포인트
@@ -34,6 +36,25 @@ _TIMEOUT = 3  # 초(최대 3s, 백오프 없음)
 
 class AuthError(Exception):
     """크레덴셜 파일 누락·스키마 드리프트·토큰/account_id 부재."""
+
+
+# raw 응답을 디버그 보관하기 전에 가리는 PII 키(deny-list, ADR 0014).
+# Codex 응답이 최상위에 user_id/account_id/email를 담는다 — 사용량 수치는 보존하고 이것만 마스킹.
+_PII_KEYS = frozenset({"user_id", "account_id", "email"})
+
+
+def scrub_pii(obj):
+    """deny-list 키의 값을 재귀적으로 '[redacted]'로 치환한 **새 객체**를 반환(원본 불변).
+
+    dict/list를 따라 내려가며 _PII_KEYS에 든 키만 가린다. 키 이름 매칭이라 모양이
+    바뀌어도(코드네임 회전) 사용량 수치는 그대로 남고 알려진 PII만 사라진다.
+    """
+    if isinstance(obj, dict):
+        return {k: ("[redacted]" if k in _PII_KEYS else scrub_pii(v))
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [scrub_pii(v) for v in obj]
+    return obj
 
 
 def _read_claude_token(path: Path = CLAUDE_CREDS) -> str:
@@ -90,11 +111,58 @@ def _throttled(state, now_kst, min_interval_minutes: int) -> bool:
     return (now_kst - last).total_seconds() < min_interval_minutes * 60
 
 
-def _http_get_json(url: str, headers: dict, urlopen) -> dict:
-    """HTTP GET → JSON dict. 실패 시 예외를 그대로 전파(호출자가 분류)."""
+def _http_get_text(url: str, headers: dict, urlopen) -> tuple[str, int]:
+    """HTTP GET → (응답 본문 텍스트, 상태코드). 실패 시 예외를 그대로 전파(호출자가 분류).
+
+    본문을 **텍스트로** 돌려줘 호출자가 파싱 전에 raw를 포착할 수 있게 한다(ADR 0014).
+    """
     req = urllib.request.Request(url, headers=headers)
     with urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        text = resp.read().decode("utf-8")
+        code = getattr(resp, "status", None) or getattr(resp, "code", None) or 200
+        return text, code
+
+
+# 디버그 raw 포착(ADR 0014) — 본문 크기 상한과 스크럽/적재 헬퍼.
+_RAW_CAP = 8192   # 저장 본문 8KB cap(HTML 에러 바디·대형 응답 방어)
+
+
+def _scrub_and_cap(text: str | None) -> str:
+    """본문을 PII 스크럽(JSON이면 deny-list 재귀) 후 8KB로 자른다.
+
+    JSON이면 파싱→스크럽→compact 재직렬화(가독은 페이지에서 pretty). 비-JSON(에러 HTML
+    등)은 키 매칭이 불가해 텍스트 그대로 cap만 한다. 빈 본문은 ''(호출자가 미포착 판단).
+    """
+    if not text:
+        return ""
+    try:
+        out = json.dumps(scrub_pii(json.loads(text)),
+                         ensure_ascii=False, separators=(",", ":"))
+    except (ValueError, TypeError):
+        out = text
+    return out[:_RAW_CAP]
+
+
+def _read_err_body(e) -> str:
+    """HTTPError 본문을 안전하게 읽는다(fp=None이면 '')."""
+    try:
+        return e.read().decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+
+def _capture_raw(conn, provider: str, fetched_at: str, status: str,
+                 http_code: int | None, text: str | None) -> None:
+    """스크럽+cap된 raw를 official_raw에 적재(빈 본문은 미포착). 포착 실패는 본 흐름 불간섭."""
+    scrubbed = _scrub_and_cap(text)
+    if not scrubbed:
+        return   # 바디 없는 실패(네트워크/빈 401)는 fetch_state.last_error가 대신한다
+    try:
+        insert_official_raw(conn, provider=provider, fetched_at=fetched_at,
+                            status=status, http_code=http_code,
+                            raw_text=scrubbed, created_at=fetched_at)
+    except Exception:
+        pass
 
 
 def fetch_provider(provider: str, *, now_kst, config, conn,
@@ -123,27 +191,28 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
     if not manual and _throttled(state, now_kst, settings["min_interval_minutes"]):
         return FetchResult(provider, "throttled")
 
-    # 3) 토큰읽기 + 네트워크 + 파싱 — 실패는 여기서만 catch
+    # 3) 토큰읽기 + 네트워크(GET) — 실패 분류. raw 텍스트를 받아 파싱 전에 포착(ADR 0014).
     ts = now_kst.isoformat()
     try:
         if provider == "claude":
             tok = _read_claude_token(CLAUDE_CREDS)   # 모듈 상수를 명시 전달(패치 가능)
             headers = {"Authorization": f"Bearer {tok}",
                        "anthropic-beta": _CLAUDE_BETA, "User-Agent": _CLAUDE_UA}
-            raw = _http_get_json(CLAUDE_USAGE_URL, headers, urlopen)
-            buckets = parse_claude(raw, credit_to_usd=credit_to_usd(config))
+            raw_text, http_code = _http_get_text(CLAUDE_USAGE_URL, headers, urlopen)
         else:
             tok, acct = _read_codex_auth(CODEX_AUTH)   # 모듈 상수를 명시 전달(패치 가능)
             headers = {"Authorization": f"Bearer {tok}",
                        "ChatGPT-Account-Id": acct, "User-Agent": _CODEX_UA}
-            raw = _http_get_json(CODEX_USAGE_URL, headers, urlopen)
-            buckets = parse_codex(raw, credit_to_usd=credit_to_usd(config))
+            raw_text, http_code = _http_get_text(CODEX_USAGE_URL, headers, urlopen)
     except AuthError as e:
+        # 크레덴셜/로컬 문제 — 네트워크 응답 자체가 없어 포착할 raw도 없다
         upsert_fetch_state(conn, provider, last_attempt_at=ts, last_success_at=None,
                            last_status="auth_error", last_error=str(e)[:200])
         return FetchResult(provider, "auth_error", _auth_note(provider))
     except urllib.error.HTTPError as e:
-        # HTTPError는 URLError의 하위클래스 — 반드시 먼저 잡아야 401/5xx 분기가 동작한다
+        # HTTPError는 URLError의 하위클래스 — 반드시 먼저 잡아야 401/5xx 분기가 동작한다.
+        # 에러 바디가 있으면 포착(4xx/5xx의 실제 원인이 거기 있다).
+        _capture_raw(conn, provider, ts, "http_error", e.code, _read_err_body(e))
         if e.code == 401:
             upsert_fetch_state(conn, provider, last_attempt_at=ts, last_success_at=None,
                                last_status="auth_error", last_error="HTTP 401")
@@ -152,12 +221,24 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
                            last_status="http_error", last_error=f"HTTP {e.code}")
         return FetchResult(provider, "http_error")
     except Exception as e:
-        # URLError, TimeoutError/socket.timeout, JSON 파싱 등 — 백오프 없이 포기
+        # URLError, TimeoutError/socket.timeout 등 — 응답 본문이 없어 포착할 raw도 없다
         upsert_fetch_state(conn, provider, last_attempt_at=ts, last_success_at=None,
                            last_status="http_error", last_error=str(e)[:200])
         return FetchResult(provider, "http_error")
 
-    # 4) 적재 + 성공 state 기록 — try 밖(버그 가려짐 방지)
+    # 4) 파싱(HTTP 200) — 파서가 던지거나 JSON이 깨져도 raw 증거를 보존한다(parse_error 포착).
+    try:
+        raw = json.loads(raw_text)
+        buckets = (parse_claude if provider == "claude" else parse_codex)(
+            raw, credit_to_usd=credit_to_usd(config))
+    except Exception as e:
+        _capture_raw(conn, provider, ts, "parse_error", http_code, raw_text)
+        upsert_fetch_state(conn, provider, last_attempt_at=ts, last_success_at=None,
+                           last_status="http_error", last_error=str(e)[:200])
+        return FetchResult(provider, "http_error")
+
+    # 5) 적재 + 성공 state 기록 — try 밖(버그 가려짐 방지). raw도 포착(스크럽).
+    _capture_raw(conn, provider, ts, "ok", http_code, raw_text)
     n = insert_official_buckets(conn, provider=provider, fetched_at=ts,
                                 buckets=buckets, created_at=ts)
     upsert_fetch_state(conn, provider, last_attempt_at=ts, last_success_at=ts,

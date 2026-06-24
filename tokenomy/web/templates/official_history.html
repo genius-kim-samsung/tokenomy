@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block body %}
-<h1 class="page-title">사용 이력(공식)</h1>
+<h1 class="page-title">사용 이력(공식)
+  {% if debug_mode %}<a href="/official/raw?provider={{ provider }}" class="btn small"
+    style="font-size:12px;vertical-align:middle;margin-left:8px" title="이 공식 숫자의 응답 원문 보기">raw 보기</a>{% endif %}
+</h1>
 
 {% if not has_pool %}
 <section class="card">
