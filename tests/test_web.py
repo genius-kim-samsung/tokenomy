@@ -344,6 +344,88 @@ def test_overview_context_includes_forecast(tmp_path, monkeypatch):
     assert "forecast_line" in ctx
 
 
+# ── A군 모드 게이트(ADR 0015 2단계) ────────────────────────────────────────────
+
+def _seed_monthly_pool(conn, provider, used, limit, *, fetched="2026-06-10T09:00:00+09:00"):
+    from tokenomy.official_parser import OfficialBucket
+    insert_official_buckets(
+        conn, provider=provider, fetched_at=fetched, created_at=fetched,
+        buckets=[OfficialBucket(
+            bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit",
+            label="m", native_unit="usd", used_native=used, limit_native=limit,
+            remaining_native=limit - used, used_usd=used, limit_usd=limit,
+            remaining_usd=limit - used, utilization=used / limit * 100, resets_at=None)])
+
+
+def _ovw_cfg(tmp_path, monkeypatch, mode=None):
+    cfg = tmp_path / "cfg.json"
+    body = {"tracked_providers": ["claude", "codex"]}
+    if mode is not None:
+        body["account_mode"] = mode
+    cfg.write_text(json.dumps(body), encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+
+
+def test_overview_enterprise_headline_official(tmp_path, monkeypatch):
+    # 엔터프라이즈 + USD 풀 → 헤드라인=공식 pool used·히어로 표시·추세 오버레이 존재.
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import overview_context
+    _ovw_cfg(tmp_path, monkeypatch, "enterprise")
+    conn = connect(":memory:")
+    _seed_monthly_pool(conn, "claude", 40.0, 200.0)
+    ctx = overview_context(conn, "cost", now_kst=datetime(2026, 6, 10, 12, tzinfo=KST))
+    assert ctx["headline_official"] is True
+    assert ctx["headline_usd"] == 40.0          # 공식 pool used(로컬 추정 아님)
+    assert ctx["forecast"] is not None
+    assert ctx["forecast_limit"] == 200.0
+
+
+def test_overview_subscription_suppresses_hero_uses_local_headline(tmp_path, monkeypatch):
+    # 개인구독제: USD 버킷이 있어도(혼합 엣지) A군은 로컬 — 히어로 숨김·헤드라인 로컬·추세 오버레이 없음.
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import overview_context
+    _ovw_cfg(tmp_path, monkeypatch, "subscription")
+    conn = connect(":memory:")
+    _seed_monthly_pool(conn, "claude", 40.0, 200.0)
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s','2026-06-05T10:00:00Z',7.5,1)")
+    conn.commit()
+    ctx = overview_context(conn, "cost", now_kst=datetime(2026, 6, 10, 12, tzinfo=KST))
+    assert ctx["forecast"] is None                # 전망 히어로 숨김
+    assert ctx["headline_official"] is False
+    assert ctx["headline_usd"] == 7.5             # 로컬 이번 달 총지출(추정)
+    assert ctx["forecast_limit"] is None
+    assert ctx["forecast_line"] is None
+    assert ctx["forecast_actual"] is None
+
+
+def test_overview_unset_mode_with_pool_treated_official(tmp_path, monkeypatch):
+    # 미설정(시드 전)이라도 USD 풀이 있으면 A군은 공식으로 — 곧 enterprise로 시드될 상태.
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import overview_context
+    _ovw_cfg(tmp_path, monkeypatch, None)
+    conn = connect(":memory:")
+    _seed_monthly_pool(conn, "claude", 40.0, 200.0)
+    ctx = overview_context(conn, "cost", now_kst=datetime(2026, 6, 10, 12, tzinfo=KST))
+    assert ctx["headline_official"] is True
+    assert ctx["forecast"] is not None
+
+
+def test_dashboard_official_headline_renders_zone_chip(tmp_path, monkeypatch):
+    # 엔터프라이즈 + USD 풀 → 총지출 카드에 "공식 · 계정 전체" 존 칩 렌더(템플릿 분기 스모크).
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    (tmp_path / "cfg.json").write_text(json.dumps(
+        {"tracked_providers": ["claude", "codex"], "account_mode": "enterprise"}),
+        encoding="utf-8")
+    _seed_monthly_pool(conn_factory(), "claude", 40.0, 200.0)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "공식 · 계정 전체" in r.text
+
+
 def _client_with_config(tmp_path, monkeypatch):
     """_client(=config 격리됨) + 그 config 파일 경로를 함께 돌려준다."""
     client, _ = _client(tmp_path, monkeypatch)   # TOKENOMY_CONFIG → tmp_path/cfg.json

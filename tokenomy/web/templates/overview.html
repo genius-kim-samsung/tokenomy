@@ -38,13 +38,17 @@
 {% endif %}
 
 <section class="card">
-  <h2>이번 달 총지출 {% if combined %}<span class="muted">(전 AI 합산)</span>{% elif solo_label %}<span class="muted">({{ solo_label }})</span>{% endif %}</h2>
+  <h2>이번 달 총지출 {% if combined %}<span class="muted">(전 AI 합산)</span>{% elif solo_label %}<span class="muted">({{ solo_label }})</span>{% endif %}
+    {% if headline_official %}<span class="chip chip-official" title="공식 API 기준 · 전 기기 합">공식 · 계정 전체</span>{% endif %}</h2>
   {% if active_empty %}
     <p class="muted">표시할 AI가 없습니다 — <a href="/settings">설정</a>에서 켜세요.</p>
+  {% elif headline_official %}
+    <p class="total-num serif">${{ '{:,.2f}'.format(headline_usd) }}</p>
+    <p class="disclaimer">ⓘ 공식 API 사용량 · 계정 전체(전 기기)의 실제 청구 기준</p>
   {% elif not has_data %}
     <p class="muted">데이터 없음 · 사이드바 [↻ 수집]을 누르세요</p>
   {% else %}
-    <p class="total-num serif">${{ '{:,.2f}'.format(month_total) }}</p>
+    <p class="total-num serif">${{ '{:,.2f}'.format(headline_usd) }}</p>
     <p class="disclaimer">ⓘ 공개 API 단가 기준 추정 · 이 기기의 Claude Code와 Codex만</p>
   {% endif %}
 </section>

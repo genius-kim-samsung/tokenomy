@@ -15,7 +15,7 @@ from tokenomy.aggregate import (
     token_composition,
 )
 from tokenomy.config import (
-    credit_to_usd, forecast_settings, load_config, official_fetch_settings,
+    account_mode, credit_to_usd, forecast_settings, load_config, official_fetch_settings,
     onboarding_pending, tracked_providers, user_label,
 )
 from tokenomy.db import (
@@ -606,6 +606,17 @@ def mini_view_context(conn, config: dict, now_kst: datetime | None = None) -> di
     }
 
 
+def _a_zone_official(config: dict, forecast_obj) -> bool:
+    """A군(이번 달 총지출·전망 히어로·추세 오버레이)을 **공식**으로 렌더할지 판정(ADR 0015).
+
+    공식 USD 풀이 있고(forecast_obj not None) 모드가 개인구독제가 아니면 공식(엔터프라이즈).
+    - 엔터 + USD 풀 → 공식. 미설정 + USD 풀 → 공식(곧 enterprise로 시드될 상태).
+    - 개인구독제는 USD 풀이 있어도(혼합 엣지) A군 로컬 유지 — 사용자 선택 존중(D6).
+    - 엔터인데 공식 USD 풀이 없으면(forecast_obj None) 자동으로 로컬 강등(깨진 빈 히어로 방지, D6 안전장치).
+    """
+    return forecast_obj is not None and account_mode(config) != "subscription"
+
+
 def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     now = now_kst or datetime.now(KST)
     config = load_config()
@@ -629,13 +640,22 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     weeks = forecast_settings(config)["rate_window_weeks"]
     forecast_views = [official_view(conn, p, now, ctu, weeks) for p in active]
     forecast_obj = combined_forecast(conn, forecast_views, now, weeks)
-    forecast = _forecast_hero(forecast_obj)
-    fc_chart = forecast_chart_data(forecast_obj, daily, now)
-    # 공식 사용량 스냅샷 이력 → 전망 차트 실제 과거 실선(ADR 0007). 활성 USD 풀만.
-    # max_gap = 자동 갱신 간격 ×3(그보다 긴 공백은 수집 단절로 보아 선을 끊는다).
+    # A군 모드 게이트(ADR 0015): 공식(엔터) vs 로컬(개인구독제). 헤드라인·히어로·추세 오버레이를 가른다.
+    a_official = _a_zone_official(config, forecast_obj)
+    # 이번 달 총지출 헤드라인 — 엔터=공식 풀 used(계정 전체·실청구), 개인구독제/로컬=이 기기 추정.
+    headline_usd = forecast_obj.used_usd if a_official else month_total
+    forecast = _forecast_hero(forecast_obj) if a_official else None   # 개인구독제는 히어로 숨김
     interval = official_fetch_settings(config)["min_interval_minutes"]
-    pool_hist = pool_history(conn, active, max_gap_minutes=interval * 3)
-    forecast_actual = pool_history_to_daily(pool_hist, [p.day for p in daily], now)
+    if a_official:
+        fc_chart = forecast_chart_data(forecast_obj, daily, now)
+        # 공식 사용량 스냅샷 이력 → 전망 차트 실제 과거 실선(ADR 0007). 활성 USD 풀만.
+        # max_gap = 자동 갱신 간격 ×3(그보다 긴 공백은 수집 단절로 보아 선을 끊는다).
+        pool_hist = pool_history(conn, active, max_gap_minutes=interval * 3)
+        forecast_actual = pool_history_to_daily(pool_hist, [p.day for p in daily], now)
+    else:
+        # 로컬 A군 — 한도·예상선·실제 공식선 없는 순수 로컬 추세(개인구독제엔 한도가 없다).
+        fc_chart = {"limit": None, "line": None}
+        forecast_actual = None
 
     # 추세 밴드 = 활성 ∩ 데이터 있는 provider. stacked_trend·차트 JS는 무변경(N밴드 generic).
     trend_providers = [p for p in _TREND_STYLE if p in active and _provider_has_data(conn, p)]
@@ -671,6 +691,11 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "combined": combined, "solo_label": solo_label, "active_empty": not active,
         "month": now.strftime("%Y-%m"),
         "month_total": month_total,
+        # A군 모드 게이트(ADR 0015) — 헤드라인 출처/존 라벨/디스클레이머 분기에 쓴다.
+        "account_mode": account_mode(config),
+        "a_official": a_official,
+        "headline_usd": headline_usd,
+        "headline_official": a_official,
         "forecast": forecast,
         "forecast_limit": fc_chart["limit"],
         "forecast_line": fc_chart["line"],
