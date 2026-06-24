@@ -33,7 +33,7 @@
   {% endif %}
   <p class="muted">현재 ${{ '{:,.2f}'.format(forecast.used) }} / ${{ '{:,.0f}'.format(forecast.limit) }} 사용 ({{ forecast.pct_now }}%)
     {% if forecast.daily_rate %}· 하루 ${{ '{:,.2f}'.format(forecast.daily_rate) }}/영업일{% endif %}</p>
-  <p class="disclaimer">ⓘ 현재 사용량은 공식 · 전망은 로컬 추세 기반 추정</p>
+  <p class="disclaimer">ⓘ 전부 공식 · 계정 전체(전 기기) · 전망은 공식 사용 추세 기반</p>
 </section>
 {% endif %}
 

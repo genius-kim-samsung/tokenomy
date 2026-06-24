@@ -405,6 +405,75 @@ def local_daily_rate(conn, provider: str, now_kst: datetime, weeks: int = 2) -> 
     return round(spend / elapsed, 4) if (elapsed > 0 and spend > 0) else None
 
 
+def _pool_used_at(conn, providers: list[str], T: datetime) -> float | None:
+    """T 시점 통합 풀 used = 각 provider의 T 이하 최신 스냅샷 used 합. 기여 provider 없으면 None.
+
+    pool_used_history(소진형 USD 버킷만)를 forward-fill해 합산한다 — 누적 시계열의 그 시점 위치.
+    """
+    total = None
+    for p in providers:
+        val = None
+        for dt, v in pool_used_history(conn, p):    # 오름차순
+            if dt <= T:
+                val = v
+            else:
+                break
+        if val is not None:
+            total = (total or 0.0) + val
+    return total
+
+
+def _earliest_pool_snapshot(conn, providers: list[str]) -> datetime | None:
+    """풀 기여 provider들의 최초 공식 스냅샷 시각. 없으면 None."""
+    earliest = None
+    for p in providers:
+        hist = pool_used_history(conn, p)
+        if hist and (earliest is None or hist[0][0] < earliest):
+            earliest = hist[0][0]
+    return earliest
+
+
+def _official_trailing_rate(conn, providers: list[str], now_kst: datetime,
+                            weeks: int) -> float | None:
+    """(a) 공식 스냅샷 델타 트레일링 기울기(USD/영업일) — 이력이 충분할 때만(ADR 0015 D3).
+
+    윈도우 시작 **이전** 스냅샷이 있어야(=베이스라인 존재) 트레일링 델타가 깨끗하다 — 없으면
+    None(이력 부족 → 호출자가 (b)로 강등). pool_daily_history(리셋 보정 델타)를 윈도우에서
+    합산 ÷ 윈도우 영업일. 소비 0이면 None.
+    """
+    start, nxt = _trailing_window_bounds(now_kst, weeks)
+    earliest = _earliest_pool_snapshot(conn, providers)
+    if earliest is None or earliest >= start:
+        return None                                 # 윈도우 시작 전 베이스 없음 → 이력 부족
+    rows = pool_daily_history(conn, providers, start=start, nxt=nxt)
+    consumed = sum(r["used_usd"] for r in rows if r["covered"] and r["used_usd"] is not None)
+    bdays = business_days_between(start.date(), now_kst.date() + timedelta(days=1))
+    return round(consumed / bdays, 4) if (bdays > 0 and consumed > 0) else None
+
+
+def _official_mtd_rate(now_kst: datetime, pool_used: float | None) -> float | None:
+    """(b) 월초누적 평균 기울기 = pool_used / 월초~오늘 영업일. used 없거나 0이면 None."""
+    if pool_used is None or pool_used <= 0:
+        return None
+    month_start, _ = month_bounds(now_kst)
+    bdays = business_days_between(month_start.date(), now_kst.date() + timedelta(days=1))
+    return round(pool_used / bdays, 4) if bdays > 0 else None
+
+
+def official_daily_rate(conn, providers: list[str], now_kst: datetime, weeks: int,
+                        *, pool_used: float | None) -> float | None:
+    """엔터프라이즈 전망 기울기(USD/영업일) — **공식만**(로컬 기울기 폐기, ADR 0015 D3).
+
+    (a) 공식 스냅샷 델타 트레일링 우선 → 이력 부족 시 (b) 월초누적 평균 → 둘 다 불가면 None(위치만).
+    다중 기기 사용자에서 한 기기 로컬 속도만 보던 과소추정과 '공식 위에 로컬을 얹는' 하이브리드 혼란을
+    없앤다 — 위치(used)도 기울기도 모두 공식 계정 전체다.
+    """
+    r = _official_trailing_rate(conn, providers, now_kst, weeks)
+    if r is not None:
+        return r
+    return _official_mtd_rate(now_kst, pool_used)
+
+
 def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
                       weeks: int = 2) -> CombinedForecast | None:
     """공식 USD/크레딧 한도가 있는 provider를 한 풀로 합쳐 달력 월말 예상 잔여를 낸다.
@@ -412,8 +481,9 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
     풀 = pool_limit_usd가 있는 view들. 없으면 None(히어로 숨김).
     used/limit = 공식 pool_*의 합(현재 위치 — 월간+포함크레딧 등 USD 한도 버킷 합산, ADR 0004).
     예상 used = used + daily_rate × (오늘 이후 월말까지 남은 영업일). 음수 잔여면 소진 예상일 산출.
-    daily_rate = 풀 provider 트레일링 창(오늘 포함 weeks×7일) 로컬 소비 합 ÷ 그 창의 영업일(적응형).
-    이미 소진(used≥limit)이거나 로컬 소비가 없으면(daily_rate None) 전망은 생략(None)한다.
+    daily_rate = **공식** 기울기(ADR 0015 D3·official_daily_rate): (a)스냅샷 델타 트레일링 →
+    (b)월초누적 평균 폴백 → 둘 다 불가면 None. 위치도 기울기도 모두 공식 계정 전체(로컬 기울기 폐기).
+    이미 소진(used≥limit)이거나 공식 기울기가 없으면(daily_rate None) 전망은 생략(None)한다.
 
     한계(ADR 0004): 포함 크레딧은 리셋 주기가 월간과 다를 수 있으나(예: 분기 만료),
     v1.x는 달력 월말 지평으로 함께 본다 — "이번 달 이 속도면 가용 예산을 다 쓰나?" 질문에 답하기 위함.
@@ -429,9 +499,8 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
     _, next_month = month_bounds(now_kst)
     month_end = (next_month - timedelta(days=1)).date()
     pool_providers = [v.provider for v in pool]
-    elapsed = _trailing_business_days(conn, now_kst, weeks, providers=pool_providers)
-    spend = trailing_window_spend(conn, None, now_kst, weeks, providers=pool_providers)
-    daily_rate = round(spend / elapsed, 4) if (elapsed > 0 and spend > 0) else None
+    # 기울기 = 공식만(ADR 0015 D3). (a)스냅샷 델타 트레일링 → (b)월초누적 폴백 → 없으면 None.
+    daily_rate = official_daily_rate(conn, pool_providers, now_kst, weeks, pool_used=used)
     bdays_remaining = business_days_between(now_kst.date() + timedelta(days=1), next_month.date())
 
     is_exhausted = used >= limit

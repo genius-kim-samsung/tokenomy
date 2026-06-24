@@ -1432,44 +1432,60 @@ def test_combined_forecast_pool_sums_used_and_limit():
 
 
 def test_combined_forecast_surplus():
+    # 엔터 기울기=공식(ADR 0015). 단일 스냅샷 → 월초누적 used40/8영업일=5/일 → 110<200 여유.
     conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
                             buckets=[_ob("monthly", "monthly_limit", 40.0, 200.0, raw="spend")],
                             created_at="x")
-    _insert(conn, "2026-05-01T01:00:00Z", 1.0, provider="claude", session="anchor")  # 창 밖 앵커 → 풀 창 분모(10)
-    _insert(conn, "2026-06-05T01:00:00Z", 100.0, provider="claude", session="a")  # 로컬 100 / 10영업일 = 10/일(트레일링)
     fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
     assert fc.providers == ["claude"]
-    assert fc.daily_rate_usd == 10.0
+    assert fc.daily_rate_usd == 5.0                 # 공식 월초누적: 40 / 8영업일(6/1~6/10)
     assert fc.bdays_remaining == 14
-    assert fc.projected_used_usd == 180.0           # 40 + 10*14
-    assert fc.projected_remaining_usd == 20.0       # 200 - 180 → 여유
+    assert fc.projected_used_usd == 110.0           # 40 + 5*14
+    assert fc.projected_remaining_usd == 90.0       # 200 - 110 → 여유
     assert fc.exhaust_date is None
     assert fc.is_exhausted is False
 
 
 def test_combined_forecast_shortfall_with_exhaust_date():
+    # 공식 월초누적 used80/8영업일=10/일 → 80+10*14=220>100 부족, 소진 6/12.
     conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
-                            buckets=[_ob("monthly", "monthly_limit", 40.0, 100.0, raw="spend")],
+                            buckets=[_ob("monthly", "monthly_limit", 80.0, 100.0, raw="spend")],
                             created_at="x")
-    _insert(conn, "2026-05-01T01:00:00Z", 1.0, provider="claude", session="anchor")  # 창 밖 앵커 → 풀 창 분모(10)
-    _insert(conn, "2026-06-05T01:00:00Z", 100.0, provider="claude", session="a")  # 100/10 = 10/일(트레일링)
     fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
-    assert fc.projected_used_usd == 180.0           # 40 + 10*14
-    assert fc.projected_remaining_usd == -80.0      # 부족
-    assert fc.exhaust_date == date(2026, 6, 18)     # 6 영업일분(=(100-40)/10) 후
+    assert fc.daily_rate_usd == 10.0
+    assert fc.projected_used_usd == 220.0           # 80 + 10*14
+    assert fc.projected_remaining_usd == -120.0     # 부족
+    assert fc.exhaust_date == date(2026, 6, 12)     # ceil((100-80)/10)=2 영업일 후
 
 
-def test_combined_forecast_insufficient_no_local_spend():
+def test_combined_forecast_insufficient_when_no_official_used():
+    # 공식 used=0 → (a)트레일링 불가·(b)월초누적 0 → 기울기 None(위치만, 로컬 기울기 폐기).
     conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
-                            buckets=[_ob("monthly", "monthly_limit", 40.0, 200.0, raw="spend")],
+                            buckets=[_ob("monthly", "monthly_limit", 0.0, 200.0, raw="spend")],
                             created_at="x")
+    # 로컬 소비가 있어도 엔터 기울기엔 영향 없음(로컬 기울기 폐기, ADR 0015 D3).
+    _insert(conn, "2026-06-05T01:00:00Z", 100.0, provider="claude", session="a")
     fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
-    assert fc.daily_rate_usd is None                # 로컬 소비 0 → 기울기 없음
+    assert fc.daily_rate_usd is None                # 공식 소비 0 → 기울기 없음
     assert fc.projected_remaining_usd is None
-    assert fc.remaining_usd == 160.0
+    assert fc.remaining_usd == 200.0
+
+
+def test_combined_forecast_official_slope_prefers_trailing_delta():
+    # 윈도우 시작 전 베이스(5/20 used50) + 윈도우 내(6/10 used150) → 트레일링 델타 100/10영업일=10.
+    # 월초누적이면 150/8≈18.75라 달라 — (a)트레일링이 (b)월초누적보다 우선임을 보인다.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-05-20T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 50.0, 500.0, raw="spend")],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 150.0, 500.0, raw="spend")],
+                            created_at="x")
+    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
+    assert fc.daily_rate_usd == 10.0                # 트레일링 100/10, 월초누적(150/8) 아님
 
 
 def test_combined_forecast_already_exhausted():
@@ -1617,17 +1633,16 @@ def test_trailing_window_spend_providers_filter():
     assert trailing_window_spend(conn, None, NOW, 2, providers=[]) == 0.0
 
 
-def test_combined_forecast_uses_trailing_window_not_month_to_date():
-    # 기울기는 월초 누적이 아니라 트레일링 창(기본 2주). 창 밖(이전 달) 소비는 제외.
+def test_combined_forecast_official_slope_ignores_local_spend():
+    # 엔터 기울기는 로컬 소비를 보지 않는다(로컬 기울기 폐기, ADR 0015 D3). 공식 월초누적만.
     conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
                             buckets=[_ob("monthly", "monthly_limit", 40.0, 200.0, raw="spend")],
                             created_at="x")
-    _insert(conn, "2026-05-01T01:00:00Z", 999.0, provider="claude")  # 창 밖 → 기울기 제외(앵커로 풀 창 분모)
-    _insert(conn, "2026-06-05T01:00:00Z", 100.0, provider="claude")  # 창 안
+    _insert(conn, "2026-06-05T01:00:00Z", 999.0, provider="claude")  # 로컬 거액 — 기울기에 영향 없어야
     fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
-    # 트레일링: 100(창 안)/10(풀 창 영업일) = 10. 월초누적이면 (999+100)/8로 깨짐.
-    assert fc.daily_rate_usd == 10.0
+    # 공식 월초누적 40/8=5. 로컬 999가 섞이면 깨진다.
+    assert fc.daily_rate_usd == 5.0
 
 
 def test_lens_uses_trailing_window_not_month_to_date():
