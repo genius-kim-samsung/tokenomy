@@ -819,6 +819,61 @@ def test_tray_image_uses_platform_icon_name(monkeypatch):
     assert opened["path"] == "/RES/assets/tokenomy.png"
 
 
+def _tray_branch_fakes(monkeypatch, tmp_path, platform):
+    """플랫폼별 트레이 기동 분기 테스트 공용 셋업 — FakeIcon(run/run_detached/stop) 반환."""
+    _isolate_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(launcher.sys, "platform", platform)
+    log, created = [], []
+    _install_fake_webview(monkeypatch, log, created)
+
+    class FakeIcon:
+        def __init__(self): self.ran = False; self.detached = False; self.stopped = False
+        def run(self): self.ran = True
+        def run_detached(self): self.detached = True
+        def stop(self): self.stopped = True
+    icon = FakeIcon()
+    monkeypatch.setattr(launcher, "_build_tray", lambda: icon)
+    monkeypatch.setattr(launcher, "_tray_state", _fresh_state(quitting=True))
+    monkeypatch.setattr(launcher, "_start_background_poll", lambda: None)
+    monkeypatch.setattr("tokenomy.web.control.set_show_callback", lambda fn: None)
+    return icon, log
+
+
+def test_launch_window_tray_detached_on_linux(monkeypatch, tmp_path):
+    """Linux(GTK) — pystray와 pywebview가 같은 GLib 기본 메인 컨텍스트를 공유해야 한다.
+    icon.run()을 데몬 스레드로 돌리면 메인 스레드 webview GTK 루프와 충돌해(GLib-GIO-CRITICAL:
+    can not acquire the default main context) 창이 안 뜬다 → run_detached()로 메인 스레드에서
+    루프 없이 붙이고, 트레이용 데몬 스레드는 만들지 않는다(ADR 0013)."""
+    icon, log = _tray_branch_fakes(monkeypatch, tmp_path, "linux")
+    tray_targets = []
+    class FakeThread:
+        def __init__(self, target=None, daemon=None, **k): self.target = target; tray_targets.append(target)
+        def start(self):
+            if self.target == icon.run: icon.run()   # 바인드 메서드는 ==로 비교(is는 매 접근 새 객체)
+    monkeypatch.setattr(launcher.threading, "Thread", FakeThread)
+
+    launcher._launch_window(9999)
+    assert icon.detached is True              # run_detached로 붙임
+    assert icon.ran is False                  # 데몬 스레드 icon.run 안 함
+    assert icon.run not in tray_targets       # 트레이용 스레드 미생성
+    assert ("start",) in log                  # webview 루프 진입(창 표시)
+    assert icon.stopped is True               # 종료 시 정리
+
+
+def test_launch_window_tray_thread_on_windows(monkeypatch, tmp_path):
+    """Windows — 트레이는 자체 Win32 메시지 루프라 기존대로 데몬 스레드에서 icon.run (run_detached 미사용)."""
+    icon, log = _tray_branch_fakes(monkeypatch, tmp_path, "win32")
+    class FakeThread:
+        def __init__(self, target=None, daemon=None, **k): self.target = target
+        def start(self):
+            if self.target == icon.run: icon.run()   # 바인드 메서드는 ==로 비교(is는 매 접근 새 객체)
+    monkeypatch.setattr(launcher.threading, "Thread", FakeThread)
+
+    launcher._launch_window(9999)
+    assert icon.ran is True                   # 데몬 스레드에서 icon.run
+    assert icon.detached is False             # run_detached 미사용
+
+
 def test_launch_window_forces_main_when_mini_unavailable(monkeypatch, tmp_path):
     """미니뷰 비가용(Linux) — config last_view='mini'여도 큰 창으로 시작하고 미니를 안 만든다.
     current_view 시드를 'main'으로 clamp해 트레이 '열기'·GUI 시작 콜백이 미니로 새지 않게 한다."""

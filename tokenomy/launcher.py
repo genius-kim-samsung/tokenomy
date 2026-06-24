@@ -497,7 +497,17 @@ def _launch_window(port: int) -> None:
         # config 등)여도 큰 창으로 시작하고, 트레이 '열기'·GUI 시작 콜백이 미니로 새지 않게 한다.
         last_view = mini_view_settings(load_config())["last_view"]
         _tray_state["current_view"] = last_view if mini_view_available() else "main"
-        threading.Thread(target=icon.run, daemon=True).start()
+        if sys.platform == "win32":
+            # Windows: 트레이는 자체 Win32 메시지 루프 → 데몬 스레드에서 독립 실행(기존).
+            threading.Thread(target=icon.run, daemon=True).start()
+        else:
+            # Linux(GTK/WebKit2GTK): pystray와 pywebview가 같은 GLib '기본 메인 컨텍스트'를 공유해야 한다.
+            # pystray의 icon.run()은 데몬 스레드에서 기본 컨텍스트에 두 번째 GLib 루프(GLib.MainLoop)를
+            # 띄우는데, 메인 스레드의 webview GTK 루프(g_application_run)도 같은 컨텍스트를 잡으려 해
+            # 충돌한다(GLib-GIO-CRITICAL: can not acquire the default main context → 창이 안 뜸).
+            # run_detached()는 루프를 만들지 않고 초기화만 하므로, 이어지는 webview.start()의 단일 GTK
+            # 루프가 창과 트레이를 함께 처리한다. SIGINT 복원이 메인 스레드를 요구해 메인에서 호출(ADR 0013).
+            icon.run_detached()
         _start_background_poll()   # 상주 모드에서만 — 단발 강등 시엔 폴 안 함(ADR 0007)
         webview.start(_on_gui_start)  # ← 메인 GUI 루프(블로킹). 시작 직후 콜백이 마지막 뷰 적용.
     else:
