@@ -228,9 +228,31 @@ def _ensure_mini():
 
 
 def _show_mini_window() -> None:
-    """미니 창 표시(없으면 lazy 생성)."""
-    _ensure_mini().show()
+    """미니 창 표시(없으면 lazy 생성). 이미 있던 창을 다시 보일 땐 내용을 강제 갱신한다.
+
+    htmx의 `load` 트리거는 최초 lazy 생성 1회만 발동한다. 배타 전환·트레이 복원으로
+    미니를 재표시할 때(숨김→보임) 명시적 재요청이 없으면, 숨겨진 동안 메인이 공유 DB에
+    적재해 둔 최신 공식 사용량을 미니가 못 읽고 옛 스냅샷으로 굳는다(메인은 갱신, 미니만 stale).
+    최초 생성 때는 `load`가 첫 렌더를 담당하므로(또 htmx 미준비 eval 회피) 재요청을 건너뛴다."""
+    existed = _tray_state.get("mini") is not None
+    mini = _ensure_mini()
+    mini.show()
     _tray_state["mini_visible"] = True
+    if existed:
+        _refresh_mini_content(mini)
+
+
+def _refresh_mini_content(mini) -> None:
+    """표시된 미니 창에 #mini-section 재요청을 지시(htmx)해 최신 스냅샷으로 다시 렌더한다.
+
+    네트워크가 throttle로 생략돼도 /mini/section은 DB를 다시 읽어 렌더하므로, 메인이 받아 둔
+    최신 공식값이 즉시 반영된다. 창이 아직 준비 안 된 경우의 eval 실패는 조용히 삼킨다."""
+    try:
+        mini.evaluate_js(
+            "window.htmx&&htmx.ajax('GET','/mini/section',"
+            "{target:'#mini-section',swap:'innerHTML'})")
+    except Exception:
+        pass
 
 
 def _to_mini() -> None:

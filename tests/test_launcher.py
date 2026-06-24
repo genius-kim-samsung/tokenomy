@@ -575,6 +575,52 @@ def test_ensure_mini_reuses_existing(monkeypatch):
     assert launcher._ensure_mini() is w
 
 
+# ── 재표시 시 강제 갱신(stale 방지) ───────────────────────────────────────────
+def test_show_mini_window_refreshes_content_on_reshow(monkeypatch):
+    """이미 생성된 미니를 다시 보일 땐 내용을 강제 재요청해야 한다(stale 방지).
+    htmx load 트리거는 최초 lazy 생성 1회만 발동하므로, 배타 전환·트레이 복원으로
+    재표시할 때 명시적 재요청이 없으면 공식 사용량이 숨겨진 동안의 옛 스냅샷으로 굳는다."""
+    w_mini = _FakeWindow()
+    _reset_mini_state(monkeypatch, mini=w_mini, current_view="mini")
+    refreshed = []
+    monkeypatch.setattr(launcher, "_refresh_mini_content", lambda m: refreshed.append(m))
+    launcher._show_mini_window()
+    assert "show" in w_mini.calls
+    assert launcher._tray_state["mini_visible"] is True
+    assert refreshed == [w_mini]                       # 재표시 → 내용 강제 갱신
+
+
+def test_show_mini_window_skips_refresh_on_first_create(monkeypatch, tmp_path):
+    """최초 lazy 생성 시엔 load 트리거가 첫 렌더를 담당하므로 강제 재요청을 하지 않는다
+    (htmx 미준비 상태에서의 eval 회피)."""
+    _isolate_config(monkeypatch, tmp_path)
+    log, created = [], []
+    _install_fake_webview(monkeypatch, log, created)
+    _reset_mini_state(monkeypatch, mini=None, port=9999)
+    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: None)
+    refreshed = []
+    monkeypatch.setattr(launcher, "_refresh_mini_content", lambda m: refreshed.append(m))
+    launcher._show_mini_window()
+    assert launcher._tray_state["mini"] is not None      # lazy 생성됨
+    assert refreshed == []                               # 최초 생성 — 재요청 없음
+
+
+def test_refresh_mini_content_requests_section_via_htmx(monkeypatch):
+    """미니 내용 강제 갱신 = #mini-section을 htmx로 재요청(DB만 다시 읽어도 메인이 받아 둔
+    최신 공식값이 반영된다). evaluate_js로 /mini/section 재요청을 지시해야 한다."""
+    w = _FakeWindow()
+    launcher._refresh_mini_content(w)
+    js_calls = [c[1] for c in w.calls if isinstance(c, tuple) and c[0] == "js"]
+    assert any("/mini/section" in js for js in js_calls)
+
+
+def test_refresh_mini_content_swallows_eval_errors(monkeypatch):
+    """evaluate_js 실패(창 미준비 등)는 조용히 삼킨다 — 표시 흐름을 깨면 안 된다."""
+    class _Boom:
+        def evaluate_js(self, js): raise RuntimeError("not ready")
+    launcher._refresh_mini_content(_Boom())             # 예외 전파 없이 반환
+
+
 # ── 전환: to_mini / to_main / hide_to_tray / 복원 ────────────────────────────
 def test_to_mini_hides_main_shows_mini_persists(monkeypatch):
     w_main, w_mini = _FakeWindow(), _FakeWindow()
