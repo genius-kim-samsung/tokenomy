@@ -11,7 +11,6 @@ from tokenomy.aggregate import (
     OfficialView,
     parse_ts, period_bounds, session_detail, sidechain_split,
     SidechainSplit, stacked_trend, token_composition, pricing_coverage, CoverageReport,
-    week_count,
     combined_forecast, CombinedForecast,
     _trailing_business_days, trailing_window_spend,
     pool_used_history, _segment_points, pool_history, pool_daily_history,
@@ -895,25 +894,6 @@ def test_build_date_tree_zero_den_cache_zero():
 def test_build_date_tree_unknown_project():
     f = build_date_tree([_dsr("2026-06-13", "s1", None, 1.0)], "date_desc")[0].folders[0]
     assert f.project == "(unknown)"
-
-
-def test_week_count_same_week_is_one():
-    eff = datetime(2026, 6, 12, 0, 0, tzinfo=KST)   # 금
-    now = datetime(2026, 6, 12, 18, 0, tzinfo=KST)  # 같은 주
-    assert week_count(eff, now) == 1
-
-
-def test_week_count_counts_monday_resets():
-    # 도입 6/12(금, 2주차 6/8~14) → 오늘 6/15(월, 3주차) = 2회 충전
-    eff = datetime(2026, 6, 12, 0, 0, tzinfo=KST)
-    now = datetime(2026, 6, 15, 9, 0, tzinfo=KST)
-    assert week_count(eff, now) == 2
-
-
-def test_week_count_partial_first_week_of_month():
-    # 7/1(수) effective → 1주차. 7/6(월) → 2주차
-    assert week_count(datetime(2026, 7, 1, tzinfo=KST), datetime(2026, 7, 1, 12, tzinfo=KST)) == 1
-    assert week_count(datetime(2026, 7, 1, tzinfo=KST), datetime(2026, 7, 6, 9, tzinfo=KST)) == 2
 
 
 # ─── Task 8: history_context/dimension_context 주/월 기간 + 사용자 지정 구간 ──────

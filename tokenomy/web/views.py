@@ -399,7 +399,7 @@ def mini_view_context(conn, config: dict, now_kst: datetime | None = None) -> di
     official_cards를 재사용하되 **official-only 불변식**을 강제한다: 공식 데이터가 없는
     카드(status no_data)는 큰 창처럼 로컬 추정으로 폴백하지 않고 no_official 플래그만 둔다
     (미니 뷰는 ingest와 무관 — 잔여 면에 한도 맥락 없는 로컬 추정은 부적합).
-    provider당 모든 게이지를 그대로 노출한다(Codex 월간+주간, Claude 5h+7d 등).
+    provider당 모든 게이지를 그대로 노출한다(Codex 월간(+개인 구독제 rate-window), Claude 5h+7d 등).
     """
     now = now_kst or datetime.now(KST)
     cards = []

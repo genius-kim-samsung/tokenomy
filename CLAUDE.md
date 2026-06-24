@@ -88,7 +88,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
   세션 요약(aiTitle)은 휘발 전 `sessions.summary`에 영구 캐시한다.
 - **dedup은 ccusage와 동형.** `(provider, message_id, request_id)` 키 — 리트라이는 별개 과금으로 보존,
   비sidechain(부모)이 sidechain replay를 이긴다.
-- **리셋 주기는 공식 API `resets_at` 기준.** Claude=월간 리셋(공식 API가 `resets_at` 타임스탬프 제공). Codex=주간 리셋(매주 월요일, 공식 API가 남은 크레딧·리셋 시각 제공). 한도·리셋 정보는 모두 공식 취득 스냅샷에서 읽는다 — 수동 예산 입력이나 `budget_start` clamp는 더 이상 없다.
+- **리셋 주기는 공식 API `resets_at` 기준.** Claude=월간 리셋(공식 API가 `resets_at` 타임스탬프 제공). Codex(엔터프라이즈)=월간 리셋(월 크레딧 예산, 공식 API가 남은 크레딧·리셋 시각 제공) — 옛 "월÷4 주간 한도(매주 월요일 충전)" 조직 정책은 폐지돼 Claude와 동일한 월 예산이다. 개인 구독제 Codex는 별도로 공식 rate-window(7일 등)를 가진다. 한도·리셋 정보는 모두 공식 취득 스냅샷에서 읽는다 — 수동 예산 입력이나 `budget_start` clamp는 더 이상 없다.
 - **웹은 `127.0.0.1`만 바인딩** — 네트워크 노출 금지. 쿼리 파라미터는 화이트리스트 fallback(`provider`/`sort`/`period` 등).
   사용 이력(로컬)·기준별은 주/월 토글 + 사용자 지정 날짜 구간(`start`/`end`) 조회(`views._resolve_range`).
 - **CSS는 Tailwind(standalone CLI)로 빌드.** `tokenomy/web/static/src/input.css`(토큰+`@layer components`) → `tokenomy/web/static/app.css`(커밋). 런타임/exe는 무빌드 유지. htmx는 `tokenomy/web/static/vendor/`에 vendored(오프라인). Alpine은 실수요 시 추가(현재 미사용).

@@ -2,7 +2,7 @@
 
 핵심 불변식: 미니 뷰는 **공식 스냅샷만** 읽는다(official-only). 공식 데이터가 없으면
 큰 창 카드처럼 로컬 추정으로 폴백하지 않고 'no_official' 안내만 둔다 — ingest 무관.
-표시는 활성 AI별 **모든 게이지**를 압축 행으로(Codex 월간+주간, Claude 5h+7d 등).
+표시는 활성 AI별 **모든 게이지**를 압축 행으로(Codex 월간(+개인 구독제 rate-window), Claude 5h+7d 등).
 """
 from datetime import datetime
 

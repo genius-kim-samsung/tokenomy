@@ -61,10 +61,6 @@ def month_bounds(now_kst: datetime) -> tuple[datetime, datetime]:
     return start, nxt
 
 
-def _midnight(dt: datetime) -> datetime:
-    return dt.replace(hour=0, minute=0, second=0, microsecond=0)
-
-
 def business_days_between(start: date, end: date) -> int:
     """반열린 구간 [start, end)의 영업일(주말 제외) 수.
 
@@ -94,16 +90,6 @@ def add_business_days(start: date, n: int) -> date:
         if d.weekday() < 5:
             n -= 1
     return d
-
-
-def week_count(effective_start: datetime, now_kst: datetime) -> int:
-    """effective_start가 속한 주(1주차)부터 now가 속한 주까지의 주 수(월요일 경계).
-
-    Codex 주간 한도 충전 횟수 N. 각 주 시작(월요일)마다 +1, effective_start의 주를 1로 센다.
-    """
-    eff_mon = _midnight(effective_start) - timedelta(days=effective_start.weekday())
-    now_mon = _midnight(now_kst) - timedelta(days=now_kst.weekday())
-    return (now_mon - eff_mon).days // 7 + 1
 
 
 def period_bounds(period: str, anchor_kst: datetime) -> tuple[datetime, datetime, str]:

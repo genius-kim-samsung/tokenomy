@@ -73,7 +73,7 @@ UsageRecord -> db.py(SQLite) -> aggregate.py -> cli.py / web/
 ## 공식 사용량·한도 로직
 
 - 한도와 리셋 주기의 정본은 공식 API 응답(`resets_at`, 버킷 잔여)이다. 수동 예산 입력·`budget_start` clamp는 없다.
-- Claude는 월간 리셋, Codex는 주간 리셋(매주 월요일). 리셋 시각은 공식 API가 제공한다.
+- Claude는 월간 리셋, Codex(엔터프라이즈)도 월간 리셋이다(옛 "월÷4 주간 한도" 조직 정책은 폐지 — Claude와 동일한 월 예산). 개인 구독제 Codex는 별도 공식 rate-window(7일 등)를 가진다. 리셋 시각은 공식 API가 제공한다.
 - `tracked_providers` 목록에 있는 provider만 공식 API 호출 대상이 된다. 첫 실행 시 크레덴셜 파일 존재로 자동 시드.
 - 공식 데이터가 없으면(취득 skip·미성공·한도 미제공 계정) **사용량 전용 view**로 폴백한다.
 - 날짜/월 경계 계산은 KST 기준으로 맞춘다. 저장 timestamp가 UTC라면 집계에서 변환한다.
