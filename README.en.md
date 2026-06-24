@@ -40,7 +40,8 @@ driven by local JSONL logs.
 - **By dimension** — break spend down by model, branch, etc. (same week/month toggle and
   date range).
 - **Mini view** — a small glance window that **swaps exclusively** with the main window
-  (exe / native window only). Toggle it from the sidebar's "⊟ Mini view".
+  (**Windows native window only** — excluded on Linux due to Wayland). Toggle it from the
+  sidebar's "⊟ Mini view".
 
 ## Privacy
 
@@ -78,6 +79,81 @@ python -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765
 ```
 
 On Windows, double-click `start_tokenomy.bat` (ingest → dashboard → opens browser).
+
+## Install on Ubuntu 24.04 LTS (native window + tray)
+
+On Linux, instead of a single binary Tokenomy runs **from source** for a native
+experience — `install.sh` handles system dependencies, the virtualenv, and app-menu
+registration in one go. You get the main window plus a resident tray; the mini view is
+**dropped on Linux** due to Wayland (GNOME) constraints (the main window and tray are
+Wayland-clean).
+
+### Prerequisites
+
+- Ubuntu 24.04 LTS desktop (GNOME). You need `git` and `sudo` access.
+- An account that has used Claude Code / Codex CLI — official usage is read from
+  `~/.claude/.credentials.json` and `~/.codex/auth.json` automatically (it still works
+  without them, using local logs only).
+
+### Install
+
+```bash
+# 1) Get the code
+git clone https://github.com/genius-kim-samsung/tokenomy.git
+cd tokenomy
+
+# 2) Install — apt system deps (prompts for your sudo password) + venv + Python packages + app-menu entry
+./install.sh
+```
+
+What `install.sh` does:
+
+1. Installs **apt system packages** — `python3-gi`, `gir1.2-gtk-3.0`, `gir1.2-webkit2-4.1`,
+   `libwebkit2gtk-4.1-0` (pywebview's GTK/WebKit backend) and `libayatana-appindicator3-1`,
+   `gir1.2-ayatanaappindicator3-0.1` (the tray icon).
+2. Creates the **virtualenv** with `python3 -m venv --system-site-packages .venv`. The
+   `--system-site-packages` flag lets it see the apt-provided `python3-gi` (PyGObject),
+   avoiding a painful pip build of PyGObject.
+3. Installs the **Python packages** (`requirements.txt`).
+4. **Registers the app menu** — copies `tokenomy.desktop` (with the real path substituted in)
+   to `~/.local/share/applications/`.
+
+### Run
+
+```bash
+./start_tokenomy.sh      # from a terminal
+```
+
+Or, after installing, search for **"Tokenomy" in the app menu (Activities)** and click it.
+It ingests your local logs, opens the dashboard in a native window, and adds a tray icon to
+the top bar.
+
+- **Window X = hide to tray** (not quit). To bring it back: tray icon → "Open".
+- **Quit fully**: right-click the tray icon → "Quit".
+- Data accumulates under the cloned directory (`data/`, `config/`).
+- (Note) The mini-view button does not appear on Linux — this is intentional.
+
+### Update
+
+```bash
+cd tokenomy
+git pull
+# only if requirements.txt changed:
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+### Troubleshooting
+
+- **`install.sh` stalls at the apt step (especially `gir1.2-webkit2-4.1` /
+  `libwebkit2gtk-4.1-0`)** — your apt mirror may not carry the package. Run
+  `sudo apt-get update`, then `apt-cache policy libwebkit2gtk-4.1-0` to confirm a candidate
+  version is available (WebKit2GTK 4.1 is standard on 24.04).
+- **Window opens but no tray icon** — the AppIndicator extension may be disabled in GNOME.
+  Ubuntu enables it by default; check with `gnome-extensions list` that
+  `appindicatorsupport` or `ubuntu-appindicators` is enabled.
+- **Official usage is empty** — if you've never logged in with Claude Code / Codex there are
+  no credential files, so only local-log data shows. Log in / use them once and official
+  numbers fill in on the next run.
 
 ## Configuration
 
