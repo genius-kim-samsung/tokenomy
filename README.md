@@ -61,26 +61,72 @@ python -m uvicorn tokenomy.web.app:app --host 127.0.0.1 --port 8765
 
 Windows는 `start_tokenomy.bat` 더블클릭(ingest → 대시보드 → 브라우저 자동 오픈).
 
-## 빠른 시작 (Ubuntu 24.04 LTS — 네이티브 창 + 트레이)
+## Ubuntu 24.04 LTS 설치 (네이티브 창 + 트레이)
 
-Linux는 단일 바이너리 대신 **소스 실행**으로 네이티브 경험을 준다 — `install.sh`가 apt 의존성·venv·
-앱 메뉴 등록까지 처리한다. 미니 뷰는 Wayland(GNOME) 제약으로 **Linux에서 제외**된다(큰 창 + 트레이
-상주만 제공 — 둘 다 Wayland-clean).
+Linux는 단일 바이너리 대신 **소스 실행**으로 네이티브 경험을 준다 — `install.sh`가 시스템
+의존성·가상환경·앱 메뉴 등록까지 한 번에 처리한다. 큰 창 + 트레이 상주를 제공하며,
+미니 뷰는 Wayland(GNOME) 제약으로 **Linux에선 빠진다**(큰 창·트레이는 Wayland-clean).
+
+### 준비물
+
+- Ubuntu 24.04 LTS 데스크톱(GNOME). `git`과 `sudo` 권한이 필요하다.
+- Claude Code / Codex CLI를 쓰던 계정 — 공식 사용량은 `~/.claude/.credentials.json`,
+  `~/.codex/auth.json`을 읽어 자동으로 뜬다(없어도 로컬 로그 기반으로는 동작).
+
+### 설치
 
 ```bash
+# 1) 코드 받기
 git clone https://github.com/genius-kim-samsung/tokenomy.git
 cd tokenomy
-./install.sh            # apt 의존성(sudo) + venv(--system-site-packages) + pip + .desktop 등록
-./start_tokenomy.sh     # 또는 앱 메뉴에서 'Tokenomy' 실행
+
+# 2) 설치 — apt 시스템 의존성(sudo 비밀번호를 물어봄) + 가상환경 + 파이썬 패키지 + 앱 메뉴 등록
+./install.sh
 ```
 
-`install.sh`가 설치하는 시스템 패키지: `python3-gi`·`gir1.2-gtk-3.0`·`gir1.2-webkit2-4.1`·
-`libwebkit2gtk-4.1-0`(pywebview GTK 백엔드)와 `libayatana-appindicator3-1`·
-`gir1.2-ayatanaappindicator3-0.1`(트레이 AppIndicator). venv를 `--system-site-packages`로 만들어
-apt의 PyGObject(`python3-gi`)를 그대로 보게 한다(PyGObject pip 빌드 회피).
+`install.sh`가 하는 일:
 
-> 창 X = 트레이로 숨김(종료 아님), 트레이 우클릭 → "종료"로 완전 종료 — Windows와 동일.
-> 데이터는 소스 실행이므로 클론 디렉터리 아래(`data/`·`config/`)에 쌓인다.
+1. **apt 시스템 패키지** 설치 — `python3-gi`·`gir1.2-gtk-3.0`·`gir1.2-webkit2-4.1`·
+   `libwebkit2gtk-4.1-0`(pywebview의 GTK/WebKit 백엔드)와 `libayatana-appindicator3-1`·
+   `gir1.2-ayatanaappindicator3-0.1`(트레이 아이콘).
+2. **가상환경** 생성 — `python3 -m venv --system-site-packages .venv`. `--system-site-packages`라
+   apt로 받은 `python3-gi`(PyGObject)를 그대로 본다(PyGObject를 pip로 빌드하는 고통 회피).
+3. **파이썬 패키지** 설치(`requirements.txt`).
+4. **앱 메뉴 등록** — `tokenomy.desktop`을 실제 경로로 치환해 `~/.local/share/applications/`에 복사.
+
+### 실행
+
+```bash
+./start_tokenomy.sh      # 터미널에서
+```
+
+또는 설치 후 **앱 메뉴(Activities)에서 "Tokenomy"** 를 검색해 클릭한다. 실행하면 로컬 로그를
+수집(ingest)한 뒤 네이티브 창에 대시보드가 뜨고, 상단 표시줄에 트레이 아이콘이 생긴다.
+
+- **창 X = 트레이로 숨김**(종료가 아니다). 다시 보려면 트레이 아이콘 → "열기".
+- **완전 종료**는 트레이 아이콘 우클릭 → "종료".
+- 데이터는 클론한 디렉터리 아래(`data/`·`config/`)에 쌓인다.
+- (참고) 미니 뷰 버튼은 Linux에선 나오지 않는다 — 의도된 동작이다.
+
+### 업데이트
+
+```bash
+cd tokenomy
+git pull
+# requirements.txt가 바뀐 경우에만:
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+### 문제 해결
+
+- **`install.sh`가 apt 단계에서 멈춤(특히 `gir1.2-webkit2-4.1`/`libwebkit2gtk-4.1-0`)** —
+  사내 apt 미러에 해당 패키지가 없을 수 있다. `sudo apt-get update` 후 `apt-cache policy
+  libwebkit2gtk-4.1-0`로 후보 버전이 잡히는지 확인한다(24.04는 WebKit2GTK 4.1이 표준).
+- **창은 뜨는데 트레이가 안 보임** — GNOME에 AppIndicator 확장이 꺼져 있을 수 있다. Ubuntu는
+  기본 활성이지만, `gnome-extensions list`로 `appindicatorsupport` 또는 `ubuntu-appindicators`가
+  활성인지 확인한다.
+- **공식 사용량이 비어 있음** — Claude Code/Codex로 로그인한 적이 없으면 크레덴셜 파일이 없어
+  로컬 로그 기반으로만 뜬다. 한 번 로그인/사용하면 다음 실행부터 공식 수치가 채워진다.
 
 ## 설정
 
