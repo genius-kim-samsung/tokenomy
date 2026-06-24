@@ -1,5 +1,35 @@
 {# 'AI별 사용량' 섹션 조각(ADR 0003) — overview가 include하고, 자동 폴링(GET /official/section)·
    수동 갱신(POST /official/refresh, HX)이 부분교체로 돌려준다. 색=임계 · 텍스처=공식/추정(ADR 0002). #}
+
+{# 사용량 공유 문구 카드(CONTEXT.md '사용량 공유 문구') — 풀 합산 오늘/이번주/이번달 + 메신저 복사.
+   USD 풀 있을 때만(share). △=오늘 추적 공백으로 부풀 수 있음 — 보내는 사람에게만 경고, 복사 문구는 깨끗. #}
+{% if share %}
+<section class="card share-card">
+  <div class="card-head">
+    <h2>오늘 / 이번주 / 이번달 <span class="muted">(합산 · 공식)</span></h2>
+    <button class="btn-sm" type="button" data-share-label="📋 복사" onclick="tkCopyShare(this)">📋 복사</button>
+  </div>
+  <p class="share-line" style="display:flex;gap:1.1rem;align-items:baseline;font-variant-numeric:tabular-nums;font-size:1.05rem">
+    <span><span class="muted">오늘</span>
+      {% if share.pool.today.state == "none" %}<span class="muted">—</span>
+      {% else %}<strong>${{ '%.2f'|format(share.pool.today.usd) }}</strong>{% if share.pool.today.state == "partial" %}<span class="muted" title="오늘 추적 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
+    </span>
+    <span><span class="muted">이번주</span>
+      {% if share.pool.week.state == "none" %}<span class="muted">—</span>
+      {% else %}<strong>${{ '%.2f'|format(share.pool.week.usd) }}</strong>{% if share.pool.week.state == "partial" %}<span class="muted" title="이번주 시작 전 관측 없음 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
+    </span>
+    <span><span class="muted">이번달</span>
+      {% if share.pool.month_usd is none %}<span class="muted">—</span>
+      {% else %}<strong>${{ '%.2f'|format(share.pool.month_usd) }}</strong>{% endif %}
+    </span>
+  </p>
+  {% if share.pool.today.state == "partial" or share.pool.week.state == "partial" %}
+  <p class="muted" style="font-size:.78rem;margin:.1rem 0 0">⚠ 추적 공백으로 부풀 수 있어요 — 공유 전 확인하세요(복사 문구엔 표시 안 됨)</p>
+  {% endif %}
+  <pre class="share-src" hidden>{{ share.text }}</pre>
+</section>
+{% endif %}
+
 <section class="card">
   <div class="card-head">
     <h2>AI별 사용량</h2>

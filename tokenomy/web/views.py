@@ -1,10 +1,11 @@
 """DB → 화면용 dict 조립. 라우트(app.py)와 집계(aggregate.py)를 분리한다."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
-    KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup,
+    KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup, PeriodSpend,
     _provider_where, by_day_session, by_dimension, by_project, by_session,
     combined_forecast, daily_series, pool_history, pool_daily_history, pool_snapshots_by_day,
     official_period_glance,
@@ -381,6 +382,131 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[
     return cards
 
 
+# --- 사용량 공유 문구(usage share snapshot, CONTEXT.md 동명 용어) ---
+
+
+@dataclass
+class ShareRow:
+    """공유 문구 한 줄 = provider 1개의 공식 기간 소비 + 이번달 누적/한도%."""
+    label: str
+    today: PeriodSpend
+    week: PeriodSpend
+    month_usd: float | None      # 이번달 = 월간 버킷 used(라이브). 없으면 None
+    util_pct: int | None         # 한도% = 월간 버킷 util(라이브). 없으면 None
+
+
+@dataclass
+class PoolGlance:
+    """풀 합산 오늘/이번주/이번달 — partial 전염(any partial→partial, all none→none)."""
+    today: PeriodSpend
+    week: PeriodSpend
+    month_usd: float | None
+
+
+def _round_spend(ps: PeriodSpend) -> PeriodSpend:
+    """공유 산출물용 — usd를 센트(2자리)로 반올림. 표시값과 합계의 페니 일관성 유지."""
+    return PeriodSpend(usd=None if ps.usd is None else round(ps.usd, 2), state=ps.state)
+
+
+def _pool_period(spends: list[PeriodSpend]) -> PeriodSpend:
+    """기간별 PeriodSpend 여럿을 풀로 합산. covered만 더하고 partial은 전염시킨다.
+
+    이미 센트로 반올림된 provider 값을 더하므로 합계 == 표시된 provider 값들의 합(페니 일관).
+    """
+    covered = [s for s in spends if s.state != "none" and s.usd is not None]
+    if not covered:
+        return PeriodSpend(usd=None, state="none")
+    usd = round(sum(s.usd for s in covered), 2)
+    state = "partial" if any(s.state == "partial" for s in covered) else "complete"
+    return PeriodSpend(usd=usd, state=state)
+
+
+def pool_glance(rows: list[ShareRow]) -> PoolGlance:
+    """활성 provider 행들을 풀 합산 글랜스로. 이번달은 월간 버킷 used 합."""
+    months = [r.month_usd for r in rows if r.month_usd is not None]
+    return PoolGlance(
+        today=_pool_period([r.today for r in rows]),
+        week=_pool_period([r.week for r in rows]),
+        month_usd=round(sum(months), 2) if months else None,
+    )
+
+
+def _usd(v: float) -> str:
+    return f"${v:,.2f}"
+
+
+def _period_cell(key: str, ps: PeriodSpend) -> str:
+    """오늘/이번주 한 칸. none이면 '데이터 없음', 아니면 금액(△·주석 없음 — 문구는 깨끗)."""
+    if ps.state == "none" or ps.usd is None:
+        return f"{key} 데이터 없음"
+    return f"{key} {_usd(ps.usd)}"
+
+
+def _month_cell(month_usd: float | None) -> str:
+    if month_usd is None:
+        return "이번달 데이터 없음"
+    return f"이번달 {_usd(month_usd)}"
+
+
+def build_share_text(rows: list[ShareRow], date_label: str) -> str:
+    """사용량 공유 문구(CONTEXT.md) — 메신저 붙여넣기용 클립보드 텍스트.
+
+    AI별 줄(오늘·이번주·이번달·한도%) + 합계 줄(한도% 없음). partial 경고는 카드가
+    보내는 사람에게만 하고, 복사 문구 자체엔 △·주석을 넣지 않는다. none 기간은 '데이터 없음'.
+    """
+    pool = pool_glance(rows)
+    lines = [f"AI 사용량 ({date_label}, KST)"]
+    for r in rows:
+        util = f" (한도 {r.util_pct}%)" if r.util_pct is not None else ""
+        lines.append(
+            f"· {r.label} {_period_cell('오늘', r.today)} · "
+            f"{_period_cell('이번주', r.week)} · {_month_cell(r.month_usd)}{util}"
+        )
+    lines.append(
+        f"합계 {_period_cell('오늘', pool.today)} · "
+        f"{_period_cell('이번주', pool.week)} · {_month_cell(pool.month_usd)}"
+    )
+    return "\n".join(lines)
+
+
+def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict | None:
+    """사용량 공유 문구 카드 컨텍스트 — USD 풀 provider만. 풀 없으면 None(카드 숨김).
+
+    각 활성 provider의 공식 기간 소비(오늘·이번주, official_period_glance) + 이번달(월간 버킷
+    used)·한도%(월간 버킷 util)로 ShareRow를 만들고, 풀 합산 글랜스 + 복사 문구를 함께 돌려준다.
+    게이트는 view.pool_limit_usd(글랜스·전망 히어로와 동일 — 개인 구독제·온보딩은 None).
+    """
+    now = now_kst or datetime.now(KST)
+    ctu = credit_to_usd(config)
+    weeks = forecast_settings(config)["rate_window_weeks"]
+    active = set(tracked_providers(config))
+    rows: list[ShareRow] = []
+    for p in PROVIDERS:
+        if p not in active:
+            continue
+        view = official_view(conn, p, now, ctu, weeks)
+        if view.pool_limit_usd is None:
+            continue
+        meta = _PROVIDER_META.get(p, {"label": p.title()})
+        g = official_period_glance(conn, p, now)
+        # 이번달·한도%는 **통합 풀**(월간+포함크레딧, pool_used) 기준 — 오늘/이번주 글랜스와 같은
+        # 스코프라 오늘≤이번주≤이번달이 성립한다. 월간 버킷만 쓰면 크레딧 선소진 시 0으로 어긋난다.
+        util = None
+        if view.pool_used_usd is not None and view.pool_limit_usd:
+            util = round(view.pool_used_usd / view.pool_limit_usd * 100)
+        month = None if view.pool_used_usd is None else round(view.pool_used_usd, 2)
+        rows.append(ShareRow(label=meta["label"], today=_round_spend(g.today),
+                             week=_round_spend(g.week), month_usd=month, util_pct=util))
+    if not rows:
+        return None
+    date_label = f"{now.astimezone(KST):%Y-%m-%d}"
+    return {
+        "pool": pool_glance(rows),
+        "text": build_share_text(rows, date_label),
+        "date_label": date_label,
+    }
+
+
 def official_section_context(conn, config: dict, now_kst: datetime | None = None) -> dict:
     """'AI별 사용량' 섹션 조각(partial)용 컨텍스트 — provider 카드 + 자동 갱신 간격(분).
 
@@ -390,6 +516,8 @@ def official_section_context(conn, config: dict, now_kst: datetime | None = None
     return {
         "official_cards": official_cards(conn, config, now),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
+        # 공유 카드(사용량 공유 문구) — 풀 없으면 None. 섹션 partial에 실어 글랜스와 같은 주기 갱신.
+        "share": share_context(conn, config, now),
     }
 
 
@@ -415,6 +543,8 @@ def mini_view_context(conn, config: dict, now_kst: datetime | None = None) -> di
     return {
         "cards": cards,
         "interval": official_fetch_settings(config)["min_interval_minutes"],
+        # 사용량 공유 문구(큰 창과 동일 산출물) — 미니 헤더 📋가 #mini-section의 .share-src를 읽는다.
+        "share": share_context(conn, config, now),
     }
 
 

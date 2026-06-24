@@ -131,6 +131,63 @@ def test_official_section_renders_period_glance(tmp_path, monkeypatch):
     assert "$10.00" in html        # 오늘 = 30-20
 
 
+def test_official_section_renders_share_card(tmp_path, monkeypatch):
+    """_official_section.html이 사용량 공유 카드(합산 + 복사 버튼 + 숨김 문구)를 렌더한다."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import official_section_context
+
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_glance_history(conn, "claude", [(9, 20.0), (10, 30.0)])   # 오늘=10, 이번달=30
+    ctx = official_section_context(conn, {"tracked_providers": ["claude"]},
+                                   now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
+    html = app_module.templates.env.get_template("_official_section.html").render(ctx)
+    assert "share-card" in html and "📋 복사" in html
+    assert 'class="share-src"' in html
+    assert "AI 사용량 (2026-06-10, KST)" in html   # 숨김 복사 문구
+    assert "이번달" in html
+
+
+def test_official_section_no_share_card_without_pool(tmp_path, monkeypatch):
+    """rate-window-only(개인 구독제)면 공유 카드 없음(share None)."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.official_parser import OfficialBucket
+    from tokenomy.web.views import official_section_context
+
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    insert_official_buckets(
+        conn, provider="claude", fetched_at="2026-06-10T12:00:00+09:00",
+        created_at="2026-06-10T12:00:00+09:00",
+        buckets=[OfficialBucket(
+            bucket_key="rate_window", raw_key="five_hour", bucket_kind="rate_window",
+            label="5시간", native_unit="percent", used_native=50.0, limit_native=100.0,
+            remaining_native=50.0, used_usd=None, limit_usd=None, remaining_usd=None,
+            utilization=50.0, resets_at=None)])
+    ctx = official_section_context(conn, {"tracked_providers": ["claude"]},
+                                   now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
+    html = app_module.templates.env.get_template("_official_section.html").render(ctx)
+    assert "share-card" not in html
+
+
+def test_mini_section_renders_share_source(tmp_path, monkeypatch):
+    """_mini_section.html이 숨김 공유 소스(.share-src)를 렌더한다 — 헤더 📋가 읽는다."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import mini_view_context
+
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_glance_history(conn, "claude", [(9, 20.0), (10, 30.0)])
+    ctx = mini_view_context(conn, {"tracked_providers": ["claude"]},
+                            now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
+    html = app_module.templates.env.get_template("_mini_section.html").render(ctx)
+    assert 'class="share-src"' in html
+    assert "AI 사용량 (2026-06-10, KST)" in html
+
+
 def test_mini_section_renders_period_glance(tmp_path, monkeypatch):
     """_mini_section.html이 글랜스 강조 줄을 Jinja 오류 없이 렌더한다(ADR 0011)."""
     from datetime import datetime

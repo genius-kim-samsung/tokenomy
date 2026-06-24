@@ -14,6 +14,9 @@
     <header class="mini-bar">
       <span class="mini-title">Tokenomy</span>
       <span class="mini-controls">
+        <button class="mini-ctl" id="mini-copy" type="button" onclick="tkCopyShare(this)"
+                data-share-label="📋" data-share-done="✓" data-copy-target="#mini-section .share-src"
+                title="사용량 복사" aria-label="사용량 복사" style="display:none">📋</button>
         <button class="mini-ctl" type="button" onclick="miniToMain()"
                 title="일반뷰로 전환" aria-label="일반뷰로 전환">⊞</button>
         <button class="mini-ctl" type="button" onclick="miniHideToTray()"
@@ -27,6 +30,14 @@
   </div>
   <script src="/static/vendor/htmx.min.js"></script>
   <script src="/static/rel-time.js"></script>
+  <script src="/static/share-copy.js"></script>
+  <script>
+    // 📋 복사 버튼은 USD 풀(.share-src)이 있을 때만 보인다 — 폴링 교체마다 재평가.
+    function miniToggleCopy() {
+      var b = document.getElementById('mini-copy');
+      if (b) b.style.display = document.querySelector('#mini-section .share-src') ? '' : 'none';
+    }
+  </script>
   <script>
     // hover 컨트롤 — 런처의 pywebview JS 브리지로 배타 전환(일반뷰로) / 트레이 숨김.
     function miniToMain() {
@@ -45,9 +56,9 @@
       if (el) api.resize_mini(Math.ceil(el.getBoundingClientRect().height));
     }
     document.addEventListener('htmx:afterSwap', function (e) {
-      if (e.target && e.target.id === 'mini-section') miniFitHeight();
+      if (e.target && e.target.id === 'mini-section') { miniToggleCopy(); miniFitHeight(); }
     });
-    window.addEventListener('load', miniFitHeight);
+    window.addEventListener('load', function () { miniToggleCopy(); miniFitHeight(); });
   </script>
 </body>
 </html>
