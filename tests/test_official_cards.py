@@ -82,7 +82,6 @@ def test_card_official_ok_gauge_levels():
     g = card["gauges"][0]
     assert g["label"] == "월 사용 한도"
     assert g["level"] == "warn"          # 80% → warn
-    assert g["estimated"] is False
     assert g["caption"] == "$80.00 / $100"
 
 
@@ -121,8 +120,7 @@ def test_codex_card_has_no_weekly_estimate_gauge():
     conn.commit()
     card = _card(official_cards(conn, {"tracked_providers": ["codex"]}, NOW), "codex")
     labels = [g["label"] for g in card["gauges"]]
-    assert labels == ["월간"]                      # 월간 단일 게이지뿐
-    assert not any(g["estimated"] for g in card["gauges"])
+    assert labels == ["월간"]                      # 월간 단일 게이지뿐(추정 주간 게이지 없음)
     assert "이번 주" not in labels
 
 

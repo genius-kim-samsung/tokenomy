@@ -26,8 +26,8 @@
   {% for g in c.gauges %}
   <div class="mini-gauge">
     <span class="mini-gauge-label" title="{{ g.label }}">{{ g.label }}</span>
-    <span class="gauge{% if g.estimated %} gauge-est{% endif %}"{% if g.caption %} title="{{ g.caption }}"{% endif %}>
-      <span class="gauge-fill s-{{ g.level }}{% if g.estimated %} est{% endif %}" style="width: {{ g.fill_pct }}%"></span>
+    <span class="gauge"{% if g.caption %} title="{{ g.caption }}"{% endif %}>
+      <span class="gauge-fill s-{{ g.level }}" style="width: {{ g.fill_pct }}%"></span>
     </span>
     <span class="mini-gauge-pct lvl-{{ g.level }}">{{ g.util }}%{% if g.exhausted %} 소진{% endif %}{% if g.reset_in %}<span class="mini-reset" style="font-weight:400;opacity:.6"> · {{ g.reset_in }}</span>{% endif %}</span>
   </div>

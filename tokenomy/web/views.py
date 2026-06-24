@@ -307,7 +307,6 @@ def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
         "util": round(util),
         "fill_pct": round(min(util, 100), 1),
         "level": _gauge_level(util),
-        "estimated": False,
         "caption": _gauge_caption(used, limit, used_native=b["used_native"],
                                   limit_native=b["limit_native"], native_unit=b["native_unit"]),
         "sub": sub,

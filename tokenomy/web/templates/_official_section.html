@@ -1,5 +1,6 @@
 {# 'AI별 사용량' 섹션 조각(ADR 0003) — overview가 include하고, 자동 폴링(GET /official/section)·
-   수동 갱신(POST /official/refresh, HX)이 부분교체로 돌려준다. 색=임계 · 텍스처=공식/추정(ADR 0002). #}
+   수동 갱신(POST /official/refresh, HX)이 부분교체로 돌려준다. 게이지 색=임계(ADR 0002).
+   공식 게이지는 항상 공식이라 per-게이지 출처 칩은 없음 — 추정은 공식 미취득 폴백 블록에만(chip-est). #}
 
 {# 사용량 공유 문구 카드(CONTEXT.md '사용량 공유 문구') — 풀 합산 오늘/이번주/이번달 + 메신저 복사.
    USD 풀 있을 때만(share). △=오늘 추적 공백으로 부풀 수 있음 — 보내는 사람에게만 경고, 복사 문구는 깨끗. #}
@@ -82,11 +83,10 @@
         <div class="gauge-line">
           <span class="gauge-label">{{ g.label }}</span>
           <span class="gauge-pct lvl-{{ g.level }}">{{ g.util }}%{% if g.exhausted %} 소진{% endif %}</span>
-          <span class="chip {{ 'chip-est' if g.estimated else 'chip-official' }}">{{ '추정' if g.estimated else '공식' }}</span>
         </div>
-        <span class="gauge{% if g.estimated %} gauge-est{% endif %}">
+        <span class="gauge">
           {% if g.ghost_pct %}<span class="gauge-ghost{% if g.ghost_warn %} ghost-warn{% endif %}" style="width: {{ g.ghost_pct }}%"></span>{% endif %}
-          <span class="gauge-fill s-{{ g.level }}{% if g.estimated %} est{% endif %}" style="width: {{ g.fill_pct }}%"></span>
+          <span class="gauge-fill s-{{ g.level }}" style="width: {{ g.fill_pct }}%"></span>
         </span>
         {% if g.caption or g.sub %}
         <div class="gauge-meta">

@@ -235,17 +235,11 @@
   .gauge-pct.lvl-exceeds { @apply text-exceeds; }
 
   .gauge { @apply relative block w-full h-2.5 my-1 rounded-full overflow-hidden bg-card; }
-  .gauge.gauge-est { @apply bg-transparent; border: 1px dashed var(--color-line); }
   .gauge-fill, .gauge-ghost { @apply absolute left-0 top-0 h-full rounded-full; }
   .gauge-fill { @apply transition-[width] duration-500; }
   .gauge-fill.s-ok { background-color: var(--color-ok); }
   .gauge-fill.s-warn { background-color: var(--color-warn); }
   .gauge-fill.s-exceeds { background-color: var(--color-exceeds); }
-  /* 추정: 같은 임계색 위에 대각선 해치 — 불확실성 신호. 색은 임계 그대로 유지. */
-  .gauge-fill.est {
-    background-image: repeating-linear-gradient(45deg,
-      rgba(255,255,255,0.45) 0 2px, rgba(255,255,255,0) 2px 5px);
-  }
   /* 고스트: 예측(리셋시 예상) 연장 — fill 뒤에 깔려 fill~ghost 구간만 노출 */
   .gauge-ghost { background-color: rgba(212,160,23,0.30); }            /* warn 앰버 30% */
   .gauge-ghost.ghost-warn { background-color: rgba(198,69,69,0.38); }  /* exceeds 적 38% */
