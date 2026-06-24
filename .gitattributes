@@ -2,3 +2,7 @@
 # LF로 저장되면 --reload 등 줄 끝 토큰이 깨질 수 있음.
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Linux 셸 스크립트·.desktop은 항상 LF (CRLF면 Ubuntu에서 '#!...\r' bad interpreter, ADR 0013).
+*.sh text eol=lf
+*.desktop text eol=lf

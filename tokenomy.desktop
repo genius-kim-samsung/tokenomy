@@ -1,0 +1,11 @@
+[Desktop Entry]
+# Tokenomy 앱 메뉴 등록 템플릿(ADR 0013). install.sh가 @TOKENOMY_DIR@를 실제 설치 경로로
+# 치환해 ~/.local/share/applications/tokenomy.desktop에 복사한다(직접 편집 불필요).
+Type=Application
+Name=Tokenomy
+Comment=AI 코딩 토큰 사용량 로컬 가계부
+Exec=@TOKENOMY_DIR@/start_tokenomy.sh
+Icon=@TOKENOMY_DIR@/assets/tokenomy.png
+Terminal=false
+Categories=Utility;Development;
+StartupWMClass=Tokenomy

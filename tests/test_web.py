@@ -42,6 +42,23 @@ def test_dashboard_empty_db_ok(tmp_path, monkeypatch):
     assert "총지출" in r.text
 
 
+def test_sidebar_shows_mini_switch_when_mini_view_available(tmp_path, monkeypatch):
+    """미니뷰 가용 플랫폼(Windows) — 사이드바에 미니뷰 전환 버튼이 렌더된다(ADR 0008·0013)."""
+    monkeypatch.setitem(app_module.templates.env.globals, "mini_view_available", True)
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/")
+    assert 'id="mini-switch"' in r.text
+
+
+def test_sidebar_hides_mini_switch_when_mini_view_unavailable(tmp_path, monkeypatch):
+    """미니뷰 비가용 플랫폼(Linux, ADR 0013) — 버튼 자체를 렌더하지 않는다.
+    Wayland에서 미니 창은 깨지므로 진입점인 버튼을 서버에서 제거한다(JS 노출 게이트만으론 부족)."""
+    monkeypatch.setitem(app_module.templates.env.globals, "mini_view_available", False)
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/")
+    assert 'id="mini-switch"' not in r.text
+
+
 def test_dashboard_bad_query_falls_back(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/?sort=drop")

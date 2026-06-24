@@ -59,9 +59,9 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
   핑거프린트로 감지해 기존 행을 **자동 재계산**(`db.maybe_reprice`). 1h 캐시 분리는 `cache_creation_1h`
   컬럼에 저장해 재계산도 정확. 증분 적재 + dedup 가드는 옛 행을 다시 안 건드리므로 이 경로가 필수.
 - **web/app.py** — FastAPI 라우트(얇게: 라우팅 + 입력검증만). 데이터 조립은 **web/views.py**.
-- **launcher.py** — exe 진입점. ingest 1회 → 빈 포트 탐색 → uvicorn(127.0.0.1) → pywebview 창(없으면 브라우저 fallback).
+- **launcher.py** — exe(Windows)·소스(Linux `start_tokenomy.sh`) 공통 진입점. ingest 1회 → 빈 포트 탐색 → uvicorn(127.0.0.1) → pywebview 창 + 트레이 상주(없으면 브라우저 fallback). 미니 전환·`current_view` 시드는 `mini_view_available()`(Windows 전용)로 게이트 — Linux는 큰 창+트레이만(아래 플랫폼 분기 게시).
 - **web/control.py** — 창 복원 신호용 in-process 콜백 레지스트리. launcher(메인 스레드 webview)와 라우트(데몬 스레드)의 순환 import를 끊는다 — launcher가 `set_show_callback`, `/app/show` 라우트가 `request_show`(ADR 0006).
-- **paths.py** — 경로 중앙 해석. 데이터 위치가 실행 형태로 갈린다(아래 게시).
+- **paths.py** — 경로 중앙 해석. 데이터 위치가 실행 형태로 갈린다(아래 게시). `mini_view_available()`(=Windows 전용, ADR 0013)도 여기 — 미니뷰 플랫폼 게이트의 **단일 진실원**(launcher + 웹 사이드바가 공유).
 - **config.py** — 설정 모델(`config/tokenomy.config.json` 로더). `load_config`/`save_config` ·
   `tracked_providers`(=**활성 AI**; 미설정/None이면 크레덴셜 존재로 시드, 명시적 `[]`는 빈 집합 영속 — 재시드 안 함) · `credit_to_usd`(기본 0.04) ·
   `official_fetch_settings`(min_interval_minutes) · `pricing_overrides`. **config 키를 찾으면 여기다**
@@ -76,6 +76,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **exe는 반드시 `.venv`로 빌드.** 시스템 Python으로 빌드하면 pywebview가 번들에서 빠져
   네이티브 창 대신 브라우저로 fallback한다. (PyInstaller는 런타임 의존성이 아니라 CI는 별도 설치.)
 - **webview 경로는 상주 모드(ADR 0006).** exe에서 창 X = 트레이로 숨김(종료 아님), 트레이 우클릭 "종료"로만 완전 종료. 단일 인스턴스(`data/runtime.json`) — 재실행 시 기존 창 복원(`/app/ping` 정체 확인 → `/app/show`). 창 복원 시 ingest 1회 + 조건부 리로드. 트레이는 pystray+Pillow(번들). 브라우저 fallback·개발 모드는 단발 유지.
+- **플랫폼 분기는 좁게 — `mini_view_available()`(Windows 전용)가 단일 게이트(ADR 0013).** Ubuntu 24.04 기본 Wayland(GNOME)는 절대좌표·항상위·프레임리스를 막아 미니 뷰가 깨진다 → Linux에선 미니뷰 버튼(웹 사이드바 `{% if mini_view_available %}`)·전환·복원(launcher `_to_mini` 가드 + `current_view` 시드 clamp)을 모두 비활성. 큰 창+트레이만 남는데 둘 다 Wayland-clean. 트레이 아이콘은 `_tray_icon_name()`이 분기 — Windows `.ico`/Linux `.png`(AppIndicator는 .ico 비호환). **Linux 배포는 소스 실행**(단일 바이너리 없음 — PyInstaller 크로스컴파일 불가, 사용자 증가 시 별건): `install.sh`(apt 의존성 + `venv --system-site-packages`로 apt `python3-gi` 가시화 + pip + `.desktop` 등록) + `start_tokenomy.sh`(launcher 기동) + `tokenomy.desktop`(앱 메뉴 템플릿, `@TOKENOMY_DIR@` 치환). apt 의존성: `python3-gi`·`gir1.2-gtk-3.0`·`gir1.2-webkit2-4.1`·`libwebkit2gtk-4.1-0`(pywebview GTK), `libayatana-appindicator3-1`·`gir1.2-ayatanaappindicator3-0.1`(트레이). 셸 스크립트·`.desktop`은 `.gitattributes`로 **LF 강제**(CRLF면 Ubuntu에서 `#!...\r` bad interpreter). 코어(parser/db/aggregate/official_fetch/pricing)는 OS 중립이라 무변경 — 회귀만 확인.
 - **프라이버시 경계 — 발췌선을 지킬 것.** 파서는 토큰 usage 메타를 추출하고, Codex는
   세션 식별용으로 **첫 사용자 프롬프트만 120자 발췌**해 `sessions.summary`에 저장한다.
   그 외 content/프롬프트/대화 본문 전체는 DB에 적재하지 않는다(raw JSONL 원문은 archive.py가

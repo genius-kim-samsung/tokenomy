@@ -14,7 +14,7 @@ from tokenomy.config import credit_to_usd as _credit_to_usd, forecast_settings, 
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
 from tokenomy.official_fetch import refresh_tracked
-from tokenomy.paths import resource_path
+from tokenomy.paths import mini_view_available, resource_path
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
 from tokenomy.web import control
@@ -46,6 +46,9 @@ def _nav_context(request: Request) -> dict:
 
 templates = Jinja2Templates(directory=str(_BASE / "templates"), context_processors=[_nav_context])
 templates.env.globals["app_version"] = __version__
+# 미니뷰 가용 플랫폼 게이트(ADR 0013) — 프로세스당 상수(플랫폼 불변)라 글로벌로 1회 평가.
+# Linux(Wayland)에선 False → 사이드바 '미니뷰' 전환 버튼을 서버에서 아예 안 그린다.
+templates.env.globals["mini_view_available"] = mini_view_available()
 
 
 def _kstfmt(ts):

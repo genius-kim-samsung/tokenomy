@@ -42,3 +42,25 @@ def test_runtime_path_under_data_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("TOKENOMY_DATA", str(tmp_path))
     from tokenomy import paths
     assert paths.runtime_path() == tmp_path / "data" / "runtime.json"
+
+
+# ── 미니 뷰 가용 플랫폼(ADR 0013) — Windows 전용 게이트 ────────────────────────
+def test_mini_view_available_true_on_windows():
+    # 미니 뷰는 frameless·on_top·절대좌표에 의존 → Windows에서만 제공.
+    assert paths.mini_view_available("win32") is True
+
+
+def test_mini_view_available_false_on_linux():
+    # Wayland(GNOME)는 절대좌표·항상위를 막아 미니 뷰가 깨진다 → Linux 제외.
+    assert paths.mini_view_available("linux") is False
+
+
+def test_mini_view_available_false_on_macos():
+    assert paths.mini_view_available("darwin") is False
+
+
+def test_mini_view_available_defaults_to_current_platform(monkeypatch):
+    monkeypatch.setattr(paths.sys, "platform", "linux")
+    assert paths.mini_view_available() is False
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    assert paths.mini_view_available() is True

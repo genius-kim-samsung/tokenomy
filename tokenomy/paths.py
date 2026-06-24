@@ -63,3 +63,16 @@ def creds_present(provider: str) -> bool:
     _creds = {"claude": _self.CLAUDE_CREDS, "codex": _self.CODEX_AUTH}
     p = _creds.get(provider)
     return bool(p and p.exists())
+
+
+def mini_view_available(platform: str | None = None) -> bool:
+    """미니 뷰(상주 모드 안의 프레임리스·항상위·절대좌표 글랜스 창)를 이 플랫폼에서 쓸 수 있는가.
+
+    **Windows 전용**(ADR 0013). 미니 뷰는 frameless·on_top·저장된 코너 좌표 배치에 의존하는데,
+    Ubuntu 24.04 기본 디스플레이 서버인 Wayland(GNOME 46)는 설계상 앱이 자기 창의 절대 좌표를
+    지정하지 못하고 일반 toplevel의 항상위도 막아 핵심 속성이 깨진다. 이 함수가 미니뷰 버튼·전환·
+    복원 경로의 단일 게이트(launcher + 웹 사이드바)다. 트레이·큰 창은 Wayland-clean이라 게이트 밖.
+
+    platform=None이면 현재 sys.platform을 본다(테스트는 명시 인자로 분기 검증)."""
+    plat = platform if platform is not None else sys.platform
+    return plat == "win32"

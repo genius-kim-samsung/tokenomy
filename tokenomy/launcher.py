@@ -16,6 +16,7 @@ import urllib.request
 import webbrowser
 
 from tokenomy import __version__
+from tokenomy.paths import mini_view_available
 
 WINDOW_TITLE = "Tokenomy"
 WINDOW_WIDTH = 1200
@@ -256,7 +257,10 @@ def _refresh_mini_content(mini) -> None:
 
 
 def _to_mini() -> None:
-    """일반뷰 → 미니: 큰 창 숨기고 미니 표시 + 마지막 뷰=미니 영속."""
+    """일반뷰 → 미니: 큰 창 숨기고 미니 표시 + 마지막 뷰=미니 영속.
+    미니뷰 비가용 플랫폼(Linux, ADR 0013)에선 완전 no-op — Wayland에서 깨지는 진입을 막는다."""
+    if not mini_view_available():
+        return
     window = _tray_state.get("window")
     if window is not None:
         window.hide()
@@ -310,11 +314,19 @@ def _resize_mini(height) -> None:
         win.resize(MINI_WIDTH, h)
 
 
+def _tray_icon_name(platform: str | None = None) -> str:
+    """트레이 아이콘 리소스명 — Windows는 .ico, 그 외(Linux/macOS)는 .png(ADR 0013).
+    pystray의 AppIndicator 백엔드(Ubuntu)는 .png를 쓴다(.ico 비호환 회피).
+    platform=None이면 현재 sys.platform을 본다."""
+    plat = platform if platform is not None else sys.platform
+    return "assets/tokenomy.ico" if plat == "win32" else "assets/tokenomy.png"
+
+
 def _tray_image():
-    """트레이 아이콘 이미지(번들된 .ico를 PIL로 로드)."""
+    """트레이 아이콘 이미지(번들된 아이콘을 PIL로 로드 — 플랫폼별 .ico/.png)."""
     from PIL import Image
     from tokenomy.paths import resource_path
-    return Image.open(str(resource_path("assets/tokenomy.ico")))
+    return Image.open(str(resource_path(_tray_icon_name())))
 
 
 def _build_tray():
@@ -481,7 +493,10 @@ def _launch_window(port: int) -> None:
         window.events.closing += _on_closing
         set_show_callback(_restore_last_view)         # 단일 인스턴스 재실행도 마지막 뷰로
         # 마지막 본 뷰를 복원 기준으로 — 미니 창은 시작 시 만들지 않고(흰 창 차단) 첫 전환 때 lazy 생성.
-        _tray_state["current_view"] = mini_view_settings(load_config())["last_view"]
+        # 미니뷰 비가용 플랫폼(Linux, ADR 0013)에선 'main'으로 clamp — last_view='mini'(타 OS에서 동기화된
+        # config 등)여도 큰 창으로 시작하고, 트레이 '열기'·GUI 시작 콜백이 미니로 새지 않게 한다.
+        last_view = mini_view_settings(load_config())["last_view"]
+        _tray_state["current_view"] = last_view if mini_view_available() else "main"
         threading.Thread(target=icon.run, daemon=True).start()
         _start_background_poll()   # 상주 모드에서만 — 단발 강등 시엔 폴 안 함(ADR 0007)
         webview.start(_on_gui_start)  # ← 메인 GUI 루프(블로킹). 시작 직후 콜백이 마지막 뷰 적용.

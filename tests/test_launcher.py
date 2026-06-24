@@ -755,3 +755,83 @@ def test_api_resize_mini_delegates(monkeypatch):
     monkeypatch.setattr(launcher, "_resize_mini", lambda h: seen.append(h))
     launcher.Api().resize_mini(222)
     assert seen == [222]
+
+
+# ──────────────────────────────────────────────
+# ADR 0013: 미니 뷰 비가용 플랫폼(Linux) 게이트
+# ──────────────────────────────────────────────
+
+def test_to_mini_noop_when_mini_view_unavailable(monkeypatch):
+    """Linux 등 미니뷰 비가용 플랫폼 — _to_mini는 완전 no-op(큰 창 유지·전환·영속 없음).
+    Wayland에서 미니 창을 띄우면 핵심 속성이 깨지므로 진입 자체를 막는다(ADR 0013)."""
+    w_main, w_mini = _FakeWindow(), _FakeWindow()
+    _reset_mini_state(monkeypatch, window=w_main, mini=w_mini, current_view="main")
+    monkeypatch.setattr(launcher, "mini_view_available", lambda: False)
+    saved = []
+    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: saved.append(k))
+    launcher._to_mini()
+    assert w_main.calls == []                           # 큰 창 안 숨김
+    assert w_mini.calls == []                           # 미니 안 보임
+    assert launcher._tray_state["current_view"] == "main"
+    assert saved == []                                 # 영속 없음
+
+
+def test_to_mini_still_works_when_available(monkeypatch):
+    """가용 플랫폼(Windows)에선 기존대로 전환된다 — 게이트가 정상 경로를 막지 않는지 회귀 가드."""
+    w_main, w_mini = _FakeWindow(), _FakeWindow()
+    _reset_mini_state(monkeypatch, window=w_main, mini=w_mini, current_view="main")
+    monkeypatch.setattr(launcher, "mini_view_available", lambda: True)
+    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: None)
+    launcher._to_mini()
+    assert "hide" in w_main.calls and "show" in w_mini.calls
+    assert launcher._tray_state["current_view"] == "mini"
+
+
+def test_tray_icon_name_windows_uses_ico():
+    assert launcher._tray_icon_name("win32") == "assets/tokenomy.ico"
+
+
+def test_tray_icon_name_linux_uses_png():
+    # pystray AppIndicator(Linux, ADR 0013)는 .png를 쓴다(.ico 비호환 회피).
+    assert launcher._tray_icon_name("linux") == "assets/tokenomy.png"
+
+
+def test_tray_icon_name_macos_uses_png():
+    assert launcher._tray_icon_name("darwin") == "assets/tokenomy.png"
+
+
+def test_tray_icon_name_defaults_to_current_platform(monkeypatch):
+    monkeypatch.setattr(launcher.sys, "platform", "linux")
+    assert launcher._tray_icon_name() == "assets/tokenomy.png"
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    assert launcher._tray_icon_name() == "assets/tokenomy.ico"
+
+
+def test_tray_image_uses_platform_icon_name(monkeypatch):
+    """_tray_image는 _tray_icon_name()이 고른 리소스를 PIL로 연다(플랫폼 분기 와이어링)."""
+    import types
+    monkeypatch.setattr(launcher, "_tray_icon_name", lambda: "assets/tokenomy.png")
+    opened = {}
+    fake_Image = types.SimpleNamespace(open=lambda p: opened.setdefault("path", p))
+    monkeypatch.setitem(sys.modules, "PIL", types.SimpleNamespace(Image=fake_Image))
+    monkeypatch.setattr("tokenomy.paths.resource_path", lambda rel: f"/RES/{rel}")
+    launcher._tray_image()
+    assert opened["path"] == "/RES/assets/tokenomy.png"
+
+
+def test_launch_window_forces_main_when_mini_unavailable(monkeypatch, tmp_path):
+    """미니뷰 비가용(Linux) — config last_view='mini'여도 큰 창으로 시작하고 미니를 안 만든다.
+    current_view 시드를 'main'으로 clamp해 트레이 '열기'·GUI 시작 콜백이 미니로 새지 않게 한다."""
+    _isolate_config(monkeypatch, tmp_path, '{"mini_view": {"last_view": "mini"}}')
+    log, created = [], []
+    _install_fake_webview(monkeypatch, log, created)
+    monkeypatch.setattr(launcher, "mini_view_available", lambda: False)
+    monkeypatch.setattr(launcher, "_build_tray", lambda: type("I", (), {"run": lambda s: None, "stop": lambda s: None})())
+    monkeypatch.setattr(launcher, "_tray_state", _fresh_state(quitting=True))
+    monkeypatch.setattr(launcher.threading, "Thread", type("T", (), {"__init__": lambda s, **k: None, "start": lambda s: None}))
+    monkeypatch.setattr("tokenomy.web.control.set_show_callback", lambda fn: None)
+    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: None)
+
+    launcher._launch_window(9999)
+    assert launcher._tray_state["current_view"] == "main"   # 비가용 → main으로 clamp
+    assert all(c["kind"] != "mini" for c in created)         # 미니 미생성
