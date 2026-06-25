@@ -167,6 +167,15 @@ def month_spend(conn, provider: str | None, now_kst: datetime,
     return round(sum((r["cost_usd"] or 0) for r in _month_rows(conn, provider, now_kst, providers=providers)), 4)
 
 
+def range_spend(conn, provider: str | None, start: datetime, nxt: datetime,
+                *, providers: list[str] | None = None) -> float:
+    """임의 구간 [start, nxt)의 로컬 cost_usd 합(provider 또는 활성 합산). month_spend의 일반화.
+
+    기간별 사용량 카드(ADR 0017) 로컬 모드의 오늘/이번주/이번달·페이스 이전 구간 합에 쓴다.
+    """
+    return round(sum((r["cost_usd"] or 0) for r in _range_rows(conn, provider, start, nxt, providers=providers)), 4)
+
+
 # 공식 미러 패널의 버킷 표시 순서(공식 앱 미러).
 _BUCKET_ORDER = {"monthly_limit": 0, "codex_monthly": 0, "event_credit": 1, "promo": 2, "rate_window": 3}
 
@@ -678,6 +687,65 @@ def pool_history(conn, providers: list[str], *, max_gap_minutes: int | None = No
     if cur:
         segments.append(cur)
     return segments
+
+
+def _provider_span_spend(hist: list, start: datetime, end: datetime,
+                         gap_sec: float | None) -> float | None:
+    """한 provider 누적 시계열에서 [start, end] 소비 = consumption_delta 합. 경계 게이트 적용.
+
+    baseline = start 이하 최근 표본(없으면 추적 시작 이전 → None). baseline이 start에서
+    gap_sec보다 오래거나(leading gap), 구간 마지막 표본이 end에서 gap_sec보다 오래면
+    (trailing gap) None — 경계가 깨끗이 관측됐을 때만 값. 리셋(누적 하락)은 consumption_delta가
+    post-reset 값으로 계상해 월 경계 이전 구간도 성립한다.
+    """
+    if not hist:
+        return None
+    baseline_dt = baseline_v = None
+    i, n = 0, len(hist)
+    while i < n and hist[i][0] <= start:
+        baseline_dt, baseline_v = hist[i]
+        i += 1
+    if baseline_dt is None:
+        return None   # 추적 시작 이전(start 이하 표본 없음)
+    if gap_sec is not None and (start - baseline_dt).total_seconds() > gap_sec:
+        return None   # start 경계 미관측(leading gap → 부풀림)
+    prev = baseline_v
+    last_dt = None
+    spend = 0.0
+    while i < n and hist[i][0] <= end:
+        dt, v = hist[i]
+        delta, _reset = _consumption_delta(prev, v)
+        spend += delta
+        prev = v
+        last_dt = dt
+        i += 1
+    if last_dt is None:
+        return None   # 구간 내 표본 없음 → end 미관측
+    if gap_sec is not None and (end - last_dt).total_seconds() > gap_sec:
+        return None   # end 경계 미관측(trailing gap → 소비 일부 누락)
+    return round(spend, 4)
+
+
+def official_span_spend(conn, providers: list[str], start: datetime, end: datetime,
+                        *, max_gap_minutes: int | None, is_pooled=None) -> float | None:
+    """[start, end] 구간의 통합 풀 공식 소비(USD) — 페이스 신호의 '이전 동일 구간'용(ADR 0017).
+
+    각 provider 스냅샷 이력에서 구간 소비를 consumption_delta 합으로 내고(리셋은 post-reset
+    계상 → 월 경계 성립) 풀로 합산한다. 양 경계가 max_gap 내 관측됐을 때만 값 — 어느 provider라도
+    경계가 미관측(추적 시작 이전·leading/trailing gap)이면 None(불충분 → 페이스 숨김, 숫자만).
+    풀 멤버십은 큐레이션(is_pooled, ADR 0016) — pool_used_history와 동일 스코프.
+    """
+    if not providers or end <= start:
+        return None
+    gap_sec = max_gap_minutes * 60 if max_gap_minutes is not None else None
+    total = 0.0
+    for p in providers:
+        s = _provider_span_spend(pool_used_history(conn, p, is_pooled=is_pooled),
+                                 start, end, gap_sec)
+        if s is None:
+            return None
+        total += s
+    return round(total, 4)
 
 
 def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: datetime,

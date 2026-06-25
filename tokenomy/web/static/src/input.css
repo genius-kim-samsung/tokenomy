@@ -258,6 +258,14 @@
   .chip-est { @apply bg-card text-muted; border: 1px dashed var(--color-line); }
   .chip-warn { @apply text-exceeds; background: #f7e3e3; }
 
+  /* 기간별 사용량 카드(ADR 0017) — 오늘/이번주/이번달 동등 셀 + 이전 동일 구간 페이스 신호 */
+  .period-cell { @apply inline-flex items-baseline gap-1; }
+  /* 페이스: 화살표가 방향을 말하므로 색은 옅게(과한 경보 회피). ▲=더 씀·▼=덜 씀 */
+  .pace { @apply text-[12px] font-medium tabular-nums; }
+  .pace-up { @apply text-warn; }
+  .pace-down { @apply text-ok; }
+  .pace-flat { @apply text-muted; }
+
   /* 사용량 전용 폴백(공식 데이터 없음) */
   .fallback { @apply mt-1; }
   .fallback-num { @apply text-[22px] font-semibold tabular-nums; }

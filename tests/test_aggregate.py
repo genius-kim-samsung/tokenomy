@@ -2397,3 +2397,82 @@ def test_period_glance_handles_reset_within_week():
     g = official_period_glance(conn, "claude", _NOW_WED)
     assert g.week.usd == 22.0        # (90-80)+5+(12-5)
     assert g.today.usd == 7.0        # 12-5
+
+
+# ── 기간별 사용량 카드 기반(ADR 0017) — 로컬 임의 구간 합 + 공식 이전 동일구간 ──────────
+
+
+def test_range_spend_sums_active_window():
+    """range_spend = [start, nxt) 로컬 cost_usd 합(활성 합산·단일 둘 다)."""
+    from tokenomy.aggregate import range_spend
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-10T01:00:00Z", 5.0, provider="claude")   # KST 6/10 10:00
+    _insert(conn, "2026-06-10T05:00:00Z", 2.0, provider="codex")    # KST 6/10 14:00
+    _insert(conn, "2026-06-09T01:00:00Z", 99.0, provider="claude")  # 어제 — 제외
+    start = datetime(2026, 6, 10, 0, 0, tzinfo=KST)
+    nxt = datetime(2026, 6, 11, 0, 0, tzinfo=KST)
+    assert range_spend(conn, None, start, nxt, providers=["claude", "codex"]) == 7.0
+    assert range_spend(conn, "claude", start, nxt) == 5.0
+
+
+def _seed_span_snap(conn, provider, dt, used, *, limit=200.0, kind="monthly_limit", raw="spend"):
+    """단일 USD 풀 버킷 스냅샷을 임의 시각 dt(KST)로 적재(공식 이전 구간 테스트용)."""
+    insert_official_buckets(conn, provider=provider, fetched_at=dt.isoformat(),
+                            buckets=[_ob("monthly", kind, used, limit, raw=raw)], created_at="x")
+
+
+def _Dt(day, hour):
+    return datetime(2026, 6, day, hour, 0, tzinfo=KST)
+
+
+def test_official_span_spend_boundary_diff():
+    """경계가 max_gap 내 관측되면 [start, end] 소비 = 누적차(풀 합산)."""
+    from tokenomy.aggregate import official_span_spend
+    conn = connect(":memory:")
+    _seed_span_snap(conn, "claude", _Dt(9, 0), 10.0)
+    _seed_span_snap(conn, "claude", _Dt(9, 12), 16.0)
+    _seed_span_snap(conn, "codex", _Dt(9, 0), 5.0)
+    _seed_span_snap(conn, "codex", _Dt(9, 12), 8.0)
+    spend = official_span_spend(conn, ["claude", "codex"], _Dt(9, 0), _Dt(9, 12),
+                                max_gap_minutes=180)
+    assert spend == 9.0    # (16-10)+(8-5)
+
+
+def test_official_span_spend_reset_counts_post_reset():
+    """구간 내 리셋(누적 하락)은 post-reset만 계상 — 월 경계 이전 구간도 성립."""
+    from tokenomy.aggregate import official_span_spend
+    conn = connect(":memory:")
+    _seed_span_snap(conn, "claude", _Dt(9, 0), 180.0)    # 직전 주기 말(baseline)
+    _seed_span_snap(conn, "claude", _Dt(9, 1), 5.0)      # 리셋 후 새 주기
+    _seed_span_snap(conn, "claude", _Dt(9, 12), 20.0)
+    spend = official_span_spend(conn, ["claude"], _Dt(9, 0), _Dt(9, 12), max_gap_minutes=180)
+    assert spend == 20.0    # 5(post-reset) + (20-5)
+
+
+def test_official_span_spend_none_when_start_gap():
+    """start 직전 baseline이 max_gap보다 오래면(경계 미관측) None — leading-gap 부풀림 차단."""
+    from tokenomy.aggregate import official_span_spend
+    conn = connect(":memory:")
+    _seed_span_snap(conn, "claude", _Dt(7, 12), 10.0)    # start 36h 전
+    _seed_span_snap(conn, "claude", _Dt(9, 12), 16.0)
+    assert official_span_spend(conn, ["claude"], _Dt(9, 0), _Dt(9, 12),
+                               max_gap_minutes=180) is None
+
+
+def test_official_span_spend_none_before_tracking():
+    """start 이전 표본이 전무(추적 시작 이전)면 None."""
+    from tokenomy.aggregate import official_span_spend
+    conn = connect(":memory:")
+    _seed_span_snap(conn, "claude", _Dt(9, 6), 12.0)     # 첫 표본이 start 이후
+    assert official_span_spend(conn, ["claude"], _Dt(9, 0), _Dt(9, 12),
+                               max_gap_minutes=180) is None
+
+
+def test_official_span_spend_none_when_end_gap():
+    """구간 마지막 표본이 end에서 max_gap보다 오래면(end 미관측) None — 일부 소비 누락."""
+    from tokenomy.aggregate import official_span_spend
+    conn = connect(":memory:")
+    _seed_span_snap(conn, "claude", _Dt(9, 0), 10.0)
+    _seed_span_snap(conn, "claude", _Dt(9, 2), 12.0)     # end 10h 전이 마지막
+    assert official_span_spend(conn, ["claude"], _Dt(9, 0), _Dt(9, 12),
+                               max_gap_minutes=180) is None

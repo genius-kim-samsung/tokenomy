@@ -10,9 +10,9 @@ from tokenomy.aggregate import (
     _provider_where, by_day_session, by_dimension, by_project, by_session,
     combined_forecast, daily_series, pool_history, pool_daily_history, pool_snapshots_by_day,
     official_period_glance,
-    insights, month_bounds, month_spend, official_view, parse_ts, period_bounds,
-    pricing_coverage, session_detail, sidechain_split, stacked_trend,
-    token_composition,
+    insights, month_bounds, month_spend, official_span_spend, official_view, parse_ts,
+    period_bounds, pricing_coverage, range_spend, session_detail, sidechain_split,
+    stacked_trend, token_composition,
 )
 from tokenomy.config import (
     account_mode, bucket_curation_resolver, credit_to_usd, forecast_settings, load_config,
@@ -514,6 +514,20 @@ def pool_glance(rows: list[ShareRow]) -> PoolGlance:
     )
 
 
+def _pace(current: float | None, previous: float | None) -> dict | None:
+    """페이스 신호 — 현재 구간 소비 vs 이전 동일 구간(same-span, ADR 0017).
+
+    반환 {dir, pct}: dir="up"(더 씀)·"down"(덜 씀)·"flat"(±0.5% 미만). pct=|변화율| 반올림 정수.
+    이전이 없거나(None)·0이면(비율 불가) None — 페이스 숨김(숫자만). 현재가 None이어도 None.
+    """
+    if current is None or previous is None or previous <= 0:
+        return None
+    delta = (current - previous) / previous * 100
+    if abs(delta) < 0.5:
+        return {"dir": "flat", "pct": 0}
+    return {"dir": "up" if delta > 0 else "down", "pct": round(abs(delta))}
+
+
 def _usd(v: float) -> str:
     return f"${v:,.2f}"
 
@@ -531,14 +545,19 @@ def _month_cell(month_usd: float | None) -> str:
     return f"이번달 {_usd(month_usd)}"
 
 
-def build_share_text(rows: list[ShareRow], date_label: str) -> str:
+def build_share_text(rows: list[ShareRow], date_label: str, *, note: str | None = None) -> str:
     """사용량 공유 문구(CONTEXT.md) — 메신저 붙여넣기용 클립보드 텍스트.
 
     AI별 줄(오늘·이번주·이번달·한도%) + 합계 줄(한도% 없음). partial 경고는 카드가
     보내는 사람에게만 하고, 복사 문구 자체엔 △·주석을 넣지 않는다. none 기간은 '데이터 없음'.
+    note(구독/로컬, ADR 0017)는 헤더 꼬리표로 출처를 고지한다(예: 'API 단가 환산').
+    한도% 생략은 ShareRow.util_pct=None으로 자연 처리된다(구독은 한도 없음).
     """
     pool = pool_glance(rows)
-    lines = [f"AI 사용량 ({date_label}, KST)"]
+    header = f"AI 사용량 ({date_label}, KST)"
+    if note:
+        header += f" · {note}"
+    lines = [header]
     for r in rows:
         util = f" (한도 {r.util_pct}%)" if r.util_pct is not None else ""
         lines.append(
@@ -565,12 +584,14 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
     active = set(tracked_providers(config))
     _, is_pooled = _curation_for(config)
     rows: list[ShareRow] = []
+    pool_providers: list[str] = []
     for p in PROVIDERS:
         if p not in active:
             continue
         view = official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled)
         if view.pool_limit_usd is None:
             continue
+        pool_providers.append(p)
         meta = _PROVIDER_META.get(p, {"label": p.title()})
         g = official_period_glance(conn, p, now, is_pooled=is_pooled)
         # 이번달·한도%는 **통합 풀**(월간+포함크레딧, pool_used) 기준 — 오늘/이번주 글랜스와 같은
@@ -588,6 +609,114 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
         "pool": pool_glance(rows),
         "text": build_share_text(rows, date_label),
         "date_label": date_label,
+        "providers": pool_providers,   # 풀 멤버 provider 키(기간별 카드 공식 페이스용, ADR 0017)
+    }
+
+
+# --- 기간별 사용량 카드(ADR 0017) — 총지출+share 통합, A군 모드 게이트(ADR 0015) ---
+
+
+def _period_windows(now_kst: datetime) -> list[tuple]:
+    """오늘/이번주/이번달 — (key, cur_start, prev_start, prev_end). 현재 구간 end는 항상 now.
+
+    prev_*는 '이전 동일 구간'(same-span, ADR 0017): 오늘↔어제 같은 시각, 이번주↔지난주 같은
+    요일·시각, 이번달↔지난달 같은 날까지. 각 주기 *안*의 두 누적을 견주므로 월 리셋을 안 가른다.
+    """
+    now = now_kst.astimezone(KST)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=today_start.weekday())   # 월요일 0시 KST
+    month_start = today_start.replace(day=1)
+    prev_month_start = (month_start - timedelta(days=1)).replace(day=1)
+    elapsed = now - month_start
+    return [
+        ("오늘", today_start, today_start - timedelta(days=1), now - timedelta(days=1)),
+        ("이번주", week_start, week_start - timedelta(days=7), now - timedelta(days=7)),
+        ("이번달", month_start, prev_month_start, prev_month_start + elapsed),
+    ]
+
+
+def _local_share_rows(conn, active: list[str], now: datetime, windows: list[tuple]) -> list[ShareRow]:
+    """활성 provider별 로컬 기간 합(오늘/이번주/이번달) → ShareRow(util_pct=None, 한도 없음)."""
+    today_start, week_start, month_start = windows[0][1], windows[1][1], windows[2][1]
+    rows: list[ShareRow] = []
+    for p in PROVIDERS:
+        if p not in active:
+            continue
+        meta = _PROVIDER_META.get(p, {"label": p.title()})
+        rows.append(ShareRow(
+            label=meta["label"],
+            today=PeriodSpend(usd=range_spend(conn, p, today_start, now), state="complete"),
+            week=PeriodSpend(usd=range_spend(conn, p, week_start, now), state="complete"),
+            month_usd=range_spend(conn, p, month_start, now), util_pct=None))
+    return rows
+
+
+_LOCAL_SOURCE = "이 기기 · 추정"
+_LOCAL_DISCLAIMER = "공개 API 단가 기준 추정 · 이 기기의 Claude Code와 Codex만 · 수집 시 갱신"
+
+
+def period_card_context(conn, config: dict, now_kst: datetime | None = None) -> dict | None:
+    """기간별 사용량 카드(ADR 0017) — 오늘·이번주·이번달 동등 3칸 + same-span 페이스.
+
+    A군 모드 게이트(ADR 0015): 엔터=공식 통합 풀(오늘/이번주=스냅샷 이력 델타, 이번달=라이브
+    pool_used), 구독/로컬=로컬 JSONL 달력 기간 합(이 기기 추정). 각 기간에 이전 동일 구간 대비
+    ▲▼%를 **비교 데이터 충분 시에만** 단다(공식은 경계 관측 게이트, 로컬은 이전 구간 합>0이면).
+    활성 0개·온보딩이면 None(카드 없음). 로컬·메시지 없음이면 has_data=False(데이터 없음 너지).
+    """
+    now = now_kst or datetime.now(KST)
+    active = tracked_providers(config)
+    if not active or onboarding_pending(config):
+        return None
+    interval = official_fetch_settings(config)["min_interval_minutes"]
+    _, is_pooled = _curation_for(config)
+    windows = _period_windows(now)
+    share = share_context(conn, config, now)
+    # 공식 모드 = 공식 USD 풀 있음(share not None) + 개인구독제 아님(ADR 0015 _a_zone_official 동치).
+    official = account_mode(config) != "subscription" and share is not None
+
+    if official:
+        pool, providers = share["pool"], share["providers"]
+        max_gap = interval * 3   # 그보다 긴 공백은 수집 단절 — 경계 미관측으로 본다
+        cur = {"오늘": pool.today, "이번주": pool.week,
+               "이번달": PeriodSpend(usd=pool.month_usd, state="complete")}
+        periods = []
+        for key, _cur_start, ps, pe in windows:
+            c = cur[key]
+            prev = official_span_spend(conn, providers, ps, pe,
+                                       max_gap_minutes=max_gap, is_pooled=is_pooled)
+            pace = _pace(c.usd, prev) if c.state == "complete" else None
+            periods.append({"key": key, "usd": c.usd, "state": c.state, "pace": pace})
+        return {
+            "mode": "official", "source_label": "공식 · 계정 전체",
+            "disclaimer": "공식 API 사용량 · 계정 전체(전 기기)",
+            "has_data": True, "periods": periods,
+            "partial_warning": pool.today.state == "partial" or pool.week.state == "partial",
+            "share_text": share["text"], "date_label": share["date_label"],
+        }
+
+    # 로컬 모드(구독, 또는 엔터지만 공식 풀 없음 → 강등) — 이 기기·공개 단가 환산.
+    date_label = f"{now.astimezone(KST):%Y-%m-%d}"
+    where, params = _provider_where(None, active)
+    last = conn.execute("SELECT MAX(ts) t FROM messages" + where, params).fetchone()
+    if last is None or last["t"] is None:
+        return {"mode": "local", "source_label": _LOCAL_SOURCE, "disclaimer": _LOCAL_DISCLAIMER,
+                "has_data": False, "periods": [], "partial_warning": False,
+                "share_text": None, "date_label": date_label}
+    rows = _local_share_rows(conn, active, now, windows)
+    pool = pool_glance(rows)
+    cur = {"오늘": pool.today, "이번주": pool.week,
+           "이번달": PeriodSpend(usd=pool.month_usd, state="complete")}
+    periods = []
+    for key, _cur_start, ps, pe in windows:
+        c = cur[key]
+        # 로컬은 로그가 연속이라 이전 구간 합>0이면 페이스 표시(_pace가 게이트).
+        prev = range_spend(conn, None, ps, pe, providers=active)
+        periods.append({"key": key, "usd": c.usd, "state": "complete", "pace": _pace(c.usd, prev)})
+    return {
+        "mode": "local", "source_label": _LOCAL_SOURCE, "disclaimer": _LOCAL_DISCLAIMER,
+        "has_data": True, "periods": periods, "partial_warning": False,
+        "share_text": build_share_text(rows, date_label, note="API 단가 환산"),
+        "date_label": date_label,
     }
 
 
@@ -600,8 +729,9 @@ def official_section_context(conn, config: dict, now_kst: datetime | None = None
     return {
         "official_cards": official_cards(conn, config, now),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
-        # 공유 카드(사용량 공유 문구) — 풀 없으면 None. 섹션 partial에 실어 글랜스와 같은 주기 갱신.
-        "share": share_context(conn, config, now),
+        # 기간별 사용량 카드(ADR 0017) — 총지출+share 통합. 모드별 출처. 섹션 partial에 실어
+        # 글랜스와 같은 주기로 갱신(엔터=라이브, 구독=수집 시만 — 카드 디스클레이머가 안내).
+        "period_card": period_card_context(conn, config, now),
         # 개인구독제(ADR 0015 D4): rate-window 게이지를 '이용 한도(스로틀)'로 프레이밍하는 분기 신호.
         "account_mode": account_mode(config),
     }
@@ -731,6 +861,8 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "forecast_actual": forecast_actual,
         "official_cards": official_cards(conn, config, now),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
+        # 기간별 사용량 카드(ADR 0017) — 초기 로드 시 즉시 표시(이후 섹션 폴링이 갱신).
+        "period_card": period_card_context(conn, config, now),
         "projects": projects, "sessions": sessions, "insights": coach,
         "daily_labels": [p.day for p in daily],
         "trend_series": trend_series,

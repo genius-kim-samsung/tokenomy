@@ -1,0 +1,32 @@
+{# 기간별 사용량 카드(ADR 0017) — 옛 '이번 달 총지출' 단독 카드 + share 카드 통합.
+   오늘·이번주·이번달 동등 3칸 + 이전 동일 구간(same-span) 페이스 ▲▼% + 메신저 복사.
+   출처는 A군 모드 게이트(ADR 0015): 엔터=공식·계정 전체 / 구독=이 기기·공개 단가 환산.
+   △=오늘/이번주 추적 공백으로 부풀 수 있음(공식만) — 보내는 사람에게만 경고, 복사 문구는 깨끗. #}
+<section class="card period-card" data-mode="{{ period_card.mode }}">
+  <div class="card-head">
+    <h2>기간별 사용량 <span class="muted">({{ period_card.source_label }})</span></h2>
+    {% if period_card.share_text %}
+    <button class="btn-sm" type="button" data-share-label="📋 복사" onclick="tkCopyShare(this)">📋 복사</button>
+    {% endif %}
+  </div>
+  {% if not period_card.has_data %}
+  <p class="muted">데이터 없음 · 사이드바 [↻ 수집]을 누르세요</p>
+  {% else %}
+  <p class="period-row" style="display:flex;gap:1.6rem;align-items:baseline;font-variant-numeric:tabular-nums;font-size:1.05rem">
+    {% for p in period_card.periods %}
+    <span class="period-cell">
+      <span class="muted">{{ p.key }}</span>
+      {% if p.state == "none" or p.usd is none %}<span class="muted">—</span>
+      {% else %}<strong>${{ '%.2f'|format(p.usd) }}</strong>{% if p.state == "partial" %}<span class="muted" title="추적 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
+      {% if p.pace %}<span class="pace pace-{{ p.pace.dir }}" title="이전 동일 구간 대비"
+        >{% if p.pace.dir == "up" %}▲{% elif p.pace.dir == "down" %}▼{% else %}≈{% endif %}{% if p.pace.pct %} {{ p.pace.pct }}%{% endif %}</span>{% endif %}
+    </span>
+    {% endfor %}
+  </p>
+  {% if period_card.partial_warning %}
+  <p class="muted" style="font-size:.78rem;margin:.1rem 0 0">⚠ 추적 공백으로 부풀 수 있어요 — 공유 전 확인하세요(복사 문구엔 표시 안 됨)</p>
+  {% endif %}
+  {% if period_card.share_text %}<pre class="share-src" hidden>{{ period_card.share_text }}</pre>{% endif %}
+  {% endif %}
+  <p class="disclaimer">ⓘ {{ period_card.disclaimer }}</p>
+</section>

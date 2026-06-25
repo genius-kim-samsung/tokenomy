@@ -39,7 +39,7 @@ def test_dashboard_empty_db_ok(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/")
     assert r.status_code == 200
-    assert "총지출" in r.text
+    assert "기간별 사용량" in r.text   # 총지출 카드 폐지·기간별 사용량 카드로 통합(ADR 0017)
 
 
 def test_sidebar_shows_mini_switch_when_mini_view_available(tmp_path, monkeypatch):
@@ -105,10 +105,11 @@ def test_dashboard_renders_sections_with_data(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    for section in ("이번 달 총지출", "통합 추세", "통합 효율 코치", "통합 프로젝트별", "복기"):
+    for section in ("기간별 사용량", "통합 추세", "통합 효율 코치", "통합 프로젝트별", "복기"):
         assert section in r.text
+    assert "이번 달 총지출" not in r.text          # 총지출 단독 카드 폐지(ADR 0017)
     assert "AI별 사용 현황" not in r.text          # 번다운 카드 섹션 제거
-    assert "공개 API 단가 기준 추정" in r.text   # §5.2 비용 신뢰도 표기
+    assert "공개 API 단가 기준 추정" in r.text   # 기간별 카드 로컬 디스클레이머
     assert "proj" in r.text                       # 프로젝트별 행
 
 
@@ -148,8 +149,8 @@ def test_official_section_renders_period_glance(tmp_path, monkeypatch):
     assert "$10.00" in html        # 오늘 = 30-20
 
 
-def test_official_section_renders_share_card(tmp_path, monkeypatch):
-    """_official_section.html이 사용량 공유 카드(합산 + 복사 버튼 + 숨김 문구)를 렌더한다."""
+def test_official_section_renders_period_card(tmp_path, monkeypatch):
+    """_official_section.html이 기간별 사용량 카드(오늘/이번주/이번달 + 복사 + 숨김 문구)를 렌더한다(ADR 0017)."""
     from datetime import datetime
     from tokenomy.aggregate import KST
     from tokenomy.web.views import official_section_context
@@ -157,13 +158,14 @@ def test_official_section_renders_share_card(tmp_path, monkeypatch):
     _, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
     _seed_glance_history(conn, "claude", [(9, 20.0), (10, 30.0)])   # 오늘=10, 이번달=30
-    ctx = official_section_context(conn, {"tracked_providers": ["claude"]},
+    ctx = official_section_context(conn, {"tracked_providers": ["claude"],
+                                          "account_mode": "enterprise"},
                                    now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
     html = app_module.templates.env.get_template("_official_section.html").render(ctx)
-    assert "share-card" in html and "📋 복사" in html
+    assert "period-card" in html and "📋 복사" in html
     assert 'class="share-src"' in html
-    assert "AI 사용량 (2026-06-10, KST)" in html   # 숨김 복사 문구
-    assert "이번달" in html
+    assert "AI 사용량 (2026-06-10, KST)" in html   # 숨김 복사 문구(공식)
+    assert "기간별 사용량" in html and "이번달" in html
 
 
 def test_official_section_no_share_card_without_pool(tmp_path, monkeypatch):
@@ -514,7 +516,8 @@ def test_root_renders_overview(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/")
     assert r.status_code == 200
-    assert "이번 달 총지출" in r.text
+    assert "기간별 사용량" in r.text        # 총지출 카드 폐지·통합(ADR 0017)
+    assert "이번 달 총지출" not in r.text
     assert "AI별 사용 현황" not in r.text   # 번다운 카드 섹션 제거
     assert 'class="sidebar"' in r.text
     assert 'href="/history"' in r.text
@@ -535,9 +538,10 @@ def test_overview_aggregates_providers(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    for section in ("이번 달 총지출", "통합 추세", "통합 효율 코치",
+    for section in ("기간별 사용량", "통합 추세", "통합 효율 코치",
                     "통합 프로젝트별", "복기"):
         assert section in r.text
+    assert "이번 달 총지출" not in r.text   # 총지출 단독 카드 폐지(ADR 0017)
     assert "AI별 사용 현황" not in r.text   # 번다운 카드 섹션 제거
     assert "proj" in r.text
 
@@ -551,7 +555,7 @@ def test_dashboard_no_budget_banner(tmp_path, monkeypatch):
 
 
 def test_dashboard_shows_month_total(tmp_path, monkeypatch):
-    """이번 달 총지출 카드가 렌더링되어야 함."""
+    """이번달 소비는 기간별 사용량 카드의 한 칸으로 렌더링되어야 함(ADR 0017)."""
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
     conn.execute(
@@ -560,7 +564,7 @@ def test_dashboard_shows_month_total(tmp_path, monkeypatch):
     )
     conn.commit()
     html = client.get("/").text
-    assert "이번 달 총지출" in html
+    assert "기간별 사용량" in html and "이번달" in html
 
 
 def test_dashboard_no_burndown_cards(tmp_path, monkeypatch):
@@ -1178,7 +1182,9 @@ def test_official_section_source_chip_zone_level_once(tmp_path, monkeypatch):
     ctx = official_section_context(conn, {"tracked_providers": ["claude", "codex"]},
                                    now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
     html = app_module.templates.env.get_template("_official_section.html").render(ctx)
-    assert html.count("공식 · 계정 전체") == 1   # 존 헤더 1회(카드 글랜스칩 반복 제거)
+    # AI별 사용량 존 헤더 1회 + 기간별 사용량 카드(공식) 출처 라벨 1회 = 2(ADR 0017로 두 존 카드).
+    # provider 카드마다 반복하지 않는 D7 원칙은 유지(카드당 1회).
+    assert html.count("공식 · 계정 전체") == 2
 
 
 def test_official_section_no_official_clean_state_no_estimate(tmp_path, monkeypatch):
@@ -1539,8 +1545,8 @@ def test_dashboard_heading_uses_provider_name_when_single_active(tmp_path, monke
                  "VALUES ('a','claude','s1','p','2026-06-10T10:00:00Z','claude-opus-4-8',5.0,1)")
     conn.commit()
     html = client.get("/").text
-    assert "(Claude)" in html                # 활성 1개 → provider명
-    assert "전 AI 합산" not in html           # "통합/전 AI" 수식어 제거
+    assert "Claude" in html                   # 활성 1개 → provider명(AI별 카드)
+    assert "전 AI 합산" not in html           # "통합/전 AI" 수식어 제거(단일 활성)
     assert "통합 추세" not in html
     assert "통합 효율 코치" not in html
 
