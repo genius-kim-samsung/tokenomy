@@ -8,6 +8,7 @@
   },
   "buckets": {
     "claude:amber_ladder": { "hidden": true },
-    "claude:omelette_promotional": { "label": "Claude Design" }
+    "claude:omelette_promotional": { "label": "Claude Design" },
+    "claude:cinder_cove": { "pooled": true }
   }
 }

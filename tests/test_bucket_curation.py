@@ -185,6 +185,16 @@ def test_shipped_catalog_seeds_amber_and_omelette():
     assert cat.get("claude:omelette_promotional", {}).get("label") == "Claude Design"
 
 
+def test_shipped_catalog_pools_cinder_cove():
+    # cinder_cove는 실제로 닳는 $1000 크레딧(유령 천장 아님) — 배포 카탈로그가 풀에 opt-in한다.
+    # event_credit 모양 기본값은 pooled=False라, 카탈로그가 없으면 실소비가 통합 풀/전망에서 빠진다.
+    cat = load_bucket_catalog()
+    assert cat.get("claude:cinder_cove", {}).get("pooled") is True
+    resolved = resolve_bucket_curation("claude", "cinder_cove", "event_credit", catalog=cat)
+    assert resolved["pooled"] is True
+    assert resolved["hidden"] is False    # 게이지는 계속 보임(숨김 아님)
+
+
 def test_spec_bundles_bucket_catalog():
     # exe 번들 누락 방지(ADR 0016) — tokenomy.spec datas에 bucket_catalog.json이 있어야 한다.
     spec = open("tokenomy.spec", encoding="utf-8").read()
