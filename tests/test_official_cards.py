@@ -141,10 +141,10 @@ def test_card_fallback_uses_local_estimate_and_spark():
 # ── 고스트(예측) + forecast 텍스트 — active 버킷 2스냅샷 ───────────────────────
 def test_active_bucket_ghost_and_forecast():
     conn = _conn()
-    # 로컬 소비 시드: rate = 450 / 15영업일(6/1~6/21) = 30/일
-    # → 예상 used = 820 + 30×7(영업일 6/22~6/30) = 1030 > 1000 → 고스트
-    # → exhaust = ceil(180/30) = 6영업일 후 = 6/29 < 7/1 → dday_warning=True
-    conn.execute(
+    # 기울기=공식(ADR 0015 D3). 단일 윈도우 내 스냅샷 → (b)월초누적 820/15영업일(6/1~6/21)≈54.67/일
+    # → 예상 used = 820 + 54.67×7(영업일 6/22~6/30) > 1000 → 고스트
+    # → exhaust = ceil(180/54.67)=4영업일 후 = 6/25 < 7/1 → dday_warning=True
+    conn.execute(    # 로컬 소비(무시돼야 — 공식 기울기로 전환)
         "INSERT INTO messages(dedup_key,provider,session_id,project,ts,model,"
         "input_tokens,cache_creation,cache_read,cost_usd,priced) "
         "VALUES('k','claude','s','/p','2026-06-15T01:00:00Z','claude-opus-4-8',0,0,0,450.0,1)")
@@ -385,7 +385,7 @@ def test_forecast_chart_line_anchored_on_official_used():
 def test_card_forecast_text_surplus_or_exhaust():
     conn = _conn()
     _seed(conn, "claude", [_bucket(used_usd=30.0, limit_usd=100.0, utilization=30.0)])
-    # 로컬 소비로 기울기 발생(작은 rate → 리셋 시 여유)
+    # 기울기=공식 월초누적(30/8≈3.75/일 → 작은 rate → 리셋 시 여유). 아래 로컬은 무시됨.
     conn.execute(
         "INSERT INTO messages(dedup_key,provider,session_id,project,ts,model,"
         "input_tokens,cache_creation,cache_read,cost_usd,priced) "

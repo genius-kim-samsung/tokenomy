@@ -1303,37 +1303,39 @@ def test_official_view_codex_monthly_only_no_weekly():
     assert {b["bucket_key"] for b in v.buckets} == {"monthly"}
 
 
-def test_official_view_lens_uses_local_rate():
+def test_official_view_lens_uses_official_rate():
+    # 카드 고스트도 공식 기울기(ADR 0015 D3) — 단일 스냅샷 → 공식 월초누적, 로컬 거액은 무시.
     conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
-                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")],
+                            buckets=[_ob("monthly", "monthly_limit", 40.0, 100.0, raw="spend")],
                             created_at="x")
-    _insert(conn, "2026-05-01T01:00:00Z", 1.0, provider="claude", session="anchor")  # 창 밖 앵커 → 풀 창 분모(10)
-    _insert(conn, "2026-06-05T01:00:00Z", 100.0, provider="claude", session="a")  # 100/10영업일 = 10/일(트레일링)
+    _insert(conn, "2026-06-05T01:00:00Z", 999.0, provider="claude", session="a")  # 로컬 — 무시돼야
     v = official_view(conn, "claude", NOW, 0.04)
     assert v.lens is not None
-    assert v.lens.daily_rate_usd == 10.0
+    assert v.lens.daily_rate_usd == 5.0   # 공식 월초누적 40/8영업일(6/1~6/10), 로컬 999 무시
     assert v.active_key == "monthly"
 
 
-def test_official_view_codex_now_has_lens():
+def test_official_view_codex_lens_uses_official_rate():
+    # Codex 카드 고스트도 공식 기울기 — 로컬은 무시.
     conn = connect(":memory:")
-    _insert(conn, "2026-05-01T01:00:00Z", 1.0, provider="codex", session="anchor")  # 창 밖 앵커 → 풀 창 분모(10)
-    _insert(conn, "2026-06-05T01:00:00Z", 50.0, provider="codex", session="a")  # 50/10 = 5/일(트레일링)
+    _insert(conn, "2026-06-05T01:00:00Z", 999.0, provider="codex", session="a")  # 로컬 — 무시
     insert_official_buckets(conn, provider="codex", fetched_at="2026-06-10T09:00:00+09:00",
-                            buckets=[_ob("monthly", "codex_monthly", 20.0, 80.0, raw="individual_limit",
-                                         unit="credit", util=25.0)],
+                            buckets=[_ob("monthly", "codex_monthly", 40.0, 80.0, raw="individual_limit",
+                                         unit="credit", util=50.0)],
                             created_at="x")
     v = official_view(conn, "codex", NOW, 0.04)
     assert v.lens is not None
-    assert v.lens.daily_rate_usd == 5.0
+    assert v.lens.daily_rate_usd == 5.0   # 공식 월초누적 40/8
 
 
-def test_lens_none_rate_without_local_spend():
+def test_lens_none_rate_without_official_used():
+    # 공식 used=0 → (a)트레일링 불가·(b)월초누적 0 → 고스트 기울기 None(로컬 있어도 무시).
     conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
-                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend")],
+                            buckets=[_ob("monthly", "monthly_limit", 0.0, 100.0, raw="spend")],
                             created_at="x")
+    _insert(conn, "2026-06-05T01:00:00Z", 100.0, provider="claude", session="a")  # 로컬 — 무시
     v = official_view(conn, "claude", NOW, 0.04)
     assert v.lens is not None
     assert v.lens.daily_rate_usd is None
@@ -1645,15 +1647,19 @@ def test_combined_forecast_official_slope_ignores_local_spend():
     assert fc.daily_rate_usd == 5.0
 
 
-def test_lens_uses_trailing_window_not_month_to_date():
+def test_lens_uses_official_trailing_delta():
+    # 카드 고스트도 (a)공식 트레일링 우선: 윈도우 전 베이스(5/20 used50)+윈도우 내(6/10 used150)
+    # → 100/10영업일=10. 로컬 거액은 무시(공식만, ADR 0015 D3).
     conn = connect(":memory:")
-    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
-                            buckets=[_ob("monthly", "monthly_limit", 40.0, 200.0, raw="spend")],
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-05-20T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 50.0, 500.0, raw="spend")],
                             created_at="x")
-    _insert(conn, "2026-05-01T01:00:00Z", 999.0, provider="claude")  # 창 밖 제외
-    _insert(conn, "2026-06-05T01:00:00Z", 100.0, provider="claude")  # 창 안
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 150.0, 500.0, raw="spend")],
+                            created_at="x")
+    _insert(conn, "2026-06-05T01:00:00Z", 999.0, provider="claude")  # 로컬 — 무시
     v = official_view(conn, "claude", NOW, 0.04)
-    assert v.lens.daily_rate_usd == 10.0
+    assert v.lens.daily_rate_usd == 10.0   # 공식 트레일링 100/10, 로컬 무시
 
 
 # ─── Commit 2(활성 AI): providers 필터(WHERE provider IN) ─────────────────────

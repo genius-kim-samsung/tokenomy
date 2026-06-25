@@ -213,13 +213,17 @@ def _row_to_bucket_dict(r) -> dict:
 
 def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
                       limit_usd: float | None, used_usd: float | None,
-                      reset_date: date | None, weeks: int = 2) -> OfficialLens | None:
-    """로컬 일일 소비속도(local_daily_rate)로 소진예상·리셋 D-day 산출.
+                      reset_date: date | None, weeks: int = 2,
+                      *, pool_used: float | None = None) -> OfficialLens | None:
+    """공식 일일 소비속도(official_daily_rate)로 소진예상·리셋 D-day 산출(ADR 0015 D3).
 
-    rate = 트레일링 창(오늘 포함 weeks×7일) 로컬 소비 ÷ 그 창의 영업일. 소비가 없으면 daily_rate=None.
+    rate = 공식 스냅샷 기반 기울기((a)트레일링 델타 → (b)월초누적 폴백). 로컬 기울기 폐기 —
+    카드 고스트도 히어로(combined_forecast)와 같은 엔진으로 공식 계정 전체 속도를 쓴다.
+    공식 소비가 없으면 daily_rate=None. provider 풀에 USD 한도 버킷이 둘 이상이면(예: Claude
+    월간+이벤트) rate는 풀 합산 기울기 — active 버킷이 그 풀의 주 소진처라 근사로 타당하다.
     bucket_key는 반환값 식별용으로만 사용(rate 계산에 미사용).
     """
-    rate = local_daily_rate(conn, provider, now_kst, weeks)
+    rate = official_daily_rate(conn, [provider], now_kst, weeks, pool_used=pool_used)
 
     exhaust_date: date | None = None
     if rate and limit_usd and used_usd is not None and limit_usd > used_usd:
@@ -242,7 +246,7 @@ def official_view(conn, provider: str, now_kst: datetime,
     - 활성 버킷 선정(1차): 후보(monthly_limit/event_credit/codex_monthly 중 stale 제외)의
       series 최근 두 스냅샷 used 양의 차분이 가장 큰 버킷 — 동률은 tie-break(event<monthly).
       (2차) 양의 차분이 없으면 remaining>0 첫 버킷; 없으면 첫 후보. promo/rate_window는 항상 제외.
-    - 예측 렌즈(lens)는 로컬 rate 기반으로 provider 공통 제공. 로컬 소비가 없으면 daily_rate=None.
+    - 예측 렌즈(lens) rate는 공식 기울기(official_daily_rate, ADR 0015 D3). 공식 소비가 없으면 daily_rate=None.
     """
     from tokenomy.db import latest_official_snapshot, get_fetch_state, official_bucket_series
 
@@ -317,9 +321,10 @@ def official_view(conn, provider: str, now_kst: datetime,
 
         active_key = active["bucket_key"]
         reset_date = parse_ts(active["resets_at"]).date() if active["resets_at"] else None
-        # 렌즈는 로컬 rate라 provider 공통(Claude/Codex 모두 적용).
+        # 렌즈 rate=공식(official_daily_rate, ADR 0015 D3). pool_used=이 provider 풀 누적(=(b)월초누적 분자).
         lens = _lens_from_series(conn, provider, active_key, now_kst,
-                                 active["limit_usd"], active["used_usd"], reset_date, weeks)
+                                 active["limit_usd"], active["used_usd"], reset_date, weeks,
+                                 pool_used=pool_used)
 
     note = None if rows else "공식 미취득 — 로컬 추정(USD)"
     return OfficialView(
@@ -392,17 +397,6 @@ def trailing_window_spend(conn, provider: str | None, now_kst: datetime, weeks: 
     """트레일링 창(오늘 포함 weeks×7일)의 로컬 cost_usd 합. 번다운 없이 총소비."""
     start, nxt = _trailing_window_bounds(now_kst, weeks)
     return round(sum((r["cost_usd"] or 0) for r in _range_rows(conn, provider, start, nxt, providers=providers)), 4)
-
-
-def local_daily_rate(conn, provider: str, now_kst: datetime, weeks: int = 2) -> float | None:
-    """provider의 트레일링 창(오늘 포함 weeks×7일) 로컬 소비 ÷ 그 창의 영업일(USD/영업일).
-
-    소비속도는 청구 리셋과 무관한 행동 속성이라 트레일링 창으로 추정한다(ADR 0004 후속:
-    월초 누적 → 트레일링). 분모는 적응형(_trailing_business_days). 소비/창이 없으면 None.
-    """
-    elapsed = _trailing_business_days(conn, now_kst, weeks, provider=provider)
-    spend = trailing_window_spend(conn, provider, now_kst, weeks)
-    return round(spend / elapsed, 4) if (elapsed > 0 and spend > 0) else None
 
 
 def _pool_used_at(conn, providers: list[str], T: datetime) -> float | None:
