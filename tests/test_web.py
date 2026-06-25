@@ -168,6 +168,27 @@ def test_official_section_renders_period_card(tmp_path, monkeypatch):
     assert "기간별 사용량" in html and "이번달" in html
 
 
+def test_period_card_template_shows_baseline_and_omits_when_none():
+    """_period_card.html — 기준값(prev_usd) 있으면 '· 어제 $X' 병기, None이면 그 칸은 꼬리 생략(ADR 0018)."""
+    ctx = {
+        "mode": "local", "source_label": "이 기기 · 추정", "disclaimer": "추정",
+        "has_data": True, "partial_warning": False, "share_text": None,
+        "date_label": "2026-06-26",
+        "periods": [
+            {"key": "오늘", "usd": 8.0, "state": "complete",
+             "pace": {"dir": "up", "pct": 100}, "prev_usd": 4.0, "prev_label": "어제"},
+            {"key": "이번주", "usd": 24.0, "state": "complete",
+             "pace": {"dir": "down", "pct": 20}, "prev_usd": 30.0, "prev_label": "지난주"},
+            {"key": "이번달", "usd": 80.0, "state": "complete",
+             "pace": None, "prev_usd": None, "prev_label": "지난달"},
+        ],
+    }
+    html = app_module.templates.env.get_template("_period_card.html").render(period_card=ctx)
+    assert "어제 $4.00" in html and "지난주 $30.00" in html   # 기준값 화면 병기
+    assert "▲" in html and "100%" in html                    # 페이스 ▲ + %
+    assert "지난달" not in html                                # prev_usd None → 꼬리·라벨 생략
+
+
 def test_official_section_no_share_card_without_pool(tmp_path, monkeypatch):
     """rate-window-only(개인 구독제)면 공유 카드 없음(share None)."""
     from datetime import datetime

@@ -1,5 +1,6 @@
-{# 기간별 사용량 카드(ADR 0017) — 옛 '이번 달 총지출' 단독 카드 + share 카드 통합.
-   오늘·이번주·이번달 동등 3칸 + 이전 동일 구간(same-span) 페이스 ▲▼% + 메신저 복사.
+{# 기간별 사용량 카드(ADR 0017·0018) — 옛 '이번 달 총지출' 단독 카드 + share 카드 통합.
+   오늘·이번주·이번달 세로 리스트 + 이전 기간 *전체* 페이스 ▲▼% + 기준값 병기(어제/지난주/지난달 $)
+   + 메신저 복사. 기준값을 화면에 적어 hover 없이 '무엇 대비'가 보인다(ADR 0018, 0017 §4 supersede).
    출처는 A군 모드 게이트(ADR 0015): 엔터=공식·계정 전체 / 구독=이 기기·공개 단가 환산.
    △=오늘/이번주 추적 공백으로 부풀 수 있음(공식만) — 보내는 사람에게만 경고, 복사 문구는 깨끗. #}
 <section class="card period-card" data-mode="{{ period_card.mode }}">
@@ -12,17 +13,16 @@
   {% if not period_card.has_data %}
   <p class="muted">데이터 없음 · 사이드바 [↻ 수집]을 누르세요</p>
   {% else %}
-  <p class="period-row" style="display:flex;gap:1.6rem;align-items:baseline;font-variant-numeric:tabular-nums;font-size:1.05rem">
+  <div class="period-list">
     {% for p in period_card.periods %}
-    <span class="period-cell">
-      <span class="muted">{{ p.key }}</span>
-      {% if p.state == "none" or p.usd is none %}<span class="muted">—</span>
-      {% else %}<strong>${{ '%.2f'|format(p.usd) }}</strong>{% if p.state == "partial" %}<span class="muted" title="추적 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
-      {% if p.pace %}<span class="pace pace-{{ p.pace.dir }}" title="이전 동일 구간 대비"
-        >{% if p.pace.dir == "up" %}▲{% elif p.pace.dir == "down" %}▼{% else %}≈{% endif %}{% if p.pace.pct %} {{ p.pace.pct }}%{% endif %}</span>{% endif %}
-    </span>
+    <div class="period-line">
+      <span class="period-key">{{ p.key }}</span>
+      <span class="period-amt">{% if p.state == "none" or p.usd is none %}<span class="muted">—</span>{% else %}<strong>${{ '%.2f'|format(p.usd) }}</strong>{% if p.state == "partial" %}<span class="muted" title="추적 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}</span>
+      <span class="pace{% if p.pace %} pace-{{ p.pace.dir }}{% endif %}"{% if p.pace and p.prev_usd is not none %} title="{{ p.prev_label }} 전체 대비"{% endif %}>{% if p.pace %}{% if p.pace.dir == "up" %}▲{% elif p.pace.dir == "down" %}▼{% else %}≈{% endif %}{% if p.pace.pct %} {{ p.pace.pct }}%{% endif %}{% endif %}</span>
+      <span class="period-base">{% if p.prev_usd is not none %}· {{ p.prev_label }} ${{ '%.2f'|format(p.prev_usd) }}{% endif %}</span>
+    </div>
     {% endfor %}
-  </p>
+  </div>
   {% if period_card.partial_warning %}
   <p class="muted" style="font-size:.78rem;margin:.1rem 0 0">⚠ 추적 공백으로 부풀 수 있어요 — 공유 전 확인하세요(복사 문구엔 표시 안 됨)</p>
   {% endif %}

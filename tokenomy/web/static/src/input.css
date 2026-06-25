@@ -258,8 +258,13 @@
   .chip-est { @apply bg-card text-muted; border: 1px dashed var(--color-line); }
   .chip-warn { @apply text-exceeds; background: #f7e3e3; }
 
-  /* 기간별 사용량 카드(ADR 0017) — 오늘/이번주/이번달 동등 셀 + 이전 동일 구간 페이스 신호 */
-  .period-cell { @apply inline-flex items-baseline gap-1; }
+  /* 기간별 사용량 카드(ADR 0017·0018) — 오늘/이번주/이번달 세로 리스트 + 이전 기간 전체 페이스·기준값.
+     grid + .period-line{display:contents}로 기간명·금액·페이스·기준값 4열을 행 간에 정렬한다. */
+  .period-list { @apply grid items-baseline gap-x-3 gap-y-1 mt-1 tabular-nums text-[15px]; grid-template-columns: max-content max-content max-content 1fr; }
+  .period-line { display: contents; }
+  .period-key { @apply text-muted; }
+  .period-amt { @apply text-right; }
+  .period-base { @apply text-muted text-[13px]; }
   /* 페이스: 화살표가 방향을 말하므로 색은 옅게(과한 경보 회피). ▲=더 씀·▼=덜 씀 */
   .pace { @apply text-[12px] font-medium tabular-nums; }
   .pace-up { @apply text-warn; }

@@ -617,21 +617,21 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
 
 
 def _period_windows(now_kst: datetime) -> list[tuple]:
-    """오늘/이번주/이번달 — (key, cur_start, prev_start, prev_end). 현재 구간 end는 항상 now.
+    """오늘/이번주/이번달 — (key, cur_start, prev_start, prev_end, prev_label). 현재 end는 항상 now.
 
-    prev_*는 '이전 동일 구간'(same-span, ADR 0017): 오늘↔어제 같은 시각, 이번주↔지난주 같은
-    요일·시각, 이번달↔지난달 같은 날까지. 각 주기 *안*의 두 누적을 견주므로 월 리셋을 안 가른다.
+    prev_*는 '이전 기간 *전체*'(ADR 0018이 0017 §4 same-span을 supersede): 어제 하루 전체·
+    지난주 한 주 전체·지난달 한 달 전체. prev_end = 현재 구간 시작(= 직전 기간의 끝 경계)이라
+    이전 *전체* 달력 구간을 가리키고, 사이클별 자기 합산이라 월 리셋을 빼기로 가로지르지 않는다.
     """
     now = now_kst.astimezone(KST)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())   # 월요일 0시 KST
     month_start = today_start.replace(day=1)
     prev_month_start = (month_start - timedelta(days=1)).replace(day=1)
-    elapsed = now - month_start
     return [
-        ("오늘", today_start, today_start - timedelta(days=1), now - timedelta(days=1)),
-        ("이번주", week_start, week_start - timedelta(days=7), now - timedelta(days=7)),
-        ("이번달", month_start, prev_month_start, prev_month_start + elapsed),
+        ("오늘", today_start, today_start - timedelta(days=1), today_start, "어제"),
+        ("이번주", week_start, week_start - timedelta(days=7), week_start, "지난주"),
+        ("이번달", month_start, prev_month_start, month_start, "지난달"),
     ]
 
 
@@ -656,12 +656,14 @@ _LOCAL_DISCLAIMER = "공개 API 단가 기준 추정 · 이 기기의 Claude Cod
 
 
 def period_card_context(conn, config: dict, now_kst: datetime | None = None) -> dict | None:
-    """기간별 사용량 카드(ADR 0017) — 오늘·이번주·이번달 동등 3칸 + same-span 페이스.
+    """기간별 사용량 카드(ADR 0017·0018) — 오늘·이번주·이번달 동등 3칸 + 이전 기간 전체 페이스·기준값.
 
     A군 모드 게이트(ADR 0015): 엔터=공식 통합 풀(오늘/이번주=스냅샷 이력 델타, 이번달=라이브
-    pool_used), 구독/로컬=로컬 JSONL 달력 기간 합(이 기기 추정). 각 기간에 이전 동일 구간 대비
-    ▲▼%를 **비교 데이터 충분 시에만** 단다(공식은 경계 관측 게이트, 로컬은 이전 구간 합>0이면).
-    활성 0개·온보딩이면 None(카드 없음). 로컬·메시지 없음이면 has_data=False(데이터 없음 너지).
+    pool_used), 구독/로컬=로컬 JSONL 달력 기간 합(이 기기 추정). 각 기간에 **이전 기간 전체**(어제/
+    지난주/지난달) 대비 ▲▼%와 그 **기준값**(prev_usd/prev_label)을 병기한다(ADR 0018). 페이스는
+    비교 데이터 충분 시에만(공식은 경계 관측 게이트로 prev=None이면 꼬리·% 생략, 로컬은 이전 합>0이면
+    %; 로컬 기준값은 미관측 개념이 없어 0 포함 항상 표시). 활성 0개·온보딩이면 None(카드 없음).
+    로컬·메시지 없음이면 has_data=False(데이터 없음 너지).
     """
     now = now_kst or datetime.now(KST)
     active = tracked_providers(config)
@@ -680,12 +682,14 @@ def period_card_context(conn, config: dict, now_kst: datetime | None = None) -> 
         cur = {"오늘": pool.today, "이번주": pool.week,
                "이번달": PeriodSpend(usd=pool.month_usd, state="complete")}
         periods = []
-        for key, _cur_start, ps, pe in windows:
+        for key, _cur_start, ps, pe, prev_label in windows:
             c = cur[key]
+            # 이전 *전체* 기간(어제/지난주/지난달) 공식 소비 — 경계 미관측이면 None(꼬리·% 생략).
             prev = official_span_spend(conn, providers, ps, pe,
                                        max_gap_minutes=max_gap, is_pooled=is_pooled)
             pace = _pace(c.usd, prev) if c.state == "complete" else None
-            periods.append({"key": key, "usd": c.usd, "state": c.state, "pace": pace})
+            periods.append({"key": key, "usd": c.usd, "state": c.state, "pace": pace,
+                            "prev_usd": prev, "prev_label": prev_label})
         return {
             "mode": "official", "source_label": "공식 · 계정 전체",
             "disclaimer": "공식 API 사용량 · 계정 전체(전 기기)",
@@ -707,11 +711,13 @@ def period_card_context(conn, config: dict, now_kst: datetime | None = None) -> 
     cur = {"오늘": pool.today, "이번주": pool.week,
            "이번달": PeriodSpend(usd=pool.month_usd, state="complete")}
     periods = []
-    for key, _cur_start, ps, pe in windows:
+    for key, _cur_start, ps, pe, prev_label in windows:
         c = cur[key]
-        # 로컬은 로그가 연속이라 이전 구간 합>0이면 페이스 표시(_pace가 게이트).
+        # 이전 *전체* 기간 합(어제/지난주/지난달). 로컬은 미관측 개념이 없어 기준값 항상 표시(0 포함),
+        # 페이스만 이전 합>0일 때(_pace가 게이트).
         prev = range_spend(conn, None, ps, pe, providers=active)
-        periods.append({"key": key, "usd": c.usd, "state": "complete", "pace": _pace(c.usd, prev)})
+        periods.append({"key": key, "usd": c.usd, "state": "complete", "pace": _pace(c.usd, prev),
+                        "prev_usd": prev, "prev_label": prev_label})
     return {
         "mode": "local", "source_label": _LOCAL_SOURCE, "disclaimer": _LOCAL_DISCLAIMER,
         "has_data": True, "periods": periods, "partial_warning": False,
