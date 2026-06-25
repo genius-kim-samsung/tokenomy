@@ -38,6 +38,10 @@
       <button class="btn-sm" type="submit" title="모든 AI 공식 사용량 갱신">↻ 전체 갱신</button>
     </form>
   </div>
+  {# 개인구독제(ADR 0015 D4): 공식 신호는 이용 한도 창(스로틀)뿐 — 소비액은 로컬 추정으로 안내. #}
+  {% if account_mode == "subscription" %}
+  <p class="muted" style="font-size:.82rem;margin:-.2rem 0 .6rem">ⓘ 개인 구독제 — 공식 신호는 이용 한도 창(스로틀)뿐이에요. 소비액 추정은 위 <strong>이번 달 총지출</strong>(이 기기·로컬)을 보세요.</p>
+  {% endif %}
   <div class="official-grid">
     {% for c in official_cards %}
     <article class="provider-card" data-status="{{ c.status }}" style="--accent: {{ c.accent }}">

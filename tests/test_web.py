@@ -426,6 +426,49 @@ def test_dashboard_official_headline_renders_zone_chip(tmp_path, monkeypatch):
     assert "공식 · 계정 전체" in r.text
 
 
+# ── 개인구독 레이아웃(ADR 0015 5단계) ──────────────────────────────────────────
+
+def test_dashboard_local_headline_renders_zone_chip(tmp_path, monkeypatch):
+    # 로컬 헤드라인(개인구독) → 총지출 "이 기기 · 추정" 칩(D7 로컬 대칭). "공식 · 계정 전체"는 official 섹션 1회만.
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    (tmp_path / "cfg.json").write_text(json.dumps(
+        {"tracked_providers": ["claude"], "account_mode": "subscription"}),
+        encoding="utf-8")
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s','2026-06-05T10:00:00Z',7.5,1)")
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "이 기기 · 추정" in r.text                 # 총지출 로컬 존 칩(D7)
+    assert r.text.count("공식 · 계정 전체") == 1      # official 섹션 존 헤더만(총지출엔 없음)
+
+
+def test_official_section_subscription_throttle_framing(tmp_path, monkeypatch):
+    # 개인구독제: rate-window 게이지를 '이용 한도(스로틀)'로 프레이밍(D4·유일 공식 신호).
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.official_parser import OfficialBucket
+    from tokenomy.web.views import official_section_context
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    insert_official_buckets(
+        conn, provider="claude", fetched_at="2026-06-10T12:00:00+09:00",
+        created_at="2026-06-10T12:00:00+09:00",
+        buckets=[OfficialBucket(
+            bucket_key="rate_window", raw_key="five_hour", bucket_kind="rate_window",
+            label="5시간 한도", native_unit="percent", used_native=50.0, limit_native=100.0,
+            remaining_native=50.0, used_usd=None, limit_usd=None, remaining_usd=None,
+            utilization=50.0, resets_at=None)])
+    now = datetime(2026, 6, 10, 15, 0, tzinfo=KST)
+    sub = official_section_context(conn, {"tracked_providers": ["claude"], "account_mode": "subscription"}, now_kst=now)
+    html = app_module.templates.env.get_template("_official_section.html").render(sub)
+    assert "스로틀" in html                  # rate-window를 이용 한도/스로틀로 프레이밍(D4)
+    ent = official_section_context(conn, {"tracked_providers": ["claude"], "account_mode": "enterprise"}, now_kst=now)
+    html2 = app_module.templates.env.get_template("_official_section.html").render(ent)
+    assert "스로틀" not in html2             # 엔터프라이즈엔 스로틀 프레이밍 노트 없음
+
+
 def _client_with_config(tmp_path, monkeypatch):
     """_client(=config 격리됨) + 그 config 파일 경로를 함께 돌려준다."""
     client, _ = _client(tmp_path, monkeypatch)   # TOKENOMY_CONFIG → tmp_path/cfg.json

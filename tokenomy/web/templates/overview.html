@@ -39,7 +39,8 @@
 
 <section class="card">
   <h2>이번 달 총지출 {% if combined %}<span class="muted">(전 AI 합산)</span>{% elif solo_label %}<span class="muted">({{ solo_label }})</span>{% endif %}
-    {% if headline_official %}<span class="chip chip-official" title="공식 API 기준 · 전 기기 합">공식 · 계정 전체</span>{% endif %}</h2>
+    {% if headline_official %}<span class="chip chip-official" title="공식 API 기준 · 전 기기 합">공식 · 계정 전체</span>
+    {% elif has_data and not active_empty %}<span class="chip chip-est" title="공개 API 단가 기준 추정 · 이 기기의 Claude Code와 Codex만">이 기기 · 추정</span>{% endif %}</h2>
   {% if active_empty %}
     <p class="muted">표시할 AI가 없습니다 — <a href="/settings">설정</a>에서 켜세요.</p>
   {% elif headline_official %}

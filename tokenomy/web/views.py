@@ -571,6 +571,8 @@ def official_section_context(conn, config: dict, now_kst: datetime | None = None
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
         # 공유 카드(사용량 공유 문구) — 풀 없으면 None. 섹션 partial에 실어 글랜스와 같은 주기 갱신.
         "share": share_context(conn, config, now),
+        # 개인구독제(ADR 0015 D4): rate-window 게이지를 '이용 한도(스로틀)'로 프레이밍하는 분기 신호.
+        "account_mode": account_mode(config),
     }
 
 
