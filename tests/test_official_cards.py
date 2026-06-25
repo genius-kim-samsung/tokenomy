@@ -78,7 +78,7 @@ def test_card_official_ok_gauge_levels():
     _seed(conn, "claude", [_bucket(utilization=80.0, used_usd=80.0, remaining_usd=20.0)])
     card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
     assert card["status"] == "ok"
-    assert card["fallback"] is None
+    assert card.get("fallback") is None
     g = card["gauges"][0]
     assert g["label"] == "월 사용 한도"
     assert g["level"] == "warn"          # 80% → warn
@@ -124,8 +124,8 @@ def test_codex_card_has_no_weekly_estimate_gauge():
     assert "이번 주" not in labels
 
 
-# ── 카드: 공식 없음 → 사용량 전용 폴백 ────────────────────────────────────────
-def test_card_fallback_uses_local_estimate_and_spark():
+# ── 카드: 공식 없음 → 로컬 폴백 없이 깨끗한 no_data(ADR 0015 D8) ────────────────
+def test_card_no_official_omits_local_fallback():
     conn = _conn()
     for k, ts, c in [("a", "2026-06-10T10:00:00Z", 5.0), ("b", "2026-06-12T10:00:00Z", 7.0)]:
         conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
@@ -134,8 +134,7 @@ def test_card_fallback_uses_local_estimate_and_spark():
     card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
     assert card["status"] == "no_data"
     assert card["gauges"] == []
-    assert card["fallback"]["estimate_usd"] == 12.0
-    assert card["fallback"]["spark"] is not None
+    assert card.get("fallback") is None   # 로컬 추정$·스파크 폴백 미생성(공식만)
 
 
 # ── 고스트(예측) + forecast 텍스트 — active 버킷 2스냅샷 ───────────────────────

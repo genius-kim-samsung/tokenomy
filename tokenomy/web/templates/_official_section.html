@@ -33,7 +33,7 @@
 
 <section class="card">
   <div class="card-head">
-    <h2>AI별 사용량</h2>
+    <h2>AI별 사용량 <span class="chip chip-official" title="공식 API 기준 · 전 기기 합">공식 · 계정 전체</span></h2>
     <form hx-post="/official/refresh" hx-target="#official-section" hx-swap="innerHTML" class="provider-refresh-form">
       <button class="btn-sm" type="submit" title="모든 AI 공식 사용량 갱신">↻ 전체 갱신</button>
     </form>
@@ -58,7 +58,7 @@
         </span>
       </header>
 
-      {# 공식 기간 소비 글랜스(ADR 0011) — 게이지 위 한 줄. 출처=공식 스냅샷 델타·계정 전체. #}
+      {# 공식 기간 소비 글랜스(ADR 0011) — 게이지 위 한 줄. 출처 라벨은 존 헤더 1회(ADR 0015 D7). #}
       {% if c.glance %}
       <div class="glance-line" style="display:flex;gap:1rem;align-items:baseline;margin:.1rem 0 .55rem;font-variant-numeric:tabular-nums">
         <span><span class="muted">오늘</span>
@@ -69,7 +69,6 @@
           {% if c.glance.week.state == "none" %}<span class="muted">—</span>
           {% else %}<strong>${{ '%.2f'|format(c.glance.week.usd) }}</strong>{% if c.glance.week.state == "partial" %}<span class="muted" title="이번주 시작 전 관측 없음 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
         </span>
-        <span class="chip chip-official" style="margin-left:auto" title="공식 API 기준 · 전 기기 합">공식 · 계정 전체</span>
       </div>
       {% if c.glance.today.state == "partial" and c.glance.today.observed_from %}
       <p class="muted" style="font-size:.78rem;margin:-.4rem 0 .55rem">오늘 {{ c.glance.today.observed_from[11:16] }}부터 관측 · 이전 구간 공백으로 부풀 수 있음</p>
@@ -98,16 +97,9 @@
       </div>
       {% endfor %}
 
-      {% if c.fallback %}
-      <div class="fallback">
-        <p class="fallback-num serif">${{ '{:,.2f}'.format(c.fallback.estimate_usd) }} <span class="chip chip-est">추정</span></p>
-        {% if c.fallback.spark %}
-        <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none" aria-hidden="true">
-          <polyline points="{{ c.fallback.spark }}"></polyline>
-        </svg>
-        {% endif %}
-        <p class="muted">공식 미취득 · 로컬 추정</p>
-      </div>
+      {# 공식 미취득(no_data) — 로컬 추정으로 폴백하지 않고 깨끗한 빈 상태(ADR 0015 D8). #}
+      {% if c.status == "no_data" and not c.gauges %}
+      <p class="provider-empty muted">공식 사용량 미취득 — 위 ↻로 갱신하세요</p>
       {% endif %}
 
       {% if c.note %}<p class="provider-note">⚠ {{ c.note }}</p>{% endif %}
@@ -116,5 +108,5 @@
     <p class="muted">표시할 AI가 없습니다 — <a href="/settings">설정</a>에서 켜면 공식 사용량을 자동으로 가져옵니다.</p>
     {% endfor %}
   </div>
-  <p class="disclaimer">ⓘ <span class="src-official">공식</span>=AI별 공식 API · <span class="src-est">추정</span>=로컬 사용 로그(이 기기 Claude Code와 Codex)</p>
+  <p class="disclaimer">ⓘ <span class="src-official">공식</span> AI별 공식 API 사용량 · 계정 전체(전 기기 합)</p>
 </section>

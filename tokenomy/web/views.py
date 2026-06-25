@@ -322,7 +322,8 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
     """OfficialView + fetch 상태 → 카드 1개 표시 모델.
 
     공식 버킷이 있으면 게이지(만료 버킷 제외)를 보여준다. fetch 실패면 스탈+경고.
-    공식 데이터가 전혀 없으면 사용량 전용 폴백(로컬 추정 + 스파크라인).
+    공식 데이터가 전혀 없으면 로컬 추정으로 폴백하지 않고 깨끗한 no_data(공식만, ADR 0015 D8) —
+    템플릿이 '공식 사용량 미취득' 빈 상태를 띄우고 헤더 ↻로 갱신을 유도한다.
     """
     meta = _PROVIDER_META.get(provider, {"label": provider.title(), "accent": "#6c6a64"})
     fs_status = fetch_state["last_status"] if fetch_state else None
@@ -330,7 +331,6 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
     has_official = view.status == "ok" and bool(view.buckets)
 
     gauges: list[dict] = []
-    fallback = None
     if has_official:
         for b in view.buckets:
             # 만료(resets_at 과거) 버킷은 더 이상 actionable이 아니므로 숨긴다.
@@ -341,10 +341,6 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
         status = "error" if fs_status in ("auth_error", "http_error") else "ok"
     else:
         status = "no_data"
-        fallback = {
-            "estimate_usd": month_spend(conn, provider, now_kst),
-            "spark": _sparkline_points(daily_series(conn, provider, now_kst)),
-        }
 
     # 공식 기간 소비 글랜스(ADR 0011) — USD 풀 있는 provider만(스코프 게이트).
     # rate-window-only(개인 구독제)·공식 미취득은 pool_limit_usd None → 글랜스 줄 숨김.
@@ -359,7 +355,6 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
         "fetched_at": view.fetched_at,                # 절대 ISO — JS rel-time tick의 기준
         "note": note,
         "gauges": gauges,
-        "fallback": fallback,
         "glance": glance,
     }
 

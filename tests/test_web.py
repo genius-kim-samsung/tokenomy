@@ -1114,12 +1114,47 @@ def test_analysis_disclaimer_names_surface_axis(tmp_path, monkeypatch):
     assert "이 기기 데이터만" not in html
 
 
-def test_official_section_legend_names_surface(tmp_path, monkeypatch):
-    """공식 카드 단서의 '추정' 출처도 표면 축(이 기기 Claude Code와 Codex)을 동형으로 보강."""
+def test_official_section_legend_official_account_wide(tmp_path, monkeypatch):
+    """공식 섹션 범례=공식 출처·계정 전체(전 기기). 로컬 추정 단서는 제거(ADR 0015 D7/D8)."""
     client, cfg = _client_with_config(tmp_path, monkeypatch)
     cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
     html = client.get("/official/section").text
-    assert "이 기기 Claude Code와 Codex" in html
+    assert "계정 전체" in html                              # 존 레벨 공식 출처 라벨
+    assert "이 기기 Claude Code와 Codex" not in html       # 로컬 추정 단서는 로컬 존으로 이전
+
+
+def test_official_section_source_chip_zone_level_once(tmp_path, monkeypatch):
+    """출처 칩 '공식 · 계정 전체'는 존(섹션) 1회 — provider 카드마다 반복 안 함(ADR 0015 D7)."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import official_section_context
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_glance_history(conn, "claude", [(9, 20.0), (10, 30.0)])
+    _seed_glance_history(conn, "codex", [(9, 10.0), (10, 15.0)])
+    ctx = official_section_context(conn, {"tracked_providers": ["claude", "codex"]},
+                                   now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
+    html = app_module.templates.env.get_template("_official_section.html").render(ctx)
+    assert html.count("공식 · 계정 전체") == 1   # 존 헤더 1회(카드 글랜스칩 반복 제거)
+
+
+def test_official_section_no_official_clean_state_no_estimate(tmp_path, monkeypatch):
+    """공식 미취득 카드는 로컬 추정$·스파크 없이 '공식 미취득' 깨끗한 상태(ADR 0015 D8)."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import official_section_context
+    _, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
+                 "VALUES ('a','claude','s','2026-06-10T10:00:00Z',12.0,1)")
+    conn.commit()
+    ctx = official_section_context(conn, {"tracked_providers": ["claude"]},
+                                   now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
+    html = app_module.templates.env.get_template("_official_section.html").render(ctx)
+    assert "공식 사용량 미취득" in html      # 깨끗한 빈 상태 안내
+    assert "로컬 추정" not in html           # 폴백 문구 제거
+    assert "chip-est" not in html            # 추정 칩 제거
+    assert "$12.00" not in html              # 로컬 추정$ 미표시
 
 
 def test_settings_shows_credit_to_usd(tmp_path, monkeypatch):
