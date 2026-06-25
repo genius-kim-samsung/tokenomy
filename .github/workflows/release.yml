@@ -56,4 +56,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/Tokenomy-*.exe          # Tokenomy-<버전>.exe (버전 표기 자산)
-          generate_release_notes: true   # 빈 본문 방지(안전망) — 큐레이션 노트는 skill 5.5에서 덮어씀
+          generate_release_notes: true   # 빈 본문 방지(안전망) — 큐레이션 노트는 release-exe 스킬 단계 6에서 덮어씀

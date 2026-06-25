@@ -14,6 +14,21 @@ description: >-
 새 버전의 `Tokenomy.exe`를 GitHub Release로 배포하는 결정적 절차다. 공식 배포본은
 **CI가 빌드한 산출물**이고, 로컬 빌드는 태그 전에 "정말 빌드·실행되는가"를 확인하는 검증 단계다.
 
+> **이런 요청이면 수동으로 하지 말고 이 스킬을 끝까지 따른다.** "릴리스/배포/버전 올려" 류
+> 요청을 손으로 처리하면 마지막 단계(릴리스 노트)를 빠뜨리기 쉽다 — 실제로 그렇게 빈 본문이
+> 나간 적이 있다. CI 성공(5)은 릴리스의 **끝이 아니다.** 아래 완료 정의를 모두 채워야 끝이다.
+
+## 완료 정의 (이게 다 ✓ 돼야 릴리스 끝 — 하나라도 비면 미완)
+
+- [ ] `__version__` == 태그 `v<버전>` (불일치면 CI가 죽는다)
+- [ ] 로컬 `.venv` 빌드 `--version` 스모크 통과
+- [ ] CI `build-windows` success
+- [ ] Release 에셋에 `Tokenomy-<버전>.exe` 존재 + draft 아님
+- [ ] **릴리스 노트 본문 작성됨(`gh release view … --jq '.body|length'` > 0, 자동 변경로그만 있는 빈 껍데기 금지)**
+- [ ] 사용자에게 표로 보고
+
+마지막 두 항목이 가장 잘 누락된다. **CI가 초록불이어도 노트가 비면 릴리스는 미완**이다.
+
 ## 릴리스 메커니즘 (왜 이 순서인가)
 
 `release.yml`은 **태그 push(`v*`)** 에만 트리거되고, 첫 스텝에서 **git 태그 == `tokenomy.__version__`**
@@ -108,11 +123,15 @@ gh release view v<버전> --json tagName,isDraft,url,assets   # Release·에셋 
 에셋에 **`Tokenomy-<버전>.exe`**(버전 표기 파일명) 존재. CI가 빌드 산출물 `Tokenomy.exe`를 태그
 버전으로 복사("Stage versioned artifact" 스텝)해 업로드한다. CI가 실패하면 로그(`gh run view <id> --log-failed`)로 원인 분석.
 
-## 5.5. 릴리스 노트 작성 (사용자용 — 누락 금지)
+> **CI를 기다리는 ~1.5~2분 동안 다음 단계(6)의 노트 초안을 미리 써 둔다.** 그러면 CI가
+> 끝나자마자 `edit` 한 번으로 채워지고, "CI 성공 = 끝"으로 착각해 노트를 빠뜨리는 일이 없다.
+
+## 6. 릴리스 노트 작성 (사용자용 — 릴리스의 일부, 건너뛰면 미완)
 
 CI가 만든 Release는 본문이 **비어 있다**(`action-gh-release`가 `files`만 올림). 그대로 두지 말고
 **사용자가 이해할 한국어 릴리스 노트를 작성해 채운다.** 커밋 메시지(개발자용)가 아니라 "이번
-버전에서 사용자에게 무엇이 달라지나"를 평이하게 쓴다(커밋 로그 나열 금지).
+버전에서 사용자에게 무엇이 달라지나"를 평이하게 쓴다(커밋 로그 나열 금지). 직전 버전 노트를
+형식 참고로 본다: `gh release view v<직전버전> --json body -q .body`.
 
 1. 이번 버전의 변경을 사용자 관점으로 요약한다 — **주요 변경 / 설정·옵션 / 주의사항** 정도로 묶고,
    "왜 좋아지나"를 1~3줄로. 끝에 "아래 `Tokenomy-<버전>.exe`를 받아 실행" 같은 설치 한 줄.
@@ -133,9 +152,9 @@ CI가 만든 Release는 본문이 **비어 있다**(`action-gh-release`가 `file
 > 안전망: `release.yml`의 `action-gh-release`에 `generate_release_notes: true`를 둬, 위 단계를
 > 건너뛰어도 빈 본문은 안 나오게 한다(GitHub 자동 변경로그). 위 큐레이션 노트는 그걸 덮어쓴다.
 
-## 6. 보고
+## 7. 보고
 
-표로 요약한다: 버전 bump 커밋, 로컬 스모크 결과, 태그, CI run 결과(소요시간), **릴리스 노트 작성(본문 길이>0)**, Release URL/에셋명(`Tokenomy-<버전>.exe`)·크기.
+표로 요약한다: 버전 bump 커밋, 로컬 스모크 결과, 태그, CI run 결과(소요시간), **릴리스 노트 작성(본문 길이>0)**, Release URL/에셋명(`Tokenomy-<버전>.exe`)·크기. 보고 전에 위 **완료 정의** 체크리스트가 전부 ✓인지 다시 본다.
 
 ## 게시(gotchas) 요약
 
@@ -143,7 +162,7 @@ CI가 만든 Release는 본문이 **비어 있다**(`action-gh-release`가 `file
 - **빌드는 `.venv`로** — 시스템 Python은 pywebview 누락 → 창 대신 브라우저 fallback.
 - **로컬 빌드는 검증용**, 공개 배포본은 CI 산출물. 로컬 `dist/`는 gitignore(커밋 안 됨).
 - **main + 태그 함께 push.** 태그만 올리면 origin/main이 뒤처진다.
-- **릴리스 노트 누락 금지.** CI Release는 본문이 빈 채로 발행된다 — 5.5에서 사용자용 한국어 노트로 채우고 본문 길이>0을 확인한다. `release.yml`의 `generate_release_notes: true`는 안전망.
+- **릴리스 노트 누락 금지.** CI Release는 본문이 빈 채로 발행된다 — 단계 6에서 사용자용 한국어 노트로 채우고 본문 길이>0을 확인한다(완료 정의 항목). `release.yml`의 `generate_release_notes: true`는 안전망일 뿐 — 자동 변경로그는 사용자용 노트가 아니다.
 - **Release 자산은 버전 표기 파일명** `Tokenomy-<버전>.exe`(CI "Stage versioned artifact" 스텝이 빌드 산출물 `Tokenomy.exe`를 복사). 내부 빌드/스모크는 안정적 이름 `Tokenomy.exe` 유지.
 - **버전 bump은 main에서 직접 편집·커밋이 기본.** 환경이 추적 파일 직접 편집을 막을 때만(가드 존재 시) 워크트리로 우회.
 - **워킹 트리 클린 확인** — 사전 점검에서 `git status --porcelain`이 비어야 한다. 미커밋 추적 변경(빠뜨린 문서·설정)을 릴리스 직전에 발견하는 사고를 막는다.
