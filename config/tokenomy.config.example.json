@@ -9,5 +9,6 @@
   "forecast_settings": {
     "rate_window_weeks": 2
   },
-  "pricing_overrides": {}
+  "pricing_overrides": {},
+  "bucket_overrides": {}
 }

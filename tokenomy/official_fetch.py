@@ -18,7 +18,8 @@ from tokenomy import paths
 from tokenomy.paths import CLAUDE_CREDS, CODEX_AUTH
 from tokenomy.aggregate import official_view, parse_ts
 from tokenomy.config import (
-    account_mode, credit_to_usd, official_fetch_settings, seed_account_mode, tracked_providers,
+    account_mode, bucket_curation_resolver, credit_to_usd, official_fetch_settings,
+    seed_account_mode, tracked_providers,
 )
 from tokenomy.db import (
     get_fetch_state, insert_official_buckets, insert_official_raw, upsert_fetch_state,
@@ -285,8 +286,10 @@ def _maybe_seed_account_mode(config, *, now_kst, conn, results) -> None:
         return
     try:
         cu = credit_to_usd(config)
+        curation = bucket_curation_resolver(config)
+        is_pooled = lambda p, rk, bk: curation(p, rk, bk)["pooled"]   # 풀 멤버십(ADR 0016)
         has_budget = any(
-            official_view(conn, p, now_kst, cu).pool_limit_usd is not None
+            official_view(conn, p, now_kst, cu, is_pooled=is_pooled).pool_limit_usd is not None
             for p in tracked_providers(config)
         )
         seed_account_mode(config, has_usd_budget=has_budget)

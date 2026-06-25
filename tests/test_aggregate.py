@@ -1505,16 +1505,16 @@ def test_combined_forecast_already_exhausted():
 
 
 def test_official_view_pool_sums_monthly_and_credit():
-    # 전망 풀 기여 = 월간 + 포함 크레딧 합. 카드 게이지(period_*)는 월간만 유지.
+    # 전망 풀 기여 = 월간 + opt-in 크레딧 합(ADR 0016: 크레딧은 큐레이션으로 풀 포함). 카드 게이지(period_*)는 월간만.
     conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
                             buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
                                      _ob("event", "event_credit", 125.0, 500.0, raw="cinder",
                                          resets=datetime(2026, 9, 10, tzinfo=KST))],
                             created_at="x")
-    v = official_view(conn, "claude", NOW, 0.04)
+    v = official_view(conn, "claude", NOW, 0.04, is_pooled=_pool_with("cinder"))
     assert v.period_used_usd == 30.0 and v.period_limit_usd == 100.0   # 카드 게이지=월간만
-    assert v.pool_used_usd == 155.0 and v.pool_limit_usd == 600.0      # 풀=월간+크레딧
+    assert v.pool_used_usd == 155.0 and v.pool_limit_usd == 600.0      # 풀=월간+opt-in 크레딧
 
 
 def test_official_view_pool_excludes_expired_credit():
@@ -1536,8 +1536,88 @@ def test_official_view_pool_none_without_usd_limit():
     assert v.pool_used_usd is None and v.pool_limit_usd is None
 
 
+# ─── 버킷 큐레이션: event_credit opt-in 풀(ADR 0016) ─────────────────────────────
+
+
+# 테스트용 is_pooled: 안정 키 + (opt-in한 raw_key) 풀 포함.
+def _pool_with(*opted):
+    return lambda p, rk, bk: bk in ("monthly_limit", "codex_monthly") or rk in opted
+
+
+def test_official_view_event_credit_excluded_from_pool_by_default():
+    # ADR 0016: 회전 코드네임 달러 크레딧은 기본 풀 제외(opt-in). 풀=월간만.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 125.0, 25000.0, raw="amber_ladder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    v = official_view(conn, "claude", NOW, 0.04)
+    assert v.pool_used_usd == 30.0 and v.pool_limit_usd == 100.0   # $25k 유령 천장 제외
+
+
+def test_official_view_event_credit_pooled_when_opted_in():
+    # is_pooled가 opt-in하면 진짜 크레딧을 풀에 합산.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 125.0, 500.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    v = official_view(conn, "claude", NOW, 0.04, is_pooled=_pool_with("cinder"))
+    assert v.pool_used_usd == 155.0 and v.pool_limit_usd == 600.0
+
+
+def test_official_view_excluded_credit_still_shown_as_bucket():
+    # 풀 제외돼도 게이지(buckets)에는 남는다(발견 신호). hidden은 views가 처리.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 125.0, 25000.0, raw="amber_ladder")],
+                            created_at="x")
+    v = official_view(conn, "claude", NOW, 0.04)
+    assert {b["bucket_key"] for b in v.buckets} == {"monthly", "event"}
+
+
+def test_official_view_excluded_credit_not_active():
+    # 풀 제외 크레딧은 active 버킷(렌즈 구동) 후보에서도 빠진다 — 차분이 더 커도 월간이 active.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-09T09:00:00+09:00",
+                            buckets=[_ob("event", "event_credit", 100.0, 25000.0, raw="amber_ladder"),
+                                     _ob("monthly", "monthly_limit", 10.0, 100.0, raw="spend")],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("event", "event_credit", 180.0, 25000.0, raw="amber_ladder"),  # +80
+                                     _ob("monthly", "monthly_limit", 40.0, 100.0, raw="spend")],         # +30
+                            created_at="x")
+    v = official_view(conn, "claude", NOW, 0.04)
+    assert v.active_key == "monthly"   # event 차분(80)이 더 커도 풀 제외라 active 후보 아님
+
+
+def test_pool_used_history_excludes_event_credit_by_default():
+    # ADR 0016: 기본 풀 제외 → 누적 시계열은 월간만.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 125.0, 25000.0, raw="amber_ladder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    assert pool_used_history(conn, "claude") == [(parse_ts("2026-06-10T09:00:00+09:00"), 30.0)]
+
+
+def test_pool_used_history_includes_event_credit_when_opted_in():
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 30.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 125.0, 500.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    hist = pool_used_history(conn, "claude", is_pooled=_pool_with("cinder"))
+    assert hist == [(parse_ts("2026-06-10T09:00:00+09:00"), 155.0)]
+
+
 def test_combined_forecast_includes_event_credit():
-    # 통합 풀이 Claude 포함 크레딧(실제 닳는 버킷)을 합산. 오버리지($0/$100)만 보던 회귀 방지.
+    # 통합 풀이 Claude opt-in 크레딧(실제 닳는 버킷)을 합산(ADR 0016). 오버리지($0/$100)만 보던 회귀 방지.
     conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
                             buckets=[_ob("monthly", "monthly_limit", 0.0, 100.0, raw="spend"),
@@ -1548,7 +1628,10 @@ def test_combined_forecast_includes_event_credit():
                             buckets=[_ob("monthly", "codex_monthly", 20.0, 80.0,
                                          raw="individual_limit", unit="credit", util=25.0)],
                             created_at="x")
-    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
+    ip = _pool_with("cinder")
+    views = [official_view(conn, "claude", NOW, 0.04, is_pooled=ip),
+             official_view(conn, "codex", NOW, 0.04, is_pooled=ip)]
+    fc = combined_forecast(conn, views, NOW, is_pooled=ip)
     assert fc.used_usd == 145.0      # 0 + 125 + 20
     assert fc.limit_usd == 680.0     # 100 + 500 + 80
     assert fc.remaining_usd == 535.0
@@ -1901,7 +1984,8 @@ def test_pool_used_history_sums_usd_buckets_excludes_rate_window():
                                      _ob("rate_window", "rate_window", None, None, raw="five_hour",
                                          unit="percent", util=40.0)],
                             created_at="x")
-    hist = pool_used_history(conn, "claude")
+    # opt-in 크레딧(cinder)은 합산, rate_window는 USD 한도 없어 제외(ADR 0016/0007).
+    hist = pool_used_history(conn, "claude", is_pooled=_pool_with("cinder"))
     assert hist == [(parse_ts("2026-06-10T09:00:00+09:00"), 155.0)]  # 30 + 125, rate_window 제외
 
 

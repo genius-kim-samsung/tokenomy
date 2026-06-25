@@ -229,6 +229,8 @@
   .gauge-row { @apply mt-2; }
   .gauge-line { @apply flex items-center gap-2 text-[13px]; }
   .gauge-label { @apply font-medium truncate; }
+  /* 디버그 모드 raw_key 배지(ADR 0016 발견 루프) — 코드네임을 옅게 병기 */
+  .gauge-rawkey { @apply text-[10px] text-muted font-normal opacity-70; }
   .gauge-pct { @apply ml-auto shrink-0 tabular-nums font-semibold; }
   .gauge-pct.lvl-ok { @apply text-ok; }
   .gauge-pct.lvl-warn { @apply text-warn; }

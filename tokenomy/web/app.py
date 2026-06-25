@@ -19,7 +19,7 @@ from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
 from tokenomy.web import control
 from tokenomy.web.views import (
-    coverage_card_context, dimension_context, history_context, mini_view_context,
+    _curation_for, coverage_card_context, dimension_context, history_context, mini_view_context,
     official_history_context, official_raw_context, official_section_context,
     overview_context, session_context, settings_provider_toggles, sidebar_freshness,
 )
@@ -38,7 +38,9 @@ def _nav_context(request: Request) -> dict:
         active = tracked_providers(config)
         ctu = _credit_to_usd(config)
         weeks = forecast_settings(config)["rate_window_weeks"]
-        fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks) for p in active], now, weeks)
+        _, is_pooled = _curation_for(config)
+        fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled)
+                                        for p in active], now, weeks, is_pooled=is_pooled)
         return {"show_official_history": fobj is not None, "debug_mode": debug_mode(config)}
     except Exception:
         return {"show_official_history": True, "debug_mode": False}

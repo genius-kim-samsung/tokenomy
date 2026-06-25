@@ -35,6 +35,7 @@ def load_config(path: str | Path | None = None) -> dict:
             "official_fetch": {"min_interval_minutes": 10},
             "forecast_settings": {"rate_window_weeks": 2},
             "debug_mode": False,                 # 디버그 관측 게이트(ADR 0014) — 숨겨진 7탭으로 토글
+            "bucket_overrides": {},              # 코드네임 버킷 로컬 큐레이션(ADR 0016) — {provider:raw_key:{hidden?,pooled?,label?}}
             "pricing_overrides": {}}
     p = _config_path(path)
     if not p.exists():
@@ -177,6 +178,79 @@ def seed_account_mode(config: dict, *, has_usd_budget: bool,
     config["account_mode"] = mode
     save_config(config, path)
     return mode
+
+
+def resolve_bucket_curation(provider: str, raw_key: str, bucket_kind: str,
+                            *, catalog: dict | None = None,
+                            overrides: dict | None = None) -> dict:
+    """버킷 큐레이션 3축 {hidden, pooled, label} 해석(ADR 0016, 순수 함수).
+
+    키는 `provider:raw_key`. 모양 기본값에서 출발해 카탈로그 → 오버라이드 순으로 **축별 부분
+    병합**(지정한 축만 덮어쓰고 미지정 축은 하위 레이어/모양값 유지) → 우선순위 오버라이드 >
+    카탈로그 > 모양 기본값. 모양 기본값: hidden=False(표시), pooled=안정 월 한도 키만 True
+    (회전 코드네임 달러 크레딧은 제외 — opt-in), label=None(parser 라벨 유지).
+    """
+    from tokenomy.aggregate import POOL_DEFAULT_KINDS
+    result = {"hidden": False,
+              "pooled": bucket_kind in POOL_DEFAULT_KINDS,
+              "label": None}
+    key = f"{provider}:{raw_key}"
+    for layer in (catalog, overrides):          # 카탈로그 → 오버라이드(나중 레이어가 이김)
+        entry = (layer or {}).get(key)
+        if not isinstance(entry, dict):
+            continue
+        if "hidden" in entry:
+            result["hidden"] = bool(entry["hidden"])
+        if "pooled" in entry:
+            result["pooled"] = bool(entry["pooled"])
+        if entry.get("label"):                  # 빈 문자열/None은 라벨 미지정으로 본다
+            result["label"] = entry["label"]
+    return result
+
+
+def load_bucket_catalog(path: str | Path | None = None) -> dict:
+    """배포 버킷 카탈로그(config/bucket_catalog.json) — 코드네임 버킷의 보편 큐레이션 사실.
+
+    pricing.json과 동형으로 `resource_path`로 번들(repo 커밋 + exe 동봉 + 릴리스 배포).
+    `{"buckets": {provider:raw_key: {hidden?,pooled?,label?}}}` 래퍼 또는 평면 dict 모두 허용.
+    파일 없거나 깨지면 빈 dict(큐레이션 없음 = 모양 기본값으로 안전 폴백).
+    """
+    if path is None:
+        from tokenomy.paths import resource_path
+        path = resource_path("config/bucket_catalog.json")
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    buckets = data.get("buckets", data)         # 래퍼 또는 평면 모두 수용
+    return buckets if isinstance(buckets, dict) else {}
+
+
+def bucket_overrides(config: dict) -> dict:
+    """로컬 버킷 오버라이드({provider:raw_key: {hidden?,pooled?,label?}}). 미설정/오설정은 {}."""
+    raw = config.get("bucket_overrides")
+    return raw if isinstance(raw, dict) else {}
+
+
+def bucket_curation_resolver(config: dict):
+    """배포 카탈로그 + 로컬 오버라이드를 묶은 큐레이션 해석기(ADR 0016).
+
+    반환 callable `(provider, raw_key, bucket_kind) -> {hidden,pooled,label}`. 카탈로그는
+    한 번 로드해 클로저에 가둔다(호출마다 파일 IO 없음). views가 이걸로 hidden/label(표시)과
+    is_pooled(aggregate 풀 멤버십)를 함께 끌어낸다 — 표시·풀 일관(pooled 불변식).
+    """
+    catalog = load_bucket_catalog()
+    overrides = bucket_overrides(config)
+
+    def resolve(provider: str, raw_key: str, bucket_kind: str) -> dict:
+        return resolve_bucket_curation(provider, raw_key, bucket_kind,
+                                       catalog=catalog, overrides=overrides)
+    return resolve
 
 
 def onboarding_pending(config: dict) -> bool:

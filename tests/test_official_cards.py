@@ -139,6 +139,7 @@ def test_card_no_official_omits_local_fallback():
 
 # ── 고스트(예측) + forecast 텍스트 — active 버킷 2스냅샷 ───────────────────────
 def test_active_bucket_ghost_and_forecast():
+    # opt-in한 코드네임 크레딧(ADR 0016)이 풀·active·고스트를 구동. (기본은 풀 제외라 opt-in 필요)
     conn = _conn()
     # 기울기=공식(ADR 0015 D3). 단일 윈도우 내 스냅샷 → (b)월초누적 820/15영업일(6/1~6/21)≈54.67/일
     # → 예상 used = 820 + 54.67×7(영업일 6/22~6/30) > 1000 → 고스트
@@ -154,14 +155,80 @@ def test_active_bucket_ghost_and_forecast():
     for fa, used, util in [(old, 700.0, 70.0), (new, 820.0, 82.0)]:
         insert_official_buckets(
             conn, provider="claude", fetched_at=fa, created_at=fa,
-            buckets=[_bucket(bucket_key="event", bucket_kind="event_credit",
+            buckets=[_bucket(bucket_key="event", bucket_kind="event_credit", raw_key="cinder_cove",
                              label="포함된 크레딧", used_usd=used, limit_usd=1000.0,
                              remaining_usd=1000.0 - used, utilization=util, resets_at=reset)])
-    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    cfg = {"tracked_providers": ["claude"],
+           "bucket_overrides": {"claude:cinder_cove": {"pooled": True}}}
+    card = _card(official_cards(conn, cfg, NOW), "claude")
     g = card["gauges"][0]
     assert g["ghost_pct"] is not None and g["ghost_pct"] > g["fill_pct"]
     assert g["ghost_warn"] is True                  # 82% + 리셋 전 소진 → 빨간 고스트
     assert "소진 예상" in (g["forecast"] or "")   # 고스트 의미를 텍스트로 명시(여유/부족 통일)
+
+
+# ── 버킷 큐레이션: hidden(게이지 숨김) · label(라벨 교체) (ADR 0016) ──────────────
+def test_card_hides_bucket_via_override():
+    # 오버라이드 hidden=True → 해당 버킷은 게이지에서 사라진다(유령 천장 제거).
+    conn = _conn()
+    _seed(conn, "claude", [
+        _bucket(),   # 월 사용 한도(raw_key="spend")
+        _bucket(bucket_key="event", bucket_kind="event_credit", raw_key="amber_ladder",
+                label="이벤트", used_usd=125.0, limit_usd=25000.0, remaining_usd=24875.0,
+                utilization=0.5, resets_at=NOW + timedelta(days=30)),
+    ])
+    cfg = {"tracked_providers": ["claude"],
+           "bucket_overrides": {"claude:amber_ladder": {"hidden": True}}}
+    card = _card(official_cards(conn, cfg, NOW), "claude")
+    labels = [g["label"] for g in card["gauges"]]
+    assert "이벤트" not in labels and "월 사용 한도" in labels
+
+
+def test_card_relabels_bucket_via_override():
+    # 오버라이드 label → 게이지 라벨 교체(omelette_promotional → "Claude Design").
+    conn = _conn()
+    _seed(conn, "claude", [
+        _bucket(bucket_key="promo", bucket_kind="promo", raw_key="omelette_promotional",
+                label="별도/프로모션", native_unit="percent",
+                used_usd=None, limit_usd=None, remaining_usd=None, utilization=40.0),
+    ])
+    cfg = {"tracked_providers": ["claude"],
+           "bucket_overrides": {"claude:omelette_promotional": {"label": "Claude Design"}}}
+    card = _card(official_cards(conn, cfg, NOW), "claude")
+    assert card["gauges"][0]["label"] == "Claude Design"
+
+
+def test_card_gauge_exposes_raw_key():
+    # 디버그 발견 루프(ADR 0016 결정 6): 게이지가 raw_key(코드네임)를 실어 디버그 모드에서 노출 가능.
+    conn = _conn()
+    _seed(conn, "claude", [_bucket(bucket_key="event", bucket_kind="event_credit",
+                                   raw_key="amber_ladder", label="이벤트",
+                                   used_usd=125.0, limit_usd=25000.0, remaining_usd=24875.0,
+                                   utilization=0.5)])
+    # amber_ladder는 배포 카탈로그가 hidden → 노출 확인용으로 표시 강제(override hidden=False).
+    cfg = {"tracked_providers": ["claude"],
+           "bucket_overrides": {"claude:amber_ladder": {"hidden": False}}}
+    card = _card(official_cards(conn, cfg, NOW), "claude")
+    assert card["gauges"][0]["raw_key"] == "amber_ladder"
+
+
+def test_card_shipped_catalog_hides_amber_and_labels_omelette():
+    # 배포 카탈로그(config 오버라이드 없음)만으로 amber_ladder 숨김 + omelette "Claude Design".
+    conn = _conn()
+    _seed(conn, "claude", [
+        _bucket(),   # 월 사용 한도
+        _bucket(bucket_key="event", bucket_kind="event_credit", raw_key="amber_ladder",
+                label="이벤트", used_usd=125.0, limit_usd=25000.0, remaining_usd=24875.0,
+                utilization=0.5, resets_at=NOW + timedelta(days=30)),
+        _bucket(bucket_key="promo", bucket_kind="promo", raw_key="omelette_promotional",
+                label="별도/프로모션", native_unit="percent",
+                used_usd=None, limit_usd=None, remaining_usd=None, utilization=40.0),
+    ])
+    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    labels = [g["label"] for g in card["gauges"]]
+    assert "이벤트" not in labels                    # amber_ladder 숨김
+    assert "Claude Design" in labels                 # omelette 재라벨
+    assert "월 사용 한도" in labels
 
 
 # ── 5시간 한도(개인 구독) — sub에 분 단위 리셋 시각 + 잔여 카운트다운 ─────────────

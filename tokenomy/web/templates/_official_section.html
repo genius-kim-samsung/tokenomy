@@ -84,7 +84,7 @@
       {% for g in c.gauges %}
       <div class="gauge-row">
         <div class="gauge-line">
-          <span class="gauge-label">{{ g.label }}</span>
+          <span class="gauge-label">{{ g.label }}{% if debug_mode and g.raw_key %} <code class="gauge-rawkey">{{ g.raw_key }}</code>{% endif %}</span>
           <span class="gauge-pct lvl-{{ g.level }}">{{ g.util }}%{% if g.exhausted %} 소진{% endif %}</span>
         </div>
         <span class="gauge">

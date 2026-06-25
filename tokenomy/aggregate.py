@@ -214,7 +214,7 @@ def _row_to_bucket_dict(r) -> dict:
 def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
                       limit_usd: float | None, used_usd: float | None,
                       reset_date: date | None, weeks: int = 2,
-                      *, pool_used: float | None = None) -> OfficialLens | None:
+                      *, pool_used: float | None = None, is_pooled=None) -> OfficialLens | None:
     """공식 일일 소비속도(official_daily_rate)로 소진예상·리셋 D-day 산출(ADR 0015 D3).
 
     rate = 공식 스냅샷 기반 기울기((a)트레일링 델타 → (b)월초누적 폴백). 로컬 기울기 폐기 —
@@ -223,7 +223,7 @@ def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
     월간+이벤트) rate는 풀 합산 기울기 — active 버킷이 그 풀의 주 소진처라 근사로 타당하다.
     bucket_key는 반환값 식별용으로만 사용(rate 계산에 미사용).
     """
-    rate = official_daily_rate(conn, [provider], now_kst, weeks, pool_used=pool_used)
+    rate = official_daily_rate(conn, [provider], now_kst, weeks, pool_used=pool_used, is_pooled=is_pooled)
 
     exhaust_date: date | None = None
     if rate and limit_usd and used_usd is not None and limit_usd > used_usd:
@@ -238,14 +238,15 @@ def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
 
 
 def official_view(conn, provider: str, now_kst: datetime,
-                  credit_to_usd: float, weeks: int = 2) -> OfficialView:
+                  credit_to_usd: float, weeks: int = 2, *, is_pooled=None) -> OfficialView:
     """공식 미러 패널 컨텍스트. 최신 스냅샷(공식)에서 버킷·풀·예측 렌즈를 조립한다.
 
     - period_used/limit = 월간 버킷(공식 ground truth). 없으면 None.
     - Claude 월 버킷 resets_at None은 다음 달 경계(KST)로 채운다.
-    - 활성 버킷 선정(1차): 후보(monthly_limit/event_credit/codex_monthly 중 stale 제외)의
-      series 최근 두 스냅샷 used 양의 차분이 가장 큰 버킷 — 동률은 tie-break(event<monthly).
-      (2차) 양의 차분이 없으면 remaining>0 첫 버킷; 없으면 첫 후보. promo/rate_window는 항상 제외.
+    - 활성 버킷 선정(1차): 후보(풀 멤버 & stale 제외)의 series 최근 두 스냅샷 used 양의 차분이
+      가장 큰 버킷 — 동률은 tie-break(event<monthly). (2차) 양의 차분이 없으면 remaining>0 첫
+      버킷; 없으면 첫 후보. 풀 멤버십은 큐레이션(is_pooled, ADR 0016) — 기본은 안정 월 한도만
+      이라 코드네임 크레딧은 후보·풀에서 빠진다(buckets 표시 목록에는 남음). promo/rate_window 제외.
     - 예측 렌즈(lens) rate는 공식 기울기(official_daily_rate, ADR 0015 D3). 공식 소비가 없으면 daily_rate=None.
     """
     from tokenomy.db import latest_official_snapshot, get_fetch_state, official_bucket_series
@@ -283,10 +284,11 @@ def official_view(conn, provider: str, now_kst: datetime,
     # stale 제외: resets_at이 설정됐고 이미 과거면 후보에서 뺀다
     active_key = None
     lens = None
+    ip = _resolve_is_pooled(is_pooled)
     tie_order = {"event_credit": 0, "monthly_limit": 1, "codex_monthly": 1}
     candidates = [
         b for b in buckets
-        if b["bucket_kind"] in ("monthly_limit", "event_credit", "codex_monthly")
+        if ip(provider, b["raw_key"], b["bucket_kind"])
         and not (b["resets_at"] and parse_ts(b["resets_at"]) is not None
                  and parse_ts(b["resets_at"]) < now_kst)
     ]
@@ -324,7 +326,7 @@ def official_view(conn, provider: str, now_kst: datetime,
         # 렌즈 rate=공식(official_daily_rate, ADR 0015 D3). pool_used=이 provider 풀 누적(=(b)월초누적 분자).
         lens = _lens_from_series(conn, provider, active_key, now_kst,
                                  active["limit_usd"], active["used_usd"], reset_date, weeks,
-                                 pool_used=pool_used)
+                                 pool_used=pool_used, is_pooled=is_pooled)
 
     note = None if rows else "공식 미취득 — 로컬 추정(USD)"
     return OfficialView(
@@ -399,7 +401,7 @@ def trailing_window_spend(conn, provider: str | None, now_kst: datetime, weeks: 
     return round(sum((r["cost_usd"] or 0) for r in _range_rows(conn, provider, start, nxt, providers=providers)), 4)
 
 
-def _pool_used_at(conn, providers: list[str], T: datetime) -> float | None:
+def _pool_used_at(conn, providers: list[str], T: datetime, *, is_pooled=None) -> float | None:
     """T 시점 통합 풀 used = 각 provider의 T 이하 최신 스냅샷 used 합. 기여 provider 없으면 None.
 
     pool_used_history(소진형 USD 버킷만)를 forward-fill해 합산한다 — 누적 시계열의 그 시점 위치.
@@ -407,7 +409,7 @@ def _pool_used_at(conn, providers: list[str], T: datetime) -> float | None:
     total = None
     for p in providers:
         val = None
-        for dt, v in pool_used_history(conn, p):    # 오름차순
+        for dt, v in pool_used_history(conn, p, is_pooled=is_pooled):    # 오름차순
             if dt <= T:
                 val = v
             else:
@@ -417,18 +419,18 @@ def _pool_used_at(conn, providers: list[str], T: datetime) -> float | None:
     return total
 
 
-def _earliest_pool_snapshot(conn, providers: list[str]) -> datetime | None:
+def _earliest_pool_snapshot(conn, providers: list[str], *, is_pooled=None) -> datetime | None:
     """풀 기여 provider들의 최초 공식 스냅샷 시각. 없으면 None."""
     earliest = None
     for p in providers:
-        hist = pool_used_history(conn, p)
+        hist = pool_used_history(conn, p, is_pooled=is_pooled)
         if hist and (earliest is None or hist[0][0] < earliest):
             earliest = hist[0][0]
     return earliest
 
 
 def _official_trailing_rate(conn, providers: list[str], now_kst: datetime,
-                            weeks: int) -> float | None:
+                            weeks: int, *, is_pooled=None) -> float | None:
     """(a) 공식 스냅샷 델타 트레일링 기울기(USD/영업일) — 이력이 충분할 때만(ADR 0015 D3).
 
     윈도우 시작 **이전** 스냅샷이 있어야(=베이스라인 존재) 트레일링 델타가 깨끗하다 — 없으면
@@ -436,10 +438,10 @@ def _official_trailing_rate(conn, providers: list[str], now_kst: datetime,
     합산 ÷ 윈도우 영업일. 소비 0이면 None.
     """
     start, nxt = _trailing_window_bounds(now_kst, weeks)
-    earliest = _earliest_pool_snapshot(conn, providers)
+    earliest = _earliest_pool_snapshot(conn, providers, is_pooled=is_pooled)
     if earliest is None or earliest >= start:
         return None                                 # 윈도우 시작 전 베이스 없음 → 이력 부족
-    rows = pool_daily_history(conn, providers, start=start, nxt=nxt)
+    rows = pool_daily_history(conn, providers, start=start, nxt=nxt, is_pooled=is_pooled)
     consumed = sum(r["used_usd"] for r in rows if r["covered"] and r["used_usd"] is not None)
     bdays = business_days_between(start.date(), now_kst.date() + timedelta(days=1))
     return round(consumed / bdays, 4) if (bdays > 0 and consumed > 0) else None
@@ -455,21 +457,21 @@ def _official_mtd_rate(now_kst: datetime, pool_used: float | None) -> float | No
 
 
 def official_daily_rate(conn, providers: list[str], now_kst: datetime, weeks: int,
-                        *, pool_used: float | None) -> float | None:
+                        *, pool_used: float | None, is_pooled=None) -> float | None:
     """엔터프라이즈 전망 기울기(USD/영업일) — **공식만**(로컬 기울기 폐기, ADR 0015 D3).
 
     (a) 공식 스냅샷 델타 트레일링 우선 → 이력 부족 시 (b) 월초누적 평균 → 둘 다 불가면 None(위치만).
     다중 기기 사용자에서 한 기기 로컬 속도만 보던 과소추정과 '공식 위에 로컬을 얹는' 하이브리드 혼란을
-    없앤다 — 위치(used)도 기울기도 모두 공식 계정 전체다.
+    없앤다 — 위치(used)도 기울기도 모두 공식 계정 전체다. 풀 멤버십은 큐레이션(is_pooled, ADR 0016).
     """
-    r = _official_trailing_rate(conn, providers, now_kst, weeks)
+    r = _official_trailing_rate(conn, providers, now_kst, weeks, is_pooled=is_pooled)
     if r is not None:
         return r
     return _official_mtd_rate(now_kst, pool_used)
 
 
 def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
-                      weeks: int = 2) -> CombinedForecast | None:
+                      weeks: int = 2, *, is_pooled=None) -> CombinedForecast | None:
     """공식 USD/크레딧 한도가 있는 provider를 한 풀로 합쳐 달력 월말 예상 잔여를 낸다.
 
     풀 = pool_limit_usd가 있는 view들. 없으면 None(히어로 숨김).
@@ -494,7 +496,7 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
     month_end = (next_month - timedelta(days=1)).date()
     pool_providers = [v.provider for v in pool]
     # 기울기 = 공식만(ADR 0015 D3). (a)스냅샷 델타 트레일링 → (b)월초누적 폴백 → 없으면 None.
-    daily_rate = official_daily_rate(conn, pool_providers, now_kst, weeks, pool_used=used)
+    daily_rate = official_daily_rate(conn, pool_providers, now_kst, weeks, pool_used=used, is_pooled=is_pooled)
     bdays_remaining = business_days_between(now_kst.date() + timedelta(days=1), next_month.date())
 
     is_exhausted = used >= limit
@@ -519,26 +521,40 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
     )
 
 
-# 통합 풀에 기여하는 USD 한도 버킷 종류(rate_window/promo 제외 — ADR 0007).
-_POOL_KINDS = ("monthly_limit", "event_credit", "codex_monthly")
+# 큐레이션 없이도 통합 풀에 자동 포함되는 **안정 키** 종류(ADR 0016). 회전 코드네임 달러
+# 크레딧(event_credit)·promo·rate_window는 제외 — 카탈로그/오버라이드 pooled=True로만 옵트인.
+# 풀링 결정의 모양 기본값 단일 진실원(config.resolve_bucket_curation도 이걸 참조).
+POOL_DEFAULT_KINDS = ("monthly_limit", "codex_monthly")
 
 
-def pool_used_history(conn, provider: str) -> list[tuple[datetime, float]]:
+def _default_is_pooled(provider: str, raw_key: str, bucket_kind: str) -> bool:
+    """큐레이션 미주입 시 풀 멤버십 모양 기본값 — 안정 월 한도 키만 풀(event_credit 제외)."""
+    return bucket_kind in POOL_DEFAULT_KINDS
+
+
+def _resolve_is_pooled(is_pooled):
+    """is_pooled predicate 정규화 — None이면 모양 기본값(_default_is_pooled)."""
+    return is_pooled if is_pooled is not None else _default_is_pooled
+
+
+def pool_used_history(conn, provider: str, *, is_pooled=None) -> list[tuple[datetime, float]]:
     """provider의 스냅샷별 통합 풀 used(USD) 시계열 [(fetched_at dt, used_usd 합)] 오름차순.
 
-    각 공식 스냅샷(fetched_at)에서 USD 한도 버킷(_POOL_KINDS & limit_usd 존재)의 used_usd를
+    각 공식 스냅샷(fetched_at)에서 풀 멤버(is_pooled True & limit_usd 존재)의 used_usd를
     합산한다 — official_view의 풀 집계(pool_*)와 동형이되 최신 스냅샷이 아니라 전 이력에 적용.
-    USD 한도 버킷이 하나도 없는 스냅샷(개인 구독 rate_window만 등)은 제외한다(공식 사용량
-    스냅샷 이력은 소진형 한도에만 의미, ADR 0007). 시각 파싱 실패 스냅샷도 제외한다.
+    풀 멤버십은 큐레이션(ADR 0016) — is_pooled None이면 모양 기본값(안정 월 한도만, 코드네임
+    크레딧 제외). USD 한도 버킷이 하나도 없는 스냅샷(개인 구독 rate_window만 등)은 제외한다
+    (공식 사용량 스냅샷 이력은 소진형 한도에만 의미, ADR 0007). 시각 파싱 실패 스냅샷도 제외.
     """
+    ip = _resolve_is_pooled(is_pooled)
     rows = conn.execute(
-        "SELECT fetched_at, bucket_kind, used_usd, limit_usd FROM official_buckets "
+        "SELECT fetched_at, raw_key, bucket_kind, used_usd, limit_usd FROM official_buckets "
         "WHERE provider=? ORDER BY fetched_at ASC, id ASC",
         (provider,),
     ).fetchall()
     by_snap: dict[str, float] = {}
     for r in rows:
-        if r["bucket_kind"] in _POOL_KINDS and r["limit_usd"] is not None:
+        if ip(provider, r["raw_key"], r["bucket_kind"]) and r["limit_usd"] is not None:
             by_snap[r["fetched_at"]] = by_snap.get(r["fetched_at"], 0.0) + (r["used_usd"] or 0.0)
     out: list[tuple[datetime, float]] = []
     for ft, used in by_snap.items():
@@ -600,7 +616,8 @@ def _segment_points(points: list, max_gap_minutes: int | None) -> list:
     return segments
 
 
-def pool_history(conn, providers: list[str], *, max_gap_minutes: int | None = None) -> list:
+def pool_history(conn, providers: list[str], *, max_gap_minutes: int | None = None,
+                 is_pooled=None) -> list:
     """활성 providers의 통합 풀 used(USD) 과거 곡선을 세그먼트 리스트로 반환(ADR 0007).
 
     각 세그먼트=연속 구간 [{"ts": iso, "used_usd": float}, ...] 오름차순. 전망 차트가
@@ -615,7 +632,7 @@ def pool_history(conn, providers: list[str], *, max_gap_minutes: int | None = No
     """
     contributing = []
     for p in providers:
-        hist = pool_used_history(conn, p)
+        hist = pool_used_history(conn, p, is_pooled=is_pooled)
         if hist:
             contributing.append(hist)
     if not contributing:
@@ -663,7 +680,8 @@ def pool_history(conn, providers: list[str], *, max_gap_minutes: int | None = No
     return segments
 
 
-def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: datetime) -> list:
+def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: datetime,
+                       is_pooled=None) -> list:
     """[start, nxt) 구간의 날짜별 통합 풀 소비 델타 + 커버리지(ADR 0010).
 
     각 행 = {date, covered, used_usd, per_provider}. 일별 소비 = 각 provider 누적
@@ -676,7 +694,7 @@ def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: date
     for p in providers:
         daily: dict = {}
         prev = None
-        for dt, v in pool_used_history(conn, p):   # (dt, 누적 USD) 오름차순, 소진형 버킷만
+        for dt, v in pool_used_history(conn, p, is_pooled=is_pooled):   # (dt, 누적 USD) 오름차순, 소진형 버킷만
             cons, _ = _consumption_delta(prev, v)
             d = dt.astimezone(KST).date()
             daily[d] = daily.get(d, 0.0) + cons
@@ -697,7 +715,7 @@ def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: date
 
 
 def pool_snapshots_by_day(conn, providers: list[str], *,
-                          start: datetime, nxt: datetime) -> dict:
+                          start: datetime, nxt: datetime, is_pooled=None) -> dict:
     """[start, nxt) 각 날짜의 일 소비를 만든 스냅샷 세부 재구성(ADR 0010 드릴다운).
 
     `dict[date, list[provider_detail]]` — 표본 있는 날만 키. provider_detail은
@@ -715,7 +733,7 @@ def pool_snapshots_by_day(conn, providers: list[str], *,
     for p in providers:
         prev_dt = None
         prev_v = None
-        for dt, v in pool_used_history(conn, p):   # (dt, 누적 USD) 오름차순, 소진형 버킷만
+        for dt, v in pool_used_history(conn, p, is_pooled=is_pooled):   # (dt, 누적 USD) 오름차순, 소진형 버킷만
             d = dt.astimezone(KST).date()
             delta, reset = _consumption_delta(prev_v, v)
             if start_d <= d < nxt_d:
@@ -789,7 +807,7 @@ def _period_spend(rows: list, snaps: dict, provider: str, *, is_today: bool) -> 
                        covered_days=len(covered), total_days=total_days)
 
 
-def official_period_glance(conn, provider: str, now_kst: datetime) -> ProviderGlance:
+def official_period_glance(conn, provider: str, now_kst: datetime, *, is_pooled=None) -> ProviderGlance:
     """공식 기간 소비(오늘·이번주) 글랜스(ADR 0011, CONTEXT.md 동명 용어).
 
     pool_daily_history(소비 숫자)와 pool_snapshots_by_day(갭/추적시작 신호)를 재사용한다 —
@@ -803,8 +821,8 @@ def official_period_glance(conn, provider: str, now_kst: datetime) -> ProviderGl
     week_start = today_start - timedelta(days=today_start.weekday())   # 월요일 0시 KST
     nxt = today_start + timedelta(days=1)
 
-    week_rows = pool_daily_history(conn, [provider], start=week_start, nxt=nxt)
-    snaps = pool_snapshots_by_day(conn, [provider], start=week_start, nxt=nxt)
+    week_rows = pool_daily_history(conn, [provider], start=week_start, nxt=nxt, is_pooled=is_pooled)
+    snaps = pool_snapshots_by_day(conn, [provider], start=week_start, nxt=nxt, is_pooled=is_pooled)
     today_rows = [r for r in week_rows if r["date"] == today_d]
 
     return ProviderGlance(

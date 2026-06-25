@@ -15,8 +15,8 @@ from tokenomy.aggregate import (
     token_composition,
 )
 from tokenomy.config import (
-    account_mode, credit_to_usd, forecast_settings, load_config, official_fetch_settings,
-    onboarding_pending, tracked_providers, user_label,
+    account_mode, bucket_curation_resolver, credit_to_usd, forecast_settings, load_config,
+    official_fetch_settings, onboarding_pending, tracked_providers, user_label,
 )
 from tokenomy.db import (
     get_fetch_state, get_meta, get_official_raw, list_official_raw, official_buckets_at,
@@ -265,8 +265,25 @@ def _reset_remaining_coarse(resets_at: str, now_kst: datetime) -> str | None:
     return f"{mins // 1440}일"
 
 
-def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
-    """공식 버킷 dict → 게이지 표시 모델. active 버킷이면 렌즈로 고스트(예측) 채움."""
+def _curation_for(config: dict):
+    """config(배포 카탈로그 + 로컬 오버라이드)에서 큐레이션 해석기와 풀 predicate를 빌드(ADR 0016).
+
+    반환 (curation, is_pooled): curation은 `(provider,raw_key,bucket_kind) -> {hidden,pooled,label}`
+    (표시용 hidden/label), is_pooled는 풀 멤버십 predicate(aggregate 풀 함수 주입용). 같은
+    해석기에서 파생해 **표시·풀 일관**(pooled 불변식)을 보장한다.
+    """
+    curation = bucket_curation_resolver(config)
+
+    def is_pooled(provider: str, raw_key: str, bucket_kind: str) -> bool:
+        return curation(provider, raw_key, bucket_kind)["pooled"]
+    return curation, is_pooled
+
+
+def _bucket_gauge(b: dict, view, now_kst: datetime, *, curation=None) -> dict:
+    """공식 버킷 dict → 게이지 표시 모델. active 버킷이면 렌즈로 고스트(예측) 채움.
+
+    curation(ADR 0016) 있으면 라벨을 큐레이션 라벨로 교체(예: omelette_promotional → 'Claude Design').
+    """
     util = b["utilization"] or 0.0
     used, limit = b["used_usd"], b["limit_usd"]
     # 리셋/만료 날짜는 모두 sub 한 자리에 표시(정렬 일관). event_credit은 '만료', 그 외는 '리셋'.
@@ -302,8 +319,13 @@ def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
                 surplus = round(limit - projected, 2)
                 forecast = f"이 속도면 리셋 시 ${surplus:,.0f} 여유"
 
+    label = b["label"]
+    if curation is not None:
+        label = curation(view.provider, b["raw_key"], b["bucket_kind"])["label"] or b["label"]
+
     return {
-        "label": b["label"],
+        "label": label,
+        "raw_key": b["raw_key"],   # 디버그 발견 루프(ADR 0016 결정 6) — 디버그 모드 게이지에 코드네임 노출
         "util": round(util),
         "fill_pct": round(min(util, 100), 1),
         "level": _gauge_level(util),
@@ -318,12 +340,14 @@ def _bucket_gauge(b: dict, view, now_kst: datetime) -> dict:
     }
 
 
-def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) -> dict:
+def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime,
+                   *, curation=None, is_pooled=None) -> dict:
     """OfficialView + fetch 상태 → 카드 1개 표시 모델.
 
-    공식 버킷이 있으면 게이지(만료 버킷 제외)를 보여준다. fetch 실패면 스탈+경고.
+    공식 버킷이 있으면 게이지(만료·hidden 버킷 제외)를 보여준다. fetch 실패면 스탈+경고.
     공식 데이터가 전혀 없으면 로컬 추정으로 폴백하지 않고 깨끗한 no_data(공식만, ADR 0015 D8) —
-    템플릿이 '공식 사용량 미취득' 빈 상태를 띄우고 헤더 ↻로 갱신을 유도한다.
+    템플릿이 '공식 사용량 미취득' 빈 상태를 띄우고 헤더 ↻로 갱신을 유도한다. curation(ADR 0016)이
+    hidden인 버킷(유령 천장 등)은 게이지에서 제외하고, 라벨은 _bucket_gauge가 큐레이션으로 교체한다.
     """
     meta = _PROVIDER_META.get(provider, {"label": provider.title(), "accent": "#6c6a64"})
     fs_status = fetch_state["last_status"] if fetch_state else None
@@ -337,14 +361,18 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime) ->
             r = parse_ts(b["resets_at"]) if b["resets_at"] else None
             if r is not None and r < now_kst:
                 continue
-            gauges.append(_bucket_gauge(b, view, now_kst))
+            # 큐레이션 hidden 버킷(유령 천장 등, ADR 0016)도 게이지에서 제외.
+            if curation is not None and curation(provider, b["raw_key"], b["bucket_kind"])["hidden"]:
+                continue
+            gauges.append(_bucket_gauge(b, view, now_kst, curation=curation))
         status = "error" if fs_status in ("auth_error", "http_error") else "ok"
     else:
         status = "no_data"
 
     # 공식 기간 소비 글랜스(ADR 0011) — USD 풀 있는 provider만(스코프 게이트).
     # rate-window-only(개인 구독제)·공식 미취득은 pool_limit_usd None → 글랜스 줄 숨김.
-    glance = official_period_glance(conn, provider, now_kst) if view.pool_limit_usd is not None else None
+    glance = (official_period_glance(conn, provider, now_kst, is_pooled=is_pooled)
+              if view.pool_limit_usd is not None else None)
 
     return {
         "provider": provider,
@@ -370,12 +398,14 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[
     ctu = credit_to_usd(config)
     weeks = forecast_settings(config)["rate_window_weeks"]
     active = set(tracked_providers(config))
+    curation, is_pooled = _curation_for(config)
     cards: list[dict] = []
     for p in PROVIDERS:
         if p not in active:
             continue
-        view = official_view(conn, p, now, ctu, weeks)
-        cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now))
+        view = official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled)
+        cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now,
+                                    curation=curation, is_pooled=is_pooled))
     return cards
 
 
@@ -533,15 +563,16 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
     ctu = credit_to_usd(config)
     weeks = forecast_settings(config)["rate_window_weeks"]
     active = set(tracked_providers(config))
+    _, is_pooled = _curation_for(config)
     rows: list[ShareRow] = []
     for p in PROVIDERS:
         if p not in active:
             continue
-        view = official_view(conn, p, now, ctu, weeks)
+        view = official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled)
         if view.pool_limit_usd is None:
             continue
         meta = _PROVIDER_META.get(p, {"label": p.title()})
-        g = official_period_glance(conn, p, now)
+        g = official_period_glance(conn, p, now, is_pooled=is_pooled)
         # 이번달·한도%는 **통합 풀**(월간+포함크레딧, pool_used) 기준 — 오늘/이번주 글랜스와 같은
         # 스코프라 오늘≤이번주≤이번달이 성립한다. 월간 버킷만 쓰면 크레딧 선소진 시 0으로 어긋난다.
         util = None
@@ -635,8 +666,9 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     # 화면의 "전체"가 곧 활성 합산이므로 forecast 풀도 활성만 본다(combined_forecast가 한도 보유분만 필터).
     ctu = credit_to_usd(config)
     weeks = forecast_settings(config)["rate_window_weeks"]
-    forecast_views = [official_view(conn, p, now, ctu, weeks) for p in active]
-    forecast_obj = combined_forecast(conn, forecast_views, now, weeks)
+    _, is_pooled = _curation_for(config)
+    forecast_views = [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled) for p in active]
+    forecast_obj = combined_forecast(conn, forecast_views, now, weeks, is_pooled=is_pooled)
     # A군 모드 게이트(ADR 0015): 공식(엔터) vs 로컬(개인구독제). 헤드라인·히어로·추세 오버레이를 가른다.
     a_official = _a_zone_official(config, forecast_obj)
     # 이번 달 총지출 헤드라인 — 엔터=공식 풀 used(계정 전체·실청구), 개인구독제/로컬=이 기기 추정.
@@ -647,7 +679,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         fc_chart = forecast_chart_data(forecast_obj, daily, now)
         # 공식 사용량 스냅샷 이력 → 전망 차트 실제 과거 실선(ADR 0007). 활성 USD 풀만.
         # max_gap = 자동 갱신 간격 ×3(그보다 긴 공백은 수집 단절로 보아 선을 끊는다).
-        pool_hist = pool_history(conn, active, max_gap_minutes=interval * 3)
+        pool_hist = pool_history(conn, active, max_gap_minutes=interval * 3, is_pooled=is_pooled)
         forecast_actual = pool_history_to_daily(pool_hist, [p.day for p in daily], now)
     else:
         # 로컬 A군 — 한도·예상선·실제 공식선 없는 순수 로컬 추세(개인구독제엔 한도가 없다).
@@ -994,7 +1026,9 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
     # 소진형 풀 판정 + 한도선 값 — combined_forecast가 None이면 소진형 풀 없음(빈 상태).
     ctu = credit_to_usd(config)
     weeks = forecast_settings(config)["rate_window_weeks"]
-    fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks) for p in active], now, weeks)
+    _, is_pooled = _curation_for(config)
+    fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled)
+                                    for p in active], now, weeks, is_pooled=is_pooled)
     has_pool = fobj is not None
     pool_limit = fobj.limit_usd if fobj else None
     pool_providers = fobj.providers if fobj else active
@@ -1004,9 +1038,9 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
     # provider 순서 = _TREND_STYLE(스택/막대/드릴다운 일관) 우선, 나머지는 뒤로.
     prov_list = ([p for p in _TREND_STYLE if p in view_providers]
                  + [p for p in view_providers if p not in _TREND_STYLE])
-    segments = pool_history(conn, view_providers, max_gap_minutes=interval * 3)
-    daily = pool_daily_history(conn, view_providers, start=s, nxt=nxt)
-    detail_by_day = pool_snapshots_by_day(conn, prov_list, start=s, nxt=nxt)   # 일 소비 재구성(드릴다운)
+    segments = pool_history(conn, view_providers, max_gap_minutes=interval * 3, is_pooled=is_pooled)
+    daily = pool_daily_history(conn, view_providers, start=s, nxt=nxt, is_pooled=is_pooled)
+    detail_by_day = pool_snapshots_by_day(conn, prov_list, start=s, nxt=nxt, is_pooled=is_pooled)   # 일 소비 재구성(드릴다운)
     prov_label = {p: (_TREND_STYLE[p][0] if p in _TREND_STYLE else p.title()) for p in prov_list}
     for dets in detail_by_day.values():       # provider 라벨 주입(템플릿 단순화)
         for pd in dets:

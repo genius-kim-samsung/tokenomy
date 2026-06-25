@@ -11,6 +11,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('config/pricing.json', 'config'),
+        ('config/bucket_catalog.json', 'config'),   # 코드네임 버킷 큐레이션(ADR 0016) — 번들 누락 시 큐레이션 미적용
         ('assets/tokenomy.ico', 'assets'),
         ('tokenomy/web/templates', 'tokenomy/web/templates'),
         ('tokenomy/web/static', 'tokenomy/web/static'),

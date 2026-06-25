@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "what": "코드네임 버킷 큐레이션 카탈로그 — 회전하는 공식 응답 코드네임 버킷의 보편 큐레이션 사실(ADR 0016).",
+    "keys": "provider:raw_key (예: claude:amber_ladder). raw_key는 공식 API 원 키(코드네임/창 이름).",
+    "axes": "hidden=게이지에서 숨김, pooled=통합 전망 풀 포함(true로 진짜 크레딧 opt-in), label=표시 라벨 교체.",
+    "precedence": "로컬 bucket_overrides > 이 카탈로그 > 모양 기본값(안정 월 한도만 풀, 코드네임 크레딧은 풀 제외).",
+    "note": "새 코드네임 발견 시 한 줄 추가 → release-exe로 전원 배포. 디버그 모드(ADR 0014)에서 게이지의 raw_key를 확인한다."
+  },
+  "buckets": {
+    "claude:amber_ladder": { "hidden": true },
+    "claude:omelette_promotional": { "label": "Claude Design" }
+  }
+}
