@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
 from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts, official_view, combined_forecast
-from tokenomy.config import credit_to_usd as _credit_to_usd, debug_mode, forecast_settings, load_config, official_fetch_settings, tracked_providers, save_config
+from tokenomy.config import ACCOUNT_MODES, account_mode, credit_to_usd as _credit_to_usd, debug_mode, forecast_settings, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
 from tokenomy.official_fetch import refresh_tracked
@@ -282,6 +282,7 @@ def settings_get(request: Request, saved: int = 0):
         request, "settings.html",
         {"tracked": tracked, "providers": list(PROVIDERS),
          "credit_to_usd": _credit_to_usd(config),
+         "account_mode": account_mode(config),   # 계정 형태 토글 현재값(None=자동)
          "rate_window_weeks": forecast_settings(config)["rate_window_weeks"],
          "official_fetch": ofs,
          "provider_toggles": settings_provider_toggles(config),
@@ -318,6 +319,10 @@ async def settings_post(request: Request):
     # 클램프 범위를 getter 단일 출처에 두려고 직접 min/max를 두지 않는다.
     rw = forecast_settings({"forecast_settings": {"rate_window_weeks": form.get("rate_window_weeks")}})
     config["forecast_settings"] = rw
+    # 계정 형태(ADR 0015): enterprise|subscription 명시 저장(sticky). 빈 값="자동" → None으로
+    # 비워 다음 공식 취득 때 데이터로 재시드되게 한다(seed_account_mode는 None일 때만 시드).
+    mode = form.get("account_mode")
+    config["account_mode"] = mode if mode in ACCOUNT_MODES else None
     # 레거시 키 정리(있으면 제거 — config를 깔끔하게 다시 쓴다)
     for k in ("budget", "budget_start"):
         config.pop(k, None)

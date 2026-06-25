@@ -2,6 +2,7 @@
   "user_label": "me",
   "tracked_providers": ["claude", "codex"],
   "credit_to_usd": 0.04,
+  "account_mode": null,
   "official_fetch": {
     "min_interval_minutes": 10
   },

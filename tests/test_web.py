@@ -1218,6 +1218,39 @@ def test_settings_post_persists_credit_to_usd(tmp_path, monkeypatch):
     assert "0.05" in g.text
 
 
+# ── 계정 형태 토글(ADR 0015 6단계) ─────────────────────────────────────────────
+
+def test_settings_shows_account_mode_toggle(tmp_path, monkeypatch):
+    """설정에 계정 형태(account_mode) 토글 — 자동/엔터프라이즈/개인 구독제."""
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/settings")
+    assert r.status_code == 200
+    assert 'name="account_mode"' in r.text
+    assert "엔터프라이즈" in r.text and "개인 구독제" in r.text
+
+
+def test_settings_post_persists_account_mode(tmp_path, monkeypatch):
+    """POST /settings가 account_mode를 저장한다(수동 토글이 자동 시드를 덮어씀, sticky)."""
+    from tokenomy.config import account_mode, load_config
+    client, _ = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"account_mode": "subscription", "track_claude": "on"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert account_mode(load_config()) == "subscription"
+
+
+def test_settings_post_account_mode_auto_clears_for_reseed(tmp_path, monkeypatch):
+    """'자동'(빈 값)이면 account_mode=None → 다음 공식 취득 때 재시드 가능."""
+    from tokenomy.config import account_mode, load_config
+    client, _ = _client_with_config(tmp_path, monkeypatch)
+    client.post("/settings", data={"account_mode": "enterprise", "track_claude": "on"},
+                follow_redirects=False)
+    assert account_mode(load_config()) == "enterprise"   # 먼저 수동값이 박힘
+    client.post("/settings", data={"account_mode": "", "track_claude": "on"},
+                follow_redirects=False)
+    assert account_mode(load_config()) is None           # 자동으로 되돌리면 비움(재시드 가능)
+
+
 # ── 전망 설정: 소비속도 추정 기간(rate_window_weeks) UI ──────────────────────────
 
 def test_settings_get_shows_rate_window(tmp_path, monkeypatch):
