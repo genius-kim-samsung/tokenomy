@@ -3,7 +3,7 @@ chcp 65001 >nul
 cd /d "%~dp0"
 
 REM 개발용 — 코드(.py) 변경 시 uvicorn이 자동 재시작(--reload).
-REM 일반 사용자는 start_tokenomy.bat 을 쓰세요(reload 오버헤드 없음).
+REM reload가 필요 없으면 start_tokenomy.bat 을 쓰세요(reload 오버헤드 없음). 둘 다 개발/소스 실행용 — Windows 최종 사용자는 exe.
 
 if exist ".venv\Scripts\python.exe" (
   set "PY=.venv\Scripts\python.exe"

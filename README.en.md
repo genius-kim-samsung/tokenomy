@@ -70,6 +70,8 @@ On first run, if you've never used Claude Code / Codex (no credentials), you'll 
 
 ## Quick start (developer — from source)
 
+This path is for modifying/contributing to the code, or running on Linux. **Windows end users should use the exe above** — running from source isn't needed.
+
 ```bash
 pip install -r requirements.txt
 cp config/tokenomy.config.example.json config/tokenomy.config.json
