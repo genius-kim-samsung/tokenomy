@@ -35,6 +35,16 @@ def _client(tmp_path, monkeypatch):
     return TestClient(app_module.app), fake_connect
 
 
+def test_humanize_count_abbreviates_k_and_m():
+    h = app_module._humanize_count
+    assert h(0) == "0"
+    assert h(999) == "999"
+    assert h(1000) == "1.0K"
+    assert h(12345) == "12.3K"
+    assert h(10_500_000) == "10.5M"
+    assert h(None) == "0"
+
+
 def test_dashboard_empty_db_ok(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/")
@@ -57,6 +67,29 @@ def test_sidebar_hides_mini_switch_when_mini_view_unavailable(tmp_path, monkeypa
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/")
     assert 'id="mini-switch"' not in r.text
+
+
+def test_dashboard_folder_usage_card(tmp_path, monkeypatch):
+    # "폴더 사용량" 카드: 새 타이틀·로컬 부제·토큰 약식·basename(전체 경로 hover)·토글 제거.
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    conn.execute(
+        "INSERT INTO messages (dedup_key, provider, session_id, project, ts, model, "
+        "input_tokens, output_tokens, cache_creation, cache_read, cost_usd, priced) "
+        "VALUES ('a','claude','s1',?,'2026-06-10T10:00:00Z','claude-opus-4-8',"
+        "1500000, 500000, 250000, 250000, 12.5, 1)",
+        (r"C:\projects\samsung\tokenomy",),
+    )
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "폴더 사용량" in r.text                      # 새 타이틀
+    assert "이 기기 · 정가 환산 추정" in r.text          # 로컬·추정 부제
+    assert "통합 프로젝트별" not in r.text               # 옛 타이틀 폐지
+    assert "sort=cache" not in r.text                   # 비용/세션/캐시 토글 제거
+    assert "2.5M" in r.text                             # 토큰 4종 합 약식(1.5M+0.5M+0.25M+0.25M)
+    assert "tokenomy" in r.text                         # 폴더 basename
+    assert r"C:\projects\samsung\tokenomy" in r.text    # 전체 경로 hover(title)
 
 
 def test_dashboard_bad_query_falls_back(tmp_path, monkeypatch):
@@ -105,7 +138,7 @@ def test_dashboard_renders_sections_with_data(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    for section in ("기간별 사용량", "통합 추세", "통합 효율 코치", "통합 프로젝트별", "복기"):
+    for section in ("기간별 사용량", "통합 추세", "통합 효율 코치", "폴더 사용량", "복기"):
         assert section in r.text
     assert "이번 달 총지출" not in r.text          # 총지출 단독 카드 폐지(ADR 0017)
     assert "AI별 사용 현황" not in r.text          # 번다운 카드 섹션 제거
@@ -560,7 +593,7 @@ def test_overview_aggregates_providers(tmp_path, monkeypatch):
     r = client.get("/")
     assert r.status_code == 200
     for section in ("기간별 사용량", "통합 추세", "통합 효율 코치",
-                    "통합 프로젝트별", "복기"):
+                    "폴더 사용량", "복기"):
         assert section in r.text
     assert "이번 달 총지출" not in r.text   # 총지출 단독 카드 폐지(ADR 0017)
     assert "AI별 사용 현황" not in r.text   # 번다운 카드 섹션 제거

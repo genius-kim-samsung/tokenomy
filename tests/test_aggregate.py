@@ -101,6 +101,30 @@ def test_by_project_sorted_with_cache_ratio():
     assert rows[1].project == "/cheap"
 
 
+def test_by_project_counts_messages():
+    # 폴더별 메시지 수 = 그 폴더의 messages 행 수(세션 수와 별개).
+    conn = connect(":memory:")
+    _insert(conn, "2026-06-05T00:00:00Z", 5.0, project="/p", session="s1")
+    _insert(conn, "2026-06-06T00:00:00Z", 3.0, project="/p", session="s1")
+    _insert(conn, "2026-06-07T00:00:00Z", 1.0, project="/p", session="s2")
+    rows = by_project(conn, "claude", NOW)
+    assert rows[0].project == "/p"
+    assert rows[0].msgs == 3       # 메시지 3건
+    assert rows[0].sessions == 2   # 세션 2개
+
+
+def test_by_project_sums_all_token_kinds():
+    # 총 토큰 수 = input + output + cache_creation + cache_read (4종 전부).
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", project="/p", ts="2026-06-10T10:00:00Z",
+         input_tokens=100, output_tokens=20, cache_creation=5, cache_read=40)
+    _msg(conn, dedup_key="b", project="/p", ts="2026-06-11T10:00:00Z",
+         input_tokens=1, output_tokens=2, cache_creation=3, cache_read=4)
+    rows = by_project(conn, "claude", NOW)
+    assert rows[0].project == "/p"
+    assert rows[0].tokens == 175   # (100+20+5+40) + (1+2+3+4)
+
+
 def _set_summary(conn, session, summary):
     conn.execute(
         "INSERT INTO sessions(session_id, summary) VALUES(?,?) "

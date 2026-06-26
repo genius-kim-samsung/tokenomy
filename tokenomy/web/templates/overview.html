@@ -78,23 +78,23 @@
 
 <section class="card">
   <div class="card-head">
-    <h2>{% if combined %}통합 프로젝트별 비용{% else %}프로젝트별 비용{% endif %} <span class="muted">(Top 10)</span></h2>
-    <nav class="toggle small">
-      <a href="/?sort=cost" class="{{ 'on' if sort == 'cost' }}">비용</a>
-      <a href="/?sort=sessions" class="{{ 'on' if sort == 'sessions' }}">세션</a>
-      <a href="/?sort=cache" class="{{ 'on' if sort == 'cache' }}">캐시</a>
-    </nav>
+    <h2>폴더 사용량 <span class="muted">(Top 10)</span></h2>
   </div>
+  <p class="disclaimer">ⓘ 이 기기 · 정가 환산 추정 (공식 사용량 아님)</p>
   <table class="gtable">
-    <thead><tr><th>비용</th><th>캐시</th><th>세션</th><th>프로젝트</th></tr></thead>
+    <thead><tr><th>폴더</th><th>세션 수</th><th>메시지 수</th><th>토큰 수</th><th>캐시%</th><th>사용량</th></tr></thead>
     <tbody>
       {% for p in projects %}
-      <tr><td>${{ '%.2f'|format(p.cost) }}</td><td>{{ '%.0f'|format(p.cache_ratio * 100) }}%</td>
-          <td>{{ p.sessions }}</td><td>{{ p.project or '(unknown)' }}</td></tr>
-      {% else %}<tr><td colspan="4" class="muted">데이터 없음</td></tr>{% endfor %}
+      <tr><td class="col-proj" title="{{ p.project or '' }}">{{ (p.project or '(unknown)').replace('\\', '/').split('/')[-1] or '(unknown)' }}</td>
+          <td>{{ p.sessions }}</td>
+          <td>{{ p.msgs }}</td>
+          <td>{{ p.tokens|humanize }}</td>
+          <td>{{ '%.0f'|format(p.cache_ratio * 100) }}%</td>
+          <td>${{ '%.2f'|format(p.cost) }}</td></tr>
+      {% else %}<tr><td colspan="6" class="muted">데이터 없음</td></tr>{% endfor %}
     </tbody>
   </table>
-  <p class="muted"><a href="/history">전체 보기 →</a></p>
+  <p class="muted"><a href="/history">사용 이력(로컬) 전체 보기 →</a></p>
 </section>
 
 <section class="card">

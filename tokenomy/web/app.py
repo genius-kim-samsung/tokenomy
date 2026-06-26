@@ -58,7 +58,18 @@ def _kstfmt(ts):
     return dt.strftime("%m-%d %H:%M") if dt else (ts or "")
 
 
+def _humanize_count(n) -> str:
+    """큰 정수를 K/M 약식으로(예: 10_500_000 → "10.5M"). 토큰 수 표시용."""
+    n = int(n or 0)
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
 templates.env.filters["kstfmt"] = _kstfmt
+templates.env.filters["humanize"] = _humanize_count
 
 app = FastAPI(title="Tokenomy")
 app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static")

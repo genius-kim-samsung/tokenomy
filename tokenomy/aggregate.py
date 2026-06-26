@@ -118,6 +118,8 @@ class ProjectRow:
     cost: float
     sessions: int
     cache_ratio: float
+    msgs: int = 0      # 폴더의 messages 행 수
+    tokens: int = 0    # 총 토큰 수(input+output+cache_creation+cache_read)
 
 
 def _provider_where(provider: str | None, providers: list[str] | None) -> tuple[str, list]:
@@ -142,7 +144,7 @@ def _provider_where(provider: str | None, providers: list[str] | None) -> tuple[
 def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime,
                 *, providers: list[str] | None = None) -> list:
     cols = ("SELECT ts, cost_usd, priced, session_id, project, "
-            "input_tokens, cache_creation, cache_read, web_search FROM messages")
+            "input_tokens, output_tokens, cache_creation, cache_read, web_search FROM messages")
     where, params = _provider_where(provider, providers)
     rows = conn.execute(cols + where, params).fetchall()
     out = []
@@ -908,16 +910,21 @@ def by_project(conn, provider: str | None, now_kst: datetime, limit_n: int | Non
     agg: dict = {}
     for r in rows:
         key = r["project"] or "(unknown)"
-        a = agg.setdefault(key, {"cost": 0.0, "sessions": set(), "cr": 0, "den": 0})
+        a = agg.setdefault(key, {"cost": 0.0, "sessions": set(), "cr": 0, "den": 0,
+                                 "msgs": 0, "tokens": 0})
         a["cost"] += r["cost_usd"] or 0
         a["sessions"].add(r["session_id"])
         a["cr"] += r["cache_read"] or 0
         a["den"] += (r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0)
+        a["msgs"] += 1
+        a["tokens"] += ((r["input_tokens"] or 0) + (r["output_tokens"] or 0)
+                        + (r["cache_creation"] or 0) + (r["cache_read"] or 0))
 
     out = [
         ProjectRow(
             project=k, cost=round(a["cost"], 4), sessions=len(a["sessions"]),
             cache_ratio=round(a["cr"] / a["den"], 4) if a["den"] else 0.0,
+            msgs=a["msgs"], tokens=a["tokens"],
         )
         for k, a in agg.items()
     ]

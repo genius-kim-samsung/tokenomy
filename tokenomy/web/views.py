@@ -24,12 +24,6 @@ from tokenomy.db import (
 from tokenomy.freshness import LAST_INGEST_KEY
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 
-_SORT_KEYS = {
-    "cost": lambda x: x.cost,
-    "sessions": lambda x: x.sessions,
-    "cache": lambda x: x.cache_ratio,
-}
-
 # 통합 추세 스택 영역 — provider별 (라벨, 선 색, 채움 색[반투명]).
 # 스택 순서 = 등록 순서(아래→위). 신규 provider는 여기 한 줄만 추가하면 밴드가 자동 생성된다.
 _TREND_STYLE: dict[str, tuple[str, str, str]] = {
@@ -789,9 +783,9 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
 
     month_total = month_spend(conn, None, now, providers=active)
 
-    projects = by_project(conn, None, now, providers=active)
-    projects.sort(key=_SORT_KEYS.get(sort, _SORT_KEYS["cost"]), reverse=True)
-    projects = projects[:10]
+    # "폴더 사용량" 카드 — 사용량(USD) 내림차순 Top 10. by_project가 이미 cost-desc 정렬.
+    # (비용/세션/캐시 토글 폐지로 정렬 키는 사용량 하나로 고정.)
+    projects = by_project(conn, None, now, providers=active)[:10]
     sessions = by_session(conn, None, now, limit_n=10, providers=active)
 
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
