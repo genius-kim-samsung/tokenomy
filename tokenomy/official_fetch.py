@@ -25,7 +25,8 @@ from tokenomy.config import (
     seed_account_mode, tracked_providers,
 )
 from tokenomy.db import (
-    get_fetch_state, insert_official_buckets, insert_official_raw, upsert_fetch_state,
+    get_fetch_state, insert_official_buckets, insert_official_raw, last_provider_activity_ts,
+    upsert_fetch_state,
 )
 from tokenomy.official_parser import parse_claude, parse_codex
 
@@ -157,6 +158,51 @@ def refresh_claude_token(path: Path = CLAUDE_CREDS, *, now_ms: int,
             pass
         return None
     return at
+
+
+def _auto_refresh_allowed(config, conn, now, mode: str) -> bool:
+    """자동 갱신 안전망(ADR 0021). off=불허, always=허용, auto=최근 claude 활동 없을 때만 허용.
+
+    auto는 이 기기의 마지막 claude 메시지 ts가 safety_hours 이내면 'CLI 쓰는 기기'로 보고 skip한다
+    (실행 중 CLI의 메모리 토큰과 충돌 회피). 활동 없음/파싱 불가는 허용(=CLI 안 쓰는 기기로 간주).
+    """
+    if mode == "off":
+        return False
+    if mode == "always":
+        return True
+    last = last_provider_activity_ts(conn, "claude")
+    if last is None:
+        return True
+    dt = parse_ts(last)
+    if dt is None:
+        return True
+    hours = official_fetch_settings(config)["auto_refresh_safety_hours"]
+    return (now - dt).total_seconds() >= hours * 3600
+
+
+def ensure_fresh_claude_token(config, conn, *, now, path: Path = CLAUDE_CREDS,
+                              urlopen=urllib.request.urlopen) -> str:
+    """필요 시 Claude access token을 선제 갱신하고 현재(혹은 갱신된) accessToken을 반환(ADR 0021).
+
+    만료 5분 이내 + 안전망 허용이면 락 안에서 double-check 후 refresh한다. 어떤 경우든 마지막엔
+    파일의 현재 accessToken을 읽어 돌려준다(갱신 실패해도 기존 토큰으로 진행 → 상위가 401 폴백).
+    """
+    mode = official_fetch_settings(config)["auto_refresh_token"]
+    if mode != "off":
+        now_ms = int(now.timestamp() * 1000)
+        try:
+            exp = int(json.loads(path.read_text(encoding="utf-8"))["claudeAiOauth"]["expiresAt"])
+        except (OSError, ValueError, KeyError, TypeError):
+            exp = None
+        if exp is not None and exp - now_ms < _PREEMPT_MS and _auto_refresh_allowed(config, conn, now, mode):
+            with _token_lock:
+                try:                                  # double-check — 다른 스레드가 그새 갱신했으면 skip
+                    exp2 = int(json.loads(path.read_text(encoding="utf-8"))["claudeAiOauth"]["expiresAt"])
+                except (OSError, ValueError, KeyError, TypeError):
+                    exp2 = None
+                if exp2 is not None and exp2 - int(now.timestamp() * 1000) < _PREEMPT_MS:
+                    refresh_claude_token(path, now_ms=int(now.timestamp() * 1000), urlopen=urlopen)
+    return _read_claude_token(path)
 
 
 # ---------------------------------------------------------------------------

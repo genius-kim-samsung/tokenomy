@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -15,8 +15,8 @@ from tokenomy.db import (
     get_official_raw, list_official_raw,
 )
 from tokenomy.official_fetch import (
-    AuthError, FetchResult, _read_claude_token, _read_codex_auth, fetch_provider,
-    refresh_claude_token,
+    AuthError, FetchResult, _auto_refresh_allowed, _read_claude_token, _read_codex_auth,
+    ensure_fresh_claude_token, fetch_provider, refresh_claude_token,
 )
 
 
@@ -667,3 +667,51 @@ def test_refresh_creates_tmp_with_0600_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(of.os, "open", _spy)
     assert of.refresh_claude_token(p, now_ms=1, urlopen=lambda req, timeout: _Resp(body)) == "a2"
     assert seen["mode"] == 0o600
+
+
+# ---------------------------------------------------------------------------
+# ensure_fresh_claude_token + _auto_refresh_allowed (ADR 0021, Task 4)
+# ---------------------------------------------------------------------------
+
+_NOW_T4 = datetime(2026, 6, 26, 12, 0, tzinfo=timezone.utc)
+
+
+def _creds_exp(tmp_path, exp_ms):
+    p = tmp_path / ".credentials.json"
+    p.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "cur-acc", "refreshToken": "cur-ref", "expiresAt": exp_ms}}),
+        encoding="utf-8")
+    return p
+
+
+def test_ensure_refreshes_when_expiring(tmp_path):
+    near = int(_NOW_T4.timestamp() * 1000) + 60_000          # 1분 뒤 만료(임박)
+    p = _creds_exp(tmp_path, near)
+    body = json.dumps({"access_token": "fresh", "refresh_token": "r2", "expires_in": 28800})
+    cfg = {"official_fetch": {"auto_refresh_token": "always"}}
+    tok = ensure_fresh_claude_token(cfg, connect(":memory:"), now=_NOW_T4, path=p,
+                                    urlopen=lambda req, timeout: _Resp(body))
+    assert tok == "fresh"
+
+
+def test_ensure_skips_when_not_expiring(tmp_path):
+    far = int(_NOW_T4.timestamp() * 1000) + 3_600_000        # 1시간 뒤(여유)
+    p = _creds_exp(tmp_path, far)
+    cfg = {"official_fetch": {"auto_refresh_token": "always"}}
+    def _never(req, timeout): raise AssertionError("refresh 호출되면 안 됨")
+    tok = ensure_fresh_claude_token(cfg, connect(":memory:"), now=_NOW_T4, path=p, urlopen=_never)
+    assert tok == "cur-acc"
+
+
+def test_auto_refresh_allowed_modes():
+    conn = connect(":memory:")
+    assert _auto_refresh_allowed({"official_fetch": {"auto_refresh_token": "off"}}, conn, _NOW_T4, "off") is False
+    assert _auto_refresh_allowed({"official_fetch": {"auto_refresh_token": "always"}}, conn, _NOW_T4, "always") is True
+    # auto + 최근 활동 없음 → 허용
+    assert _auto_refresh_allowed({"official_fetch": {"auto_refresh_token": "auto"}}, conn, _NOW_T4, "auto") is True
+    # auto + 최근(1시간 전) claude 활동 → skip(False)
+    conn.execute("INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+                 ("k", "claude", "2026-06-26T11:00:00+00:00"))   # _NOW_T4(12:00)보다 1h 전
+    conn.commit()
+    assert _auto_refresh_allowed({"official_fetch": {"auto_refresh_token": "auto",
+                                  "auto_refresh_safety_hours": 24}}, conn, _NOW_T4, "auto") is False
