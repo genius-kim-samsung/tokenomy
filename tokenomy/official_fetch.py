@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -35,6 +36,15 @@ _CLAUDE_UA = "claude-code/2.1.179"
 _CODEX_UA = "codex_cli_rs"
 _CLAUDE_BETA = "oauth-2025-04-20"
 _TIMEOUT = 3  # 초(최대 3s, 백오프 없음)
+
+# OAuth refresh(능동 갱신, ADR 0021) — Claude만. console.*는 Cloudflare 403이라 api.* 사용.
+_CLAUDE_REFRESH_URL = "https://api.anthropic.com/v1/oauth/token"
+_CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+_REFRESH_TIMEOUT = 10  # 초(백오프 없음)
+_PREEMPT_MS = 5 * 60 * 1000  # 만료 5분 전이면 선제 갱신
+
+# 토큰 read→refresh→write 구간 직렬화(같은 프로세스 내 진입점 3곳의 self-race 방지).
+_token_lock = threading.Lock()
 
 
 class AuthError(Exception):
@@ -83,6 +93,58 @@ def _read_codex_auth(path: Path = CODEX_AUTH) -> tuple[str, str]:
     if not tok or not acct:
         raise AuthError("codex token/account_id empty")
     return tok, acct
+
+
+def refresh_claude_token(path: Path = CLAUDE_CREDS, *, now_ms: int,
+                         urlopen=urllib.request.urlopen) -> str | None:
+    """refresh token으로 새 access token을 받아 .credentials.json에 atomic write-back(ADR 0021).
+
+    성공 시 새 accessToken을 반환하고, 실패(파일/네트워크/스키마)는 None을 반환하며 **원본 파일을
+    절대 건드리지 않는다**(무손상 폴백). 토큰은 파일에만 쓰고 DB에는 저장하지 않는다.
+    rotation으로 새 refresh_token이 오면 반드시 기록한다(안 쓰면 다음 갱신이 죽은 토큰으로 실패).
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        o = data["claudeAiOauth"]
+        rt = o["refreshToken"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not rt:
+        return None
+
+    body = json.dumps({"grant_type": "refresh_token", "refresh_token": rt,
+                       "client_id": _CLAUDE_CLIENT_ID}).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json",
+               "User-Agent": _CLAUDE_UA, "anthropic-beta": _CLAUDE_BETA}
+    req = urllib.request.Request(_CLAUDE_REFRESH_URL, data=body, headers=headers,
+                                 method="POST")
+    try:
+        with urlopen(req, timeout=_REFRESH_TIMEOUT) as resp:
+            text = resp.read().decode("utf-8")
+    except Exception:
+        return None  # 비200/네트워크/타임아웃 — 원본 불변
+
+    try:
+        r = json.loads(text)
+        at = r["access_token"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not at:
+        return None
+
+    # 토큰 3종만 갱신, 기존 키 보존.
+    o["accessToken"] = at
+    nrt = r.get("refresh_token")
+    if nrt:
+        o["refreshToken"] = nrt
+    exp_in = r.get("expires_in")
+    if exp_in:
+        o["expiresAt"] = int(now_ms) + int(exp_in) * 1000
+
+    tmp = path.with_name(path.name + ".tmp")          # 같은 디렉터리 temp → atomic replace
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+    return at
 
 
 # ---------------------------------------------------------------------------

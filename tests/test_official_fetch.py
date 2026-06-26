@@ -15,6 +15,7 @@ from tokenomy.db import (
 )
 from tokenomy.official_fetch import (
     AuthError, FetchResult, _read_claude_token, _read_codex_auth, fetch_provider,
+    refresh_claude_token,
 )
 
 
@@ -588,3 +589,53 @@ def test_refresh_tracked_no_seed_without_successful_fetch(tmp_path, monkeypatch)
     cfg = {"tracked_providers": ["claude"], "credit_to_usd": 0.04}
     refresh_tracked(cfg, now_kst=_NOW, conn=conn)
     assert account_mode(cfg) is None
+
+
+# ---------------------------------------------------------------------------
+# refresh_claude_token — OAuth refresh + atomic write-back (ADR 0021)
+# ---------------------------------------------------------------------------
+
+class _Resp:
+    def __init__(self, text): self._t = text
+    def read(self): return self._t.encode("utf-8")
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def _creds(tmp_path, exp_ms=1000):
+    p = tmp_path / ".credentials.json"
+    p.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "old-acc", "refreshToken": "old-ref",
+        "expiresAt": exp_ms, "scopes": ["x"], "subscriptionType": "max"}}),
+        encoding="utf-8")
+    return p
+
+
+def test_refresh_success_writes_back_and_preserves_keys(tmp_path):
+    p = _creds(tmp_path)
+    body = json.dumps({"access_token": "new-acc", "refresh_token": "new-ref",
+                       "expires_in": 28800})
+    new = refresh_claude_token(p, now_ms=1_000_000, urlopen=lambda req, timeout: _Resp(body))
+    assert new == "new-acc"
+    o = json.loads(p.read_text(encoding="utf-8"))["claudeAiOauth"]
+    assert o["accessToken"] == "new-acc"
+    assert o["refreshToken"] == "new-ref"                 # rotation 기록
+    assert o["expiresAt"] == 1_000_000 + 28800 * 1000     # now_ms + expires_in*1000
+    assert o["subscriptionType"] == "max"                 # 기존 키 보존
+
+
+def test_refresh_http_error_leaves_file_untouched(tmp_path):
+    p = _creds(tmp_path)
+    before = p.read_text(encoding="utf-8")
+    def _boom(req, timeout):
+        raise urllib.error.HTTPError("u", 403, "forbidden", {}, None)
+    assert refresh_claude_token(p, now_ms=1_000_000, urlopen=_boom) is None
+    assert p.read_text(encoding="utf-8") == before         # 무손상
+
+
+def test_refresh_bad_schema_leaves_file_untouched(tmp_path):
+    p = _creds(tmp_path)
+    before = p.read_text(encoding="utf-8")
+    body = json.dumps({"unexpected": "shape"})             # access_token 없음
+    assert refresh_claude_token(p, now_ms=1, urlopen=lambda req, timeout: _Resp(body)) is None
+    assert p.read_text(encoding="utf-8") == before
