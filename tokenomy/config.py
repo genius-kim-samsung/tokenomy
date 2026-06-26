@@ -81,7 +81,8 @@ def debug_mode(config: dict) -> bool:
 def official_fetch_settings(config: dict) -> dict:
     """공식 사용량 갱신 설정. min_interval_minutes는 '자동 갱신 간격' — 창이 열린 동안
     갱신을 자동 폴링하는 주기이자 자동 호출의 최소 간격(수동 갱신은 무시한다).
-    on/off·provider 게이트는 tracked_providers가 담당한다. 누락·오설정은 기본 10분으로 폴백한다."""
+    on/off·provider 게이트는 tracked_providers가 담당한다. 누락·오설정은 기본 10분으로 폴백한다.
+    auto_refresh_token="auto(안전망)|always(강제)|off", auto_refresh_safety_hours="auto 안전망 임계(시간, 1~168)"."""
     raw = config.get("official_fetch") or {}
     try:
         mi = int(raw.get("min_interval_minutes", 10))
@@ -89,8 +90,18 @@ def official_fetch_settings(config: dict) -> dict:
         mi = 10
     # background_poll: 상주 모드 중 창 숨김과 무관하게 공식 갱신을 주기 폴할지(ADR 0007).
     # 기본 ON(콜드스타트 방지) — 끄면 갱신은 페이지 폴링·창 복원·수동 버튼에만 일어난다.
+    mode = raw.get("auto_refresh_token")
+    if mode not in ("auto", "always", "off"):
+        mode = "auto"
+    try:
+        sh = int(raw.get("auto_refresh_safety_hours", 24))
+    except (TypeError, ValueError):
+        sh = 24
+    sh = min(max(sh, 1), 168)
     return {"min_interval_minutes": mi if mi > 0 else 10,
-            "background_poll": bool(raw.get("background_poll", True))}
+            "background_poll": bool(raw.get("background_poll", True)),
+            "auto_refresh_token": mode,
+            "auto_refresh_safety_hours": sh}
 
 
 def forecast_settings(config: dict) -> dict:

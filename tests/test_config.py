@@ -97,7 +97,8 @@ from tokenomy.config import official_fetch_settings
 def test_official_fetch_settings_defaults():
     # 자동 갱신 간격 기본 10분(quota를 CLI와 공유 → 보수적)
     s = official_fetch_settings({})
-    assert s == {"min_interval_minutes": 10, "background_poll": True}
+    assert s == {"min_interval_minutes": 10, "background_poll": True,
+                 "auto_refresh_token": "auto", "auto_refresh_safety_hours": 24}
 
 
 def test_official_fetch_settings_bad_interval_falls_back():
@@ -293,3 +294,23 @@ def test_seed_account_mode_respects_explicit_value(tmp_path):
     assert seed_account_mode(cfg, has_usd_budget=True, path=p) == "subscription"
     assert cfg["account_mode"] == "subscription"
     assert not p.exists()                               # 존중 경로는 영속하지 않는다(쓰기 없음)
+
+
+def test_auto_refresh_defaults():
+    s = official_fetch_settings({})
+    assert s["auto_refresh_token"] == "auto"
+    assert s["auto_refresh_safety_hours"] == 24
+
+
+def test_auto_refresh_explicit_and_clamp():
+    s = official_fetch_settings({"official_fetch": {
+        "auto_refresh_token": "always", "auto_refresh_safety_hours": 999}})
+    assert s["auto_refresh_token"] == "always"
+    assert s["auto_refresh_safety_hours"] == 168          # 168로 clamp
+
+
+def test_auto_refresh_invalid_falls_back():
+    s = official_fetch_settings({"official_fetch": {
+        "auto_refresh_token": "bogus", "auto_refresh_safety_hours": "x"}})
+    assert s["auto_refresh_token"] == "auto"
+    assert s["auto_refresh_safety_hours"] == 24
