@@ -405,7 +405,8 @@ async def settings_post(request: Request):
     # auto_refresh_token: Claude OAuth 토큰 자동 갱신 모드(ADR 0021). auto/always/off.
     config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 10,
                                 "background_poll": bool(form.get("background_poll")),
-                                "auto_refresh_token": arm}
+                                "auto_refresh_token": arm,
+                                "auto_refresh_safety_hours": official_fetch_settings(config)["auto_refresh_safety_hours"]}
     # 소비속도 추정 기간(트레일링 창, 주) — getter로 정규화(1~8 clamp·오설정→기본 2) 후 저장.
     # 클램프 범위를 getter 단일 출처에 두려고 직접 min/max를 두지 않는다.
     rw = forecast_settings({"forecast_settings": {"rate_window_weeks": form.get("rate_window_weeks")}})

@@ -2044,3 +2044,29 @@ def test_settings_page_shows_auto_refresh_control(tmp_path, monkeypatch):
     """GET /settings 렌더에 auto_refresh_token select 컨트롤이 있어야 한다."""
     client, _ = _client_with_config(tmp_path, monkeypatch)
     assert 'name="auto_refresh_token"' in client.get("/settings").text
+
+
+def test_settings_preserves_auto_refresh_safety_hours(tmp_path, monkeypatch):
+    """POST /settings가 UI 미노출 auto_refresh_safety_hours를 덮어쓰지 않고 보존한다(Fix 1)."""
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    # 비기본(48h) safety_hours를 미리 파일에 심어 두고 저장한다
+    cfg_path.write_text(json.dumps({"tracked_providers": ["claude", "codex"],
+                                    "official_fetch": {"auto_refresh_safety_hours": 48}}),
+                        encoding="utf-8")
+    r = client.post("/settings", data={"min_interval": "10",
+                                       "auto_refresh_token": "auto"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["official_fetch"]["auto_refresh_safety_hours"] == 48
+
+
+def test_settings_invalid_auto_refresh_token_falls_back_to_auto(tmp_path, monkeypatch):
+    """POST /settings에 유효하지 않은 auto_refresh_token("garbage")을 보내면 "auto"로 폴백 저장(Fix 4)."""
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"min_interval": "10",
+                                       "auto_refresh_token": "garbage"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["official_fetch"]["auto_refresh_token"] == "auto"

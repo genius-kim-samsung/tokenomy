@@ -703,6 +703,20 @@ def test_ensure_skips_when_not_expiring(tmp_path):
     assert tok == "cur-acc"
 
 
+def test_auto_refresh_allowed_old_activity_returns_true():
+    """auto 모드 + 마지막 claude 활동이 safety_hours보다 오래됨 → True(refresh 허용, ADR 0021 핵심 유스케이스).
+
+    CLI를 안 쓰는 기기에서 토큰이 만료됐어도 갱신이 허용되어야 한다.
+    _NOW_T4 = 2026-06-26T12:00:00Z 기준 ~25h 전 활동 → 24h 임계 초과 → True.
+    """
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+                 ("k_old", "claude", "2026-06-25T11:00:00+00:00"))   # _NOW_T4(2026-06-26 12:00Z) 기준 25h 전
+    conn.commit()
+    assert _auto_refresh_allowed({"official_fetch": {"auto_refresh_token": "auto",
+                                  "auto_refresh_safety_hours": 24}}, conn, _NOW_T4, "auto") is True
+
+
 def test_auto_refresh_allowed_modes():
     conn = connect(":memory:")
     assert _auto_refresh_allowed({"official_fetch": {"auto_refresh_token": "off"}}, conn, _NOW_T4, "off") is False
