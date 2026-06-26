@@ -219,6 +219,52 @@ def test_by_session_excludes_other_months():
     assert [r.session_id for r in rows] == ["jun"]
 
 
+# ─── by_session: 총 토큰 + 주사용모델(ADR 0020 세션별 사용량 카드) ──────────────
+
+def test_by_session_total_tokens():
+    """총 토큰 = 세션 내 모든 행의 input+output+cache_creation+cache_read 합."""
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-05T00:00:00Z",
+         input_tokens=100, output_tokens=20, cache_creation=30, cache_read=50, cost_usd=1.0)
+    _msg(conn, dedup_key="b", session_id="s1", ts="2026-06-06T00:00:00Z",
+         input_tokens=10, output_tokens=5, cost_usd=0.5)
+    rows = by_session(conn, "claude", NOW)
+    assert rows[0].tokens == 100 + 20 + 30 + 50 + 10 + 5  # 215
+
+
+def test_by_session_top_model_and_share():
+    """주사용모델 = 세션 내 총 토큰 최다 모델 + 비중(토큰 점유율, 0~1 fraction)."""
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-05T00:00:00Z",
+         model="claude-opus-4-8", input_tokens=180, cost_usd=5.0)
+    _msg(conn, dedup_key="b", session_id="s1", ts="2026-06-06T00:00:00Z",
+         model="claude-haiku-4-5", input_tokens=20, cost_usd=0.1)
+    rows = by_session(conn, "claude", NOW)
+    assert rows[0].top_model == "claude-opus-4-8"
+    assert rows[0].top_model_share == pytest.approx(0.9)  # 180/200
+
+
+def test_by_session_top_model_tie_break_by_cost():
+    """토큰 동률이면 비용 큰 모델이 주사용모델."""
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-05T00:00:00Z",
+         model="claude-opus-4-8", input_tokens=100, cost_usd=9.0)
+    _msg(conn, dedup_key="b", session_id="s1", ts="2026-06-05T01:00:00Z",
+         model="claude-haiku-4-5", input_tokens=100, cost_usd=1.0)
+    rows = by_session(conn, "claude", NOW)
+    assert rows[0].top_model == "claude-opus-4-8"
+
+
+def test_by_session_top_model_none_when_model_absent():
+    """모델 정보가 없으면 top_model=None(템플릿이 (unknown) 처리)."""
+    conn = connect(":memory:")
+    _msg(conn, dedup_key="a", session_id="s1", ts="2026-06-05T00:00:00Z",
+         model=None, input_tokens=10, cost_usd=1.0)
+    rows = by_session(conn, "claude", NOW)
+    assert rows[0].top_model is None
+    assert rows[0].tokens == 10
+
+
 # ─── status 필드 테스트 ───────────────────────────────────────────────────────
 
 _NOW_STATUS = datetime(2026, 6, 15, tzinfo=KST)  # 6월 15일 = 30일 중 15일 경과

@@ -7,14 +7,14 @@
 {% set d = detail %}
 <h1 class="page-title">세션 상세 <span class="muted">· {{ d.project or '(unknown)' }} · {{ d.provider }}</span></h1>
 <section class="card">
-  <p>{{ d.first_ts|kstfmt }} ~ {{ d.last_ts|kstfmt }} · ${{ '%.2f'|format(d.cost) }} · {{ d.msgs }} msg
+  <p>{{ d.first_ts|datetime }} ~ {{ d.last_ts|datetime }} · {{ d.cost|usd }} · {{ d.msgs|comma }} msg
      {% if d.label %}· {{ d.label }}{% endif %}</p>
   <h2>모델별</h2>
   <table class="gtable">
     <thead><tr><th>모델</th><th>비용</th><th>input</th><th>output</th><th>cache_cr</th><th>cache_rd</th></tr></thead>
     <tbody>
       {% for m in d.models %}
-      <tr><td>{{ m.model or '(unknown)' }}</td><td>${{ '%.2f'|format(m.cost) }}</td>
+      <tr><td>{{ m.model|modelfmt }}</td><td>{{ m.cost|usd }}</td>
           <td>{{ '{:,}'.format(m.input_tokens) }}</td><td>{{ '{:,}'.format(m.output_tokens) }}</td>
           <td>{{ '{:,}'.format(m.cache_creation) }}</td><td>{{ '{:,}'.format(m.cache_read) }}</td></tr>
       {% endfor %}

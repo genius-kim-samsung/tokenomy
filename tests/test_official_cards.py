@@ -82,7 +82,7 @@ def test_card_official_ok_gauge_levels():
     g = card["gauges"][0]
     assert g["label"] == "월 사용 한도"
     assert g["level"] == "warn"          # 80% → warn
-    assert g["caption"] == "$80.00 / $100"
+    assert g["caption"] == "$80.0 / $100"
 
 
 def test_card_exhausted_label():

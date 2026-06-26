@@ -1,4 +1,4 @@
-{% if count > 0 %}<p class="muted">{{ period_label }} · {{ count }}건 · 합계 ${{ '%.2f'|format(total) }}</p>{% endif %}
+{% if count > 0 %}<p class="muted">{{ period_label }} · {{ count|comma }}건 · 합계 {{ total|usd }}</p>{% endif %}
 
 <table class="gtable tree">
     <thead><tr>
@@ -14,8 +14,8 @@
         <td class="col-date"><span class="caret">▾</span> {{ d.date[5:] }}({{ d.weekday }})</td>
         <td></td><td></td>
         <td class="col-preview muted">{{ d.preview }}</td>
-        <td class="num">{{ d.msgs }}</td>
-        <td class="num">${{ '%.2f'|format(d.cost) }}</td>
+        <td class="num">{{ d.msgs|comma }}</td>
+        <td class="num">{{ d.cost|usd }}</td>
         <td class="num">{{ '%.0f'|format(d.cache_ratio * 100) }}%</td>
       </tr>
         {% for f in d.folders %}
@@ -25,8 +25,8 @@
           <td class="col-folder" title="{{ f.project }}"><span class="caret">▾</span> {{ (f.project or '(unknown)').replace('\\', '/').split('/')[-1] or '(unknown)' }}</td>
           <td></td>
           <td class="col-preview muted">{{ f.preview }}</td>
-          <td class="num">{{ f.msgs }}</td>
-          <td class="num">${{ '%.2f'|format(f.cost) }}</td>
+          <td class="num">{{ f.msgs|comma }}</td>
+          <td class="num">{{ f.cost|usd }}</td>
           <td class="num">{{ '%.0f'|format(f.cache_ratio * 100) }}%</td>
         </tr>
           {% for s in f.rows %}
@@ -37,8 +37,8 @@
               <span class="ai-badge ai-{{ s.provider or 'none' }}">{{ s.provider or '—' }}</span>
               {{ s.summary or '—' }}{% if s.is_continued %} <span class="cont" title="이전 날짜에서 이어진 세션">↩</span>{% endif %}
             </td>
-            <td class="num">{{ s.msgs }}</td>
-            <td class="num">${{ '%.2f'|format(s.cost) }}</td>
+            <td class="num">{{ s.msgs|comma }}</td>
+            <td class="num">{{ s.cost|usd }}</td>
             <td class="num {{ 'cache-miss' if s.cache_miss }}">{{ '%.0f'|format(s.cache_ratio * 100) }}%{% if s.cache_miss %} <span title="이어진 세션인데 캐시 재사용률 낮음 — 재개로 컨텍스트 재구축 가능성">⚠</span>{% endif %}</td>
           </tr>
           {% endfor %}

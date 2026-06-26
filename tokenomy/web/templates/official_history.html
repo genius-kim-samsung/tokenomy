@@ -63,14 +63,14 @@
       {% for r in table|reverse %}
       <tr class="day-row"{% if r.detail %} data-detail="1"{% endif %}>
         <td>{% if r.detail %}<span class="caret" aria-hidden="true">▸</span> {% endif %}{{ r.hlabel if is_hourly else r.ymd }}</td>
-        {% if r.covered %}<td>${{ '%.2f'|format(r.used_usd) }}</td>
+        {% if r.covered %}<td>{{ r.used_usd|usd }}</td>
         {% else %}<td class="muted">수집 공백</td>{% endif %}
         {% if bar_series|length >= 2 %}{% for s in bar_series %}
           {% set v = r.per_provider.get(s.key) %}
-          <td>{{ '$%.2f'|format(v) if v is not none else '—' }}</td>
+          <td>{{ v|usd }}</td>
         {% endfor %}{% endif %}
-        <td>{{ '$%.2f'|format(r.end_cumulative_usd) if r.end_cumulative_usd is not none else '—' }}</td>
-        <td>{{ '$%.2f'|format(r.remaining_usd) if r.remaining_usd is not none else '—' }}</td>
+        <td>{{ r.end_cumulative_usd|usd }}</td>
+        <td>{{ r.remaining_usd|usd }}</td>
       </tr>
       {% if r.detail %}
       <tr class="snap-detail" hidden>
@@ -81,7 +81,7 @@
             {% if pd.first_ever %}
               <div class="muted">추적 시작 — 직전 기준 없음. 이 날 소비에는 <strong>추적 이전 누적분</strong>이 포함됩니다(델타 = 누적값 전체).</div>
             {% else %}
-              <div class="muted">직전 기준 <strong>{{ pd.baseline.ts[5:16]|replace('T',' ') }}</strong> · 누적 ${{ '%.2f'|format(pd.baseline.used_usd) }}{% if pd.gap_days >= 2 %} · <span style="color:#e5a04a">⚠ {{ pd.gap_days }}일 갭 — 그 사이 소비가 이 날에 합산</span>{% endif %}</div>
+              <div class="muted">직전 기준 <strong>{{ pd.baseline.ts[5:16]|replace('T',' ') }}</strong> · 누적 {{ pd.baseline.used_usd|usd }}{% if pd.gap_days >= 2 %} · <span style="color:#e5a04a">⚠ {{ pd.gap_days }}일 갭 — 그 사이 소비가 이 날에 합산</span>{% endif %}</div>
             {% endif %}
             <table class="gtable" style="margin:.3rem 0">
               <thead><tr><th>표본 시각</th><th>누적</th><th>증가분</th></tr></thead>
@@ -89,17 +89,17 @@
                 {% for s in pd.snapshots %}
                 <tr>
                   <td>{{ s.ts[5:16]|replace('T',' ') }}</td>
-                  <td>${{ '%.2f'|format(s.used_usd) }}</td>
-                  <td>+${{ '%.2f'|format(s.delta) }}{% if s.reset %} <span style="color:#e5a04a">리셋</span>{% endif %}</td>
+                  <td>{{ s.used_usd|usd }}</td>
+                  <td>+{{ s.delta|usd }}{% if s.reset %} <span style="color:#e5a04a">리셋</span>{% endif %}</td>
                 </tr>
                 {% endfor %}
               </tbody>
             </table>
-            <div class="muted">합계 +${{ '%.2f'|format(pd.total_delta) }}</div>
+            <div class="muted">합계 +{{ pd.total_delta|usd }}</div>
           </div>
           {% endfor %}
           <div class="muted" style="border-top:1px solid rgba(255,255,255,.08);margin-top:.4rem;padding-top:.3rem">
-            이 날 일 소비 <strong>${{ '%.2f'|format(r.used_usd) }}</strong> = 위 증가분의 합
+            이 날 일 소비 <strong>{{ r.used_usd|usd }}</strong> = 위 증가분의 합
           </div>
         </td>
       </tr>

@@ -17,9 +17,9 @@
     {% for p in period_card.periods %}
     <div class="period-line">
       <span class="period-key">{{ p.key }}</span>
-      <span class="period-amt">{% if p.state == "none" or p.usd is none %}<span class="muted">—</span>{% else %}<strong>${{ '%.2f'|format(p.usd) }}</strong>{% if p.state == "partial" %}<span class="muted" title="추적 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}</span>
+      <span class="period-amt">{% if p.state == "none" or p.usd is none %}<span class="muted">—</span>{% else %}<strong>{{ p.usd|usd }}</strong>{% if p.state == "partial" %}<span class="muted" title="추적 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}</span>
       <span class="pace{% if p.pace %} pace-{{ p.pace.dir }}{% endif %}"{% if p.pace and p.prev_usd is not none %} title="{{ p.prev_label }} 전체 대비"{% endif %}>{% if p.pace %}{% if p.pace.dir == "up" %}▲{% elif p.pace.dir == "down" %}▼{% else %}≈{% endif %}{% if p.pace.pct %} {{ p.pace.pct }}%{% endif %}{% endif %}</span>
-      <span class="period-base">{% if p.prev_usd is not none %}· {{ p.prev_label }} ${{ '%.2f'|format(p.prev_usd) }}{% endif %}</span>
+      <span class="period-base">{% if p.prev_usd is not none %}· {{ p.prev_label }} {{ p.prev_usd|usd }}{% endif %}</span>
     </div>
     {% endfor %}
   </div>

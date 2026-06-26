@@ -143,7 +143,7 @@ def _provider_where(provider: str | None, providers: list[str] | None) -> tuple[
 
 def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime,
                 *, providers: list[str] | None = None) -> list:
-    cols = ("SELECT ts, cost_usd, priced, session_id, project, "
+    cols = ("SELECT ts, cost_usd, priced, session_id, project, model, "
             "input_tokens, output_tokens, cache_creation, cache_read, web_search FROM messages")
     where, params = _provider_where(provider, providers)
     rows = conn.execute(cols + where, params).fetchall()
@@ -1019,6 +1019,21 @@ class SessionRow:
     last_ts: str | None
     msgs: int
     cache_ratio: float
+    tokens: int = 0                  # 총 토큰 수(input+output+cache_creation+cache_read)
+    top_model: str | None = None     # 주사용모델 raw id(세션 내 토큰 최다, 동률 시 비용)
+    top_model_share: float = 0.0     # 주사용모델 토큰 점유율(0~1 fraction)
+
+
+def _top_model(models: dict, total_tokens: int) -> tuple[str | None, float]:
+    """세션 내 모델별 {tok,cost}에서 주사용모델(토큰 최다, 동률 시 비용) + 토큰 점유율(0~1).
+
+    models가 비면 (None, 0.0). 점유율 분모는 세션 총 토큰 — 0이면 0.0.
+    """
+    if not models:
+        return None, 0.0
+    top = max(models.items(), key=lambda kv: (kv[1]["tok"], kv[1]["cost"]))
+    share = round(top[1]["tok"] / total_tokens, 4) if total_tokens else 0.0
+    return top[0], share
 
 
 def by_session(
@@ -1055,7 +1070,8 @@ def by_session(
         a = agg.setdefault(
             sid,
             {"project": r["project"], "cost": 0.0,
-             "first": r["ts"], "last": r["ts"], "cr": 0, "den": 0},
+             "first": r["ts"], "last": r["ts"], "cr": 0, "den": 0,
+             "tokens": 0, "models": {}},
         )
         a["cost"] += r["cost_usd"] or 0
         if r["ts"] and (a["first"] is None or r["ts"] < a["first"]):
@@ -1064,10 +1080,18 @@ def by_session(
             a["last"] = r["ts"]
         a["cr"] += r["cache_read"] or 0
         a["den"] += (r["input_tokens"] or 0) + (r["cache_creation"] or 0) + (r["cache_read"] or 0)
+        # 총 토큰(4종) + 모델별 토큰/비용 — 주사용모델 산출용
+        row_tok = ((r["input_tokens"] or 0) + (r["output_tokens"] or 0)
+                   + (r["cache_creation"] or 0) + (r["cache_read"] or 0))
+        a["tokens"] += row_tok
+        mm = a["models"].setdefault(r["model"], {"tok": 0, "cost": 0.0})
+        mm["tok"] += row_tok
+        mm["cost"] += r["cost_usd"] or 0
 
     out = []
     for sid, a in agg.items():
         m = meta.get(sid, (None, None, None, None))
+        top_model, top_share = _top_model(a["models"], a["tokens"])
         out.append(SessionRow(
             session_id=sid, project=a["project"],
             provider=m[2],
@@ -1076,6 +1100,9 @@ def by_session(
             cost=round(a["cost"], 4), first_ts=a["first"], last_ts=a["last"],
             msgs=(m[3] or 0),
             cache_ratio=round(a["cr"] / a["den"], 4) if a["den"] else 0.0,
+            tokens=a["tokens"],
+            top_model=top_model,
+            top_model_share=top_share,
         ))
     if order == "recent":
         out.sort(key=lambda x: x.last_ts or "", reverse=True)

@@ -414,25 +414,31 @@
   .onboarding-card form { @apply my-4; }
 }
 
-/* ── 세션 표(.sess) 반응형: 기존 동작 그대로 이식(원시 CSS) ── */
+/* ── 세션 표(.sess) 반응형: 11열(세션별 사용량 카드, ADR 0020) ──
+   열 순서 1일시 2폴더 3내용 4사용량 5총토큰 6메시지 7캐시% 8세션길이 9AI 10주사용모델 11▸.
+   좁아질수록 부차 지표부터 숨기고 내용·사용량·▸ 코어를 끝까지 남긴다. */
 .gtable.sess th { white-space: nowrap; }
-.gtable.sess td:nth-child(5) { white-space: nowrap; }
+.gtable.sess td:nth-child(5) { white-space: nowrap; }   /* 총 토큰 */
 .gtable.sess td.col-time { white-space: nowrap; line-height: 1.4; color: var(--color-muted); }
 .gtable.sess td.col-sum  { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gtable.sess td.col-proj { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 900px) {
-  .gtable.sess th:nth-child(5), .gtable.sess td:nth-child(5):not([colspan]),
+  /* 메시지(6)·캐시%(7)·세션 길이(8) 숨김 */
+  .gtable.sess th:nth-child(6), .gtable.sess td:nth-child(6):not([colspan]),
   .gtable.sess th:nth-child(7), .gtable.sess td:nth-child(7):not([colspan]),
   .gtable.sess th:nth-child(8), .gtable.sess td:nth-child(8):not([colspan]) { display: none; }
   .gtable.sess td.col-sum { max-width: 280px; }
 }
 @media (max-width: 640px) {
-  .gtable.sess th:nth-child(2), .gtable.sess td:nth-child(2):not([colspan]) { display: none; }
+  /* 추가로 폴더(2)·총 토큰(5)·주사용모델(10) 숨김 */
+  .gtable.sess th:nth-child(2), .gtable.sess td:nth-child(2):not([colspan]),
+  .gtable.sess th:nth-child(5), .gtable.sess td:nth-child(5):not([colspan]),
+  .gtable.sess th:nth-child(10), .gtable.sess td:nth-child(10):not([colspan]) { display: none; }
   .gtable.sess td.col-sum  { max-width: 160px; }
-  .gtable.sess td.col-proj { max-width: 150px; }
 }
 @media (max-width: 480px) {
-  .gtable.sess th:nth-child(1), .gtable.sess td:nth-child(1):not([colspan]) { display: none; }
+  /* 추가로 일시(1)·AI(9) 숨김 → 내용·사용량·▸만 */
+  .gtable.sess th:nth-child(1), .gtable.sess td:nth-child(1):not([colspan]),
+  .gtable.sess th:nth-child(9), .gtable.sess td:nth-child(9):not([colspan]) { display: none; }
   .gtable.sess td.col-sum  { max-width: 130px; }
-  .gtable.sess td.col-proj { max-width: 130px; }
 }

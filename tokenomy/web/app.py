@@ -1,6 +1,7 @@
 """FastAPI 라우트 (얇게 — 라우팅+입력검증만). 데이터 조립은 views.py."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -53,9 +54,22 @@ templates.env.globals["app_version"] = __version__
 templates.env.globals["mini_view_available"] = mini_view_available()
 
 
-def _kstfmt(ts):
+def _fmt_datetime(ts) -> str:
+    """저장 타임스탬프(UTC ISO) → 'YYYY-MM-DD HH:MM'(KST·24h, ADR 0020). 파싱 실패 시 빈 문자열."""
     dt = parse_ts(ts)
-    return dt.strftime("%m-%d %H:%M") if dt else (ts or "")
+    return dt.strftime("%Y-%m-%d %H:%M") if dt else ""
+
+
+def _usd(v) -> str:
+    """금액 → '$X.X'(소수 1자리·천 단위 콤마, ADR 0020). 값 없음(None)은 '—'."""
+    if v is None:
+        return "—"
+    return f"${v:,.1f}"
+
+
+def _comma(n) -> str:
+    """정수 카운트 → 천 단위 콤마('3,042', ADR 0020). None/0 → '0'."""
+    return f"{int(n or 0):,}"
 
 
 def _humanize_count(n) -> str:
@@ -68,8 +82,66 @@ def _humanize_count(n) -> str:
     return str(n)
 
 
-templates.env.filters["kstfmt"] = _kstfmt
+_CLAUDE_FAMILIES = {"opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku",
+                    "fable": "Fable", "synthetic": "Synthetic"}
+_CODEX_SUFFIX = {"codex": "Codex", "mini": "Mini", "nano": "Nano",
+                 "pro": "Pro", "turbo": "Turbo"}
+
+
+def _modelfmt(raw) -> str:
+    """모델 raw id → 사람용 약칭(ADR 0020). 매칭 실패는 raw 폴백, 빈값은 '(unknown)'.
+
+    Claude: 패밀리 키워드 + 짧은 버전 숫자(opus-4-8 → 'Opus 4.8', 3-5-sonnet → 'Sonnet 3.5';
+            8자리 날짜 스탬프는 버전에서 제외).
+    Codex:  gpt- → 'GPT-', 접미사 Codex/Mini/Nano 대문자화('gpt-5-codex' → 'GPT-5 Codex').
+            o-시리즈(o4-mini)는 원문 유지(ADR 예시).
+    """
+    if not raw:
+        return "(unknown)"
+    low = raw.lower()
+    parts = low.split("-")
+    fam = next((_CLAUDE_FAMILIES[p] for p in parts if p in _CLAUDE_FAMILIES), None)
+    if fam:
+        nums = [p for p in parts if p.isdigit() and len(p) <= 2]
+        return f"{fam} {'.'.join(nums[:2])}".strip()
+    if low.startswith("gpt-"):
+        segs = low[4:].split("-")
+        out = "GPT-" + segs[0]
+        for s in segs[1:]:
+            out += " " + _CODEX_SUFFIX.get(s, s.capitalize())
+        return out
+    if re.match(r"^o\d", low):
+        return low
+    return raw
+
+
+def _dur(first_ts, last_ts) -> str:
+    """세션 길이 = 첫~마지막 메시지 벽시계 차(ADR 0020). 한쪽이라도 없으면 '—'.
+
+    1분 미만 / N분 / N시간 M분(0분 생략) / N일 M시간(0시간 생략).
+    """
+    a, b = parse_ts(first_ts), parse_ts(last_ts)
+    if not a or not b:
+        return "—"
+    total = max(0, int((b - a).total_seconds()))
+    if total < 60:
+        return "1분 미만"
+    if total < 3600:
+        return f"{total // 60}분"
+    if total < 86400:
+        h, m = divmod(total // 60, 60)
+        return f"{h}시간 {m}분" if m else f"{h}시간"
+    d = total // 86400
+    h = (total % 86400) // 3600
+    return f"{d}일 {h}시간" if h else f"{d}일"
+
+
 templates.env.filters["humanize"] = _humanize_count
+templates.env.filters["usd"] = _usd
+templates.env.filters["comma"] = _comma
+templates.env.filters["datetime"] = _fmt_datetime
+templates.env.filters["modelfmt"] = _modelfmt
+templates.env.filters["dur"] = _dur
 
 app = FastAPI(title="Tokenomy")
 app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static")

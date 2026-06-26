@@ -43,9 +43,9 @@ def test_share_text_two_providers_complete():
     text = build_share_text(rows, "2026-06-24")
     assert text == (
         "AI 사용량 (2026-06-24, KST)\n"
-        "· Claude 오늘 $3.10 · 이번주 $14.00 · 이번달 $112.00 (한도 28%)\n"
-        "· Codex 오늘 $1.10 · 이번주 $4.50 · 이번달 $48.00 (한도 12%)\n"
-        "합계 오늘 $4.20 · 이번주 $18.50 · 이번달 $160.00"
+        "· Claude 오늘 $3.1 · 이번주 $14.0 · 이번달 $112.0 (한도 28%)\n"
+        "· Codex 오늘 $1.1 · 이번주 $4.5 · 이번달 $48.0 (한도 12%)\n"
+        "합계 오늘 $4.2 · 이번주 $18.5 · 이번달 $160.0"
     )
 
 
@@ -55,7 +55,7 @@ def test_share_text_partial_today_has_no_marker():
                      month_usd=112.00, util_pct=28)]
     text = build_share_text(rows, "2026-06-24")
     assert "△" not in text
-    assert "오늘 $3.10" in text and "이번주 $14.00" in text
+    assert "오늘 $3.1" in text and "이번주 $14.0" in text
 
 
 def test_share_text_today_none_shows_data_missing():
@@ -63,7 +63,7 @@ def test_share_text_today_none_shows_data_missing():
     rows = [ShareRow(label="Claude", today=_ps(None, "none"), week=_ps(14.00),
                      month_usd=112.00, util_pct=28)]
     text = build_share_text(rows, "2026-06-24")
-    assert "· Claude 오늘 데이터 없음 · 이번주 $14.00 · 이번달 $112.00 (한도 28%)" in text
+    assert "· Claude 오늘 데이터 없음 · 이번주 $14.0 · 이번달 $112.0 (한도 28%)" in text
 
 
 def test_share_text_pool_sums_only_covered_today():
@@ -73,7 +73,7 @@ def test_share_text_pool_sums_only_covered_today():
         ShareRow(label="Codex", today=_ps(1.10), week=_ps(4.50), month_usd=48.00, util_pct=12),
     ]
     text = build_share_text(rows, "2026-06-24")
-    assert "합계 오늘 $1.10 · 이번주 $18.50 · 이번달 $160.00" in text
+    assert "합계 오늘 $1.1 · 이번주 $18.5 · 이번달 $160.0" in text
 
 
 def test_pool_glance_partial_infects():
@@ -106,8 +106,8 @@ def test_share_context_builds_from_official_pool():
     ctx = share_context(conn, {"tracked_providers": ["claude"]}, NOW6)
     assert ctx is not None
     assert "AI 사용량 (2026-06-10, KST)" in ctx["text"]
-    assert "· Claude 오늘 $10.00" in ctx["text"]
-    assert "이번달 $30.00 (한도 30%)" in ctx["text"]
+    assert "· Claude 오늘 $10.0" in ctx["text"]
+    assert "이번달 $30.0 (한도 30%)" in ctx["text"]
     assert ctx["pool"].month_usd == 30.0
 
 

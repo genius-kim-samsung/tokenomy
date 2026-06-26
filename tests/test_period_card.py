@@ -40,7 +40,7 @@ def test_share_text_local_note_tail():
     text = build_share_text(rows, "2026-06-24", note="API 단가 환산")
     assert text.splitlines()[0] == "AI 사용량 (2026-06-24, KST) · API 단가 환산"
     assert "(한도" not in text   # 구독은 한도 없음 → 한도% 생략
-    assert "· Claude 오늘 $3.00 · 이번주 $14.00 · 이번달 $112.00" in text
+    assert "· Claude 오늘 $3.0 · 이번주 $14.0 · 이번달 $112.0" in text
 
 
 def test_share_text_note_default_unchanged():

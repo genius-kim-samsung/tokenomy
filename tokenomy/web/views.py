@@ -208,7 +208,7 @@ def _gauge_caption(used_usd: float | None, limit_usd: float | None, *,
     """
     if used_usd is None or not limit_usd:
         return None
-    cap = f"${used_usd:,.2f} / ${limit_usd:,.0f}"
+    cap = f"${used_usd:,.1f} / ${limit_usd:,.0f}"
     if native_unit == "credit" and used_native is not None and limit_native:
         cap += f" (크레딧 {used_native:,.0f} / {limit_native:,.0f})"
     return cap
@@ -482,30 +482,34 @@ class PoolGlance:
 
 
 def _round_spend(ps: PeriodSpend) -> PeriodSpend:
-    """공유 산출물용 — usd를 센트(2자리)로 반올림. 표시값과 합계의 페니 일관성 유지."""
-    return PeriodSpend(usd=None if ps.usd is None else round(ps.usd, 2), state=ps.state)
+    """공유 산출물용 — usd를 내부 정밀도(4자리)로 정규화(ADR 0020 sum-exact-then-round).
+
+    표시 1자리 반올림은 _usd가 담당 — 여기서 표시 정밀도로 미리 깎지 않는다(round-at-display).
+    """
+    return PeriodSpend(usd=None if ps.usd is None else round(ps.usd, 4), state=ps.state)
 
 
 def _pool_period(spends: list[PeriodSpend]) -> PeriodSpend:
     """기간별 PeriodSpend 여럿을 풀로 합산. covered만 더하고 partial은 전염시킨다.
 
-    이미 센트로 반올림된 provider 값을 더하므로 합계 == 표시된 provider 값들의 합(페니 일관).
+    정확값(내부 4자리)으로 합산하고 표시 반올림은 _usd에 맡긴다(ADR 0020). 줄은 각자
+    독립 반올림되므로 표시된 줄 합과 표시 합계가 드물게 ≤0.1 어긋날 수 있다(합계가 정답).
     """
     covered = [s for s in spends if s.state != "none" and s.usd is not None]
     if not covered:
         return PeriodSpend(usd=None, state="none")
-    usd = round(sum(s.usd for s in covered), 2)
+    usd = round(sum(s.usd for s in covered), 4)
     state = "partial" if any(s.state == "partial" for s in covered) else "complete"
     return PeriodSpend(usd=usd, state=state)
 
 
 def pool_glance(rows: list[ShareRow]) -> PoolGlance:
-    """활성 provider 행들을 풀 합산 글랜스로. 이번달은 월간 버킷 used 합."""
+    """활성 provider 행들을 풀 합산 글랜스로. 이번달은 월간 버킷 used 합(내부 4자리 정확값)."""
     months = [r.month_usd for r in rows if r.month_usd is not None]
     return PoolGlance(
         today=_pool_period([r.today for r in rows]),
         week=_pool_period([r.week for r in rows]),
-        month_usd=round(sum(months), 2) if months else None,
+        month_usd=round(sum(months), 4) if months else None,
     )
 
 
@@ -524,7 +528,7 @@ def _pace(current: float | None, previous: float | None) -> dict | None:
 
 
 def _usd(v: float) -> str:
-    return f"${v:,.2f}"
+    return f"${v:,.1f}"
 
 
 def _period_cell(key: str, ps: PeriodSpend) -> str:
@@ -594,7 +598,7 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
         util = None
         if view.pool_used_usd is not None and view.pool_limit_usd:
             util = round(view.pool_used_usd / view.pool_limit_usd * 100)
-        month = None if view.pool_used_usd is None else round(view.pool_used_usd, 2)
+        month = None if view.pool_used_usd is None else round(view.pool_used_usd, 4)
         rows.append(ShareRow(label=meta["label"], today=_round_spend(g.today),
                              week=_round_spend(g.week), month_usd=month, util_pct=util))
     if not rows:

@@ -42,11 +42,11 @@
       <div class="glance-line" style="display:flex;gap:1rem;align-items:baseline;margin:.1rem 0 .55rem;font-variant-numeric:tabular-nums">
         <span><span class="muted">오늘</span>
           {% if c.glance.today.state == "none" %}<span class="muted">—</span>
-          {% else %}<strong>${{ '%.2f'|format(c.glance.today.usd) }}</strong>{% if c.glance.today.state == "partial" %}<span class="muted" title="이전 구간 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
+          {% else %}<strong>{{ c.glance.today.usd|usd }}</strong>{% if c.glance.today.state == "partial" %}<span class="muted" title="이전 구간 공백 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
         </span>
         <span><span class="muted">이번주</span>
           {% if c.glance.week.state == "none" %}<span class="muted">—</span>
-          {% else %}<strong>${{ '%.2f'|format(c.glance.week.usd) }}</strong>{% if c.glance.week.state == "partial" %}<span class="muted" title="이번주 시작 전 관측 없음 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
+          {% else %}<strong>{{ c.glance.week.usd|usd }}</strong>{% if c.glance.week.state == "partial" %}<span class="muted" title="이번주 시작 전 관측 없음 — 부풀 수 있음"> △</span>{% endif %}{% endif %}
         </span>
       </div>
       {% if c.glance.today.state == "partial" and c.glance.today.observed_from %}

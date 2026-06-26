@@ -45,6 +45,71 @@ def test_humanize_count_abbreviates_k_and_m():
     assert h(None) == "0"
 
 
+# ─── 표시 포맷 규칙(ADR 0020) ─────────────────────────────────────────────────
+
+def test_usd_one_decimal_with_comma():
+    u = app_module._usd
+    assert u(89.1) == "$89.1"
+    assert u(89.16) == "$89.2"      # 표시 직전 1자리 반올림
+    assert u(1234.5) == "$1,234.5"  # 천 단위 콤마
+    assert u(0) == "$0.0"
+    assert u(None) == "—"           # 값 없음
+
+
+def test_comma_thousands_separator():
+    c = app_module._comma
+    assert c(3042) == "3,042"
+    assert c(999) == "999"
+    assert c(1234567) == "1,234,567"
+    assert c(0) == "0"
+    assert c(None) == "0"
+
+
+def test_fmt_datetime_kst_with_year():
+    f = app_module._fmt_datetime
+    assert f("2026-06-06T06:30:00Z") == "2026-06-06 15:30"  # UTC+9 → KST
+    assert f(None) == ""
+    assert f("") == ""
+
+
+def test_modelfmt_claude_family():
+    m = app_module._modelfmt
+    assert m("claude-opus-4-8") == "Opus 4.8"
+    assert m("claude-opus-4-1-20250805") == "Opus 4.1"
+    assert m("claude-sonnet-4-6") == "Sonnet 4.6"
+    assert m("claude-haiku-4-5-20251001") == "Haiku 4.5"
+    assert m("claude-fable-5") == "Fable 5"
+    assert m("claude-3-5-sonnet-20241022") == "Sonnet 3.5"
+
+
+def test_modelfmt_codex_family():
+    m = app_module._modelfmt
+    assert m("gpt-5-codex") == "GPT-5 Codex"
+    assert m("gpt-5.1-codex") == "GPT-5.1 Codex"
+    assert m("gpt-5") == "GPT-5"
+    assert m("gpt-4") == "GPT-4"
+    assert m("gpt-5.4-mini") == "GPT-5.4 Mini"
+    assert m("o4-mini") == "o4-mini"
+
+
+def test_modelfmt_fallback_and_unknown():
+    m = app_module._modelfmt
+    assert m("some-weird-model") == "some-weird-model"  # 매칭 실패 → raw 폴백
+    assert m(None) == "(unknown)"
+    assert m("") == "(unknown)"
+
+
+def test_dur_session_length():
+    d = app_module._dur
+    assert d("2026-06-06T00:00:00Z", "2026-06-06T10:25:00Z") == "10시간 25분"
+    assert d("2026-06-06T00:00:00Z", "2026-06-06T00:45:00Z") == "45분"
+    assert d("2026-06-06T00:00:00Z", "2026-06-06T00:00:30Z") == "1분 미만"
+    assert d("2026-06-06T00:00:00Z", "2026-06-08T03:00:00Z") == "2일 3시간"
+    assert d("2026-06-06T00:00:00Z", "2026-06-06T03:00:00Z") == "3시간"  # 0분 생략
+    assert d(None, "2026-06-06T10:00:00Z") == "—"
+    assert d("2026-06-06T00:00:00Z", None) == "—"
+
+
 def test_dashboard_empty_db_ok(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     r = client.get("/")
@@ -138,12 +203,39 @@ def test_dashboard_renders_sections_with_data(tmp_path, monkeypatch):
     conn.commit()
     r = client.get("/")
     assert r.status_code == 200
-    for section in ("기간별 사용량", "통합 추세", "통합 효율 코치", "폴더 사용량", "복기"):
+    for section in ("기간별 사용량", "통합 추세", "통합 효율 코치", "폴더 사용량", "세션별 사용량"):
         assert section in r.text
     assert "이번 달 총지출" not in r.text          # 총지출 단독 카드 폐지(ADR 0017)
     assert "AI별 사용 현황" not in r.text          # 번다운 카드 섹션 제거
     assert "공개 API 단가 기준 추정" in r.text   # 기간별 카드 로컬 디스클레이머
     assert "proj" in r.text                       # 프로젝트별 행
+
+
+def test_session_usage_card_renders_tokens_model_duration(tmp_path, monkeypatch):
+    """세션별 사용량 카드(ADR 0020) — 총 토큰 humanize · 주사용모델(+비중) · 세션 길이 · 메시지 콤마."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    # opus 900k tokens(주사용) + haiku 100k → 총 1.0M, opus 90%. 01:00→11:25 UTC = 10h25m.
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,input_tokens,cost_usd,priced) "
+        "VALUES ('a','claude','s1','proj','2026-06-10T01:00:00Z','claude-opus-4-8',900000,12.5,1)"
+    )
+    conn.execute(
+        "INSERT INTO messages (dedup_key,provider,session_id,project,ts,model,input_tokens,cost_usd,priced) "
+        "VALUES ('b','claude','s1','proj','2026-06-10T11:25:00Z','claude-haiku-4-5',100000,1.0,1)"
+    )
+    conn.execute(
+        "INSERT INTO sessions (session_id, summary, user_turns) VALUES ('s1','토큰 집계 구현',3042)"
+    )
+    conn.commit()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "세션별 사용량" in r.text                   # 카드 타이틀(복기 후신)
+    assert "이 기기 · 정가 환산 추정" in r.text         # 폴더 사용량과 동일 출처축 부제
+    assert "1.0M" in r.text                            # 총 토큰 humanize
+    assert "Opus 4.8(90%)" in r.text                   # 주사용모델 humanize + 비중
+    assert "10시간 25분" in r.text                      # 세션 길이(첫~마지막 벽시계)
+    assert "3,042" in r.text                           # 메시지 천 단위 콤마
 
 
 def _seed_glance_history(conn, provider, day_used):
@@ -179,7 +271,7 @@ def test_official_section_renders_period_glance(tmp_path, monkeypatch):
     html = app_module.templates.env.get_template("_official_section.html").render(ctx)
     assert "오늘" in html and "이번주" in html
     assert "공식 · 계정 전체" in html
-    assert "$10.00" in html        # 오늘 = 30-20
+    assert "$10.0" in html        # 오늘 = 30-20
 
 
 def test_official_section_renders_period_card(tmp_path, monkeypatch):
@@ -217,7 +309,7 @@ def test_period_card_template_shows_baseline_and_omits_when_none():
         ],
     }
     html = app_module.templates.env.get_template("_period_card.html").render(period_card=ctx)
-    assert "어제 $4.00" in html and "지난주 $30.00" in html   # 기준값 화면 병기
+    assert "어제 $4.0" in html and "지난주 $30.0" in html   # 기준값 화면 병기
     assert "▲" in html and "100%" in html                    # 페이스 ▲ + %
     assert "지난달" not in html                                # prev_usd None → 꼬리·라벨 생략
 
@@ -274,7 +366,7 @@ def test_mini_section_renders_period_glance(tmp_path, monkeypatch):
     ctx = mini_view_context(conn, {"tracked_providers": ["claude"]},
                             now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
     html = app_module.templates.env.get_template("_mini_section.html").render(ctx)
-    assert "오늘" in html and "$10.00" in html
+    assert "오늘" in html and "$10.0" in html
     assert "이번주" in html        # 미니 글랜스 라벨 "주"→"이번주"(정본 통일, ADR 0008 개정)
 
 
@@ -289,11 +381,11 @@ def test_mini_gauge_caption_moves_to_bar_tooltip(tmp_path, monkeypatch):
 
     _, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
-    _seed_glance_history(conn, "claude", [(10, 30.0)])   # 월 사용 한도 30/100 → caption "$30.00 / $100"
+    _seed_glance_history(conn, "claude", [(10, 30.0)])   # 월 사용 한도 30/100 → caption "$30.0 / $100"
     ctx = mini_view_context(conn, {"tracked_providers": ["claude"]},
                             now_kst=datetime(2026, 6, 10, 15, 0, tzinfo=KST))
     html = app_module.templates.env.get_template("_mini_section.html").render(ctx)
-    assert 'title="$30.00 / $100"' in html        # $used/$limit → bar 툴팁
+    assert 'title="$30.0 / $100"' in html        # $used/$limit → bar 툴팁
     assert "mini-gauge-caption" not in html        # 별도 캡션 줄 제거(한 줄 압축)
 
 
@@ -593,7 +685,7 @@ def test_overview_aggregates_providers(tmp_path, monkeypatch):
     r = client.get("/")
     assert r.status_code == 200
     for section in ("기간별 사용량", "통합 추세", "통합 효율 코치",
-                    "폴더 사용량", "복기"):
+                    "폴더 사용량", "세션별 사용량"):
         assert section in r.text
     assert "이번 달 총지출" not in r.text   # 총지출 단독 카드 폐지(ADR 0017)
     assert "AI별 사용 현황" not in r.text   # 번다운 카드 섹션 제거
@@ -681,7 +773,7 @@ def test_history_renders_tree(tmp_path, monkeypatch):
     r = client.get("/history?anchor=2026-06-10&sort=date_desc")
     assert r.status_code == 200
     assert "myproj" in r.text
-    assert "합계 $3.00" in r.text
+    assert "합계 $3.0" in r.text
     assert 'class="grp grp-date"' in r.text          # 날짜 그룹 행
 
 
@@ -822,7 +914,7 @@ def test_analysis_renders_rows(tmp_path, monkeypatch):
     r = client.get("/analysis?anchor=2026-06-10&dim=model")
     assert r.status_code == 200
     assert "claude-opus-4-8" in r.text
-    assert "합계 $12.50" in r.text
+    assert "합계 $12.5" in r.text
 
 
 def test_dashboard_shows_codex_section(tmp_path, monkeypatch):
@@ -1079,7 +1171,7 @@ def test_overview_official_panel_renders(tmp_path, monkeypatch):
 def test_overview_enterprise_claude_dollar_buckets_render(tmp_path, monkeypatch):
     """엔터프라이즈 Claude(실측): 달러 버킷이 USD 게이지로 렌더되어야 한다.
 
-    spend(월 사용 한도 $0/$243) + cinder_cove(포함된 크레딧 $393.10/$1,000) 두 버킷이
+    spend(월 사용 한도 $0/$243) + cinder_cove(포함된 크레딧 $393.1/$1,000) 두 버킷이
     used/limit USD와 소진율로 나온다. 개인 구독 % 창이 아니라 달러 게이지 분기 검증.
     """
     from tokenomy.official_parser import parse_claude
@@ -1090,7 +1182,7 @@ def test_overview_enterprise_claude_dollar_buckets_render(tmp_path, monkeypatch)
     assert r.status_code == 200
     # cinder_cove 이벤트 크레딧(달러 본체) — 코드네임 비의존 라벨 + USD 게이지
     assert "이벤트" in r.text
-    assert "$393.10" in r.text and "1,000" in r.text
+    assert "$393.1" in r.text and "1,000" in r.text
     assert "39%" in r.text                       # 게이지 utilization 표시
     assert "만료 2026-09-10" in r.text            # 만료일은 라벨이 아니라 sub로 이동
     # spend 월간 ($0/$243) — used 0도 게이지로 렌더
@@ -1148,7 +1240,7 @@ def test_official_history_drilldown_reconstructs_daily_number(tmp_path, monkeypa
     assert 'data-detail="1"' in r.text       # 펼침 가능한 날 행
     assert "추적 시작" in r.text              # 첫날(6/10) = first_ever
     assert "직전 기준" in r.text              # 6/11 baseline 표시
-    assert "+$30.00" in r.text               # 6/11 증가분(130-100)
+    assert "+$30.0" in r.text               # 6/11 증가분(130-100)
     assert "위 증가분의 합" in r.text         # 재구성 합계 푸터
 
 
@@ -1174,7 +1266,7 @@ def test_official_history_drilldown_multi_provider_labels(tmp_path, monkeypatch)
     assert r.status_code == 200
     # 6/11 펼침 블록에 두 provider 라벨 + per-provider 합이 분해돼야 한다.
     assert ">Claude</div>" in r.text and ">Codex</div>" in r.text
-    assert "+$30.00" in r.text and "+$15.00" in r.text   # claude 130-100, codex 35-20
+    assert "+$30.0" in r.text and "+$15.0" in r.text   # claude 130-100, codex 35-20
     assert "위 증가분의 합" in r.text
 
 
@@ -1263,7 +1355,7 @@ def test_official_history_day_view_empty_day_notice(tmp_path, monkeypatch):
 def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
     """엔터프라이즈 Codex(실측): 크레딧 한도가 credit_to_usd 환산 USD 게이지로 렌더되어야 한다.
 
-    individual_limit used 1073.94 / limit 5875 credits → ×0.04 = $42.96 / $235 월간 게이지.
+    individual_limit used 1073.94 / limit 5875 credits → ×0.04 = $42.9576, 표시 $43.0 / $235 월간 게이지(ADR 0020 1자리).
     추정 주간 게이지는 제거됨(ADR 0012). 개인 구독 % 창이 아니라 USD 월간 분기 검증.
     """
     from tokenomy.official_parser import parse_codex
@@ -1273,7 +1365,7 @@ def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
     r = client.get("/")
     assert r.status_code == 200
     assert "월간" in r.text             # codex_monthly 버킷 라벨(공식 게이지)
-    assert "$42.96" in r.text and "235" in r.text
+    assert "$43.0" in r.text and "235" in r.text
     assert "크레딧 1,074 / 5,875" in r.text   # USD는 환산값 — 원본 크레딧 병기
     assert "이번 주" not in r.text     # 추정 주간 게이지 제거(ADR 0012)
 
@@ -1339,7 +1431,7 @@ def test_official_section_no_official_clean_state_no_estimate(tmp_path, monkeypa
     assert "공식 사용량 미취득" in html      # 깨끗한 빈 상태 안내
     assert "로컬 추정" not in html           # 폴백 문구 제거
     assert "chip-est" not in html            # 추정 칩 제거
-    assert "$12.00" not in html              # 로컬 추정$ 미표시
+    assert "$12.0" not in html               # 로컬 추정$ 미표시
 
 
 def test_settings_shows_credit_to_usd(tmp_path, monkeypatch):

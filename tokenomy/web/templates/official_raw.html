@@ -34,7 +34,7 @@
       </span>
     </div>
     <div class="muted" style="font-size:12px;margin-bottom:8px">
-      as-of <time class="rel-time" data-ts="{{ selected_fetched_at }}">{{ selected_fetched_at|kstfmt }}</time>
+      as-of <time class="rel-time" data-ts="{{ selected_fetched_at }}">{{ selected_fetched_at|datetime }}</time>
       {% if meta.fetch_state and meta.fetch_state.last_error %}
       <span style="color:#b85a5a">· last_error: {{ meta.fetch_state.last_error }}</span>
       {% endif %}
@@ -76,7 +76,7 @@
           <a href="/official/raw?provider={{ selected_provider }}&fetched_at={{ s.fetched_at }}"
              class="snap-row {{ 'on' if s.fetched_at == selected_fetched_at }}"
              style="display:flex;justify-content:space-between;gap:8px;padding:5px 8px;border-radius:6px;text-decoration:none;font-size:12px;{{ 'background:rgba(204,120,92,.12)' if s.fetched_at == selected_fetched_at }}">
-            <span><time class="rel-time" data-ts="{{ s.fetched_at }}">{{ s.fetched_at|kstfmt }}</time></span>
+            <span><time class="rel-time" data-ts="{{ s.fetched_at }}">{{ s.fetched_at|datetime }}</time></span>
             <span class="muted">{{ s.status }}{% if s.http_code %} {{ s.http_code }}{% endif %} · {{ s.byte_len }}B</span>
           </a>
         </li>

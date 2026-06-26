@@ -86,9 +86,9 @@ def cmd_report(conn) -> None:
     for prov in tracked_providers(config):
         spent = month_spend(conn, prov, now)
         ov = official_view(conn, prov, now, ctu, weeks)
-        line = f"\n[{prov}] 이번 달 총지출 ${spent:,.2f}"
+        line = f"\n[{prov}] 이번 달 총지출 ${spent:,.1f}"
         if ov.period_limit_usd:
-            line += f" · 공식 ${ov.period_used_usd:,.2f}/${ov.period_limit_usd:,.0f}"
+            line += f" · 공식 ${ov.period_used_usd:,.1f}/${ov.period_limit_usd:,.0f}"
         print(line)
         rows = by_project(conn, prov, now, 12)
         if rows:
@@ -96,13 +96,13 @@ def cmd_report(conn) -> None:
             for p in rows:
                 name = p.project or "(unknown)"
                 print(
-                    f"    ${p.cost:8.2f}  cache {p.cache_ratio * 100:4.1f}%  "
+                    f"    ${p.cost:8.1f}  cache {p.cache_ratio * 100:4.1f}%  "
                     f"{p.sessions:3d} sess  {name}"
                 )
                 # 그 프로젝트의 비용 상위 세션 한 줄 요약(aiTitle)
                 for s in by_session(conn, prov, now, 3, project=name, order="cost"):
                     title = s.summary or "(요약 없음)"
-                    print(f"          ${s.cost:7.2f}  {title}")
+                    print(f"          ${s.cost:7.1f}  {title}")
 
     _print_recent_sessions(conn, now)
 
@@ -130,7 +130,7 @@ def _print_recent_sessions(conn, now, top_n: int = 10) -> None:
         when = f"{dt:%m-%d %H:%M}" if dt else "  -  "
         title = s.summary or "(요약 없음)"
         proj = Path(s.project).name if s.project else "(unknown)"
-        print(f"  {when}  ${s.cost:7.2f}  {title}  · {proj}")
+        print(f"  {when}  ${s.cost:7.1f}  {title}  · {proj}")
 
 
 def main(argv: list[str] | None = None) -> None:

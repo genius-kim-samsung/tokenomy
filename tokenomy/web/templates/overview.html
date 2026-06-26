@@ -29,10 +29,10 @@
   {% elif forecast.level == "exhausted" %}
     <p class="forecast-headline">한도 소진됨</p>
   {% else %}
-    <p class="forecast-headline">현재 잔여 ${{ '{:,.2f}'.format(forecast.remaining) }} <span class="muted">· 추세 데이터 부족</span></p>
+    <p class="forecast-headline">현재 잔여 {{ forecast.remaining|usd }} <span class="muted">· 추세 데이터 부족</span></p>
   {% endif %}
-  <p class="muted">현재 ${{ '{:,.2f}'.format(forecast.used) }} / ${{ '{:,.0f}'.format(forecast.limit) }} 사용 ({{ forecast.pct_now }}%)
-    {% if forecast.daily_rate %}· 하루 ${{ '{:,.2f}'.format(forecast.daily_rate) }}/영업일{% endif %}</p>
+  <p class="muted">현재 {{ forecast.used|usd }} / ${{ '{:,.0f}'.format(forecast.limit) }} 사용 ({{ forecast.pct_now }}%)
+    {% if forecast.daily_rate %}· 하루 {{ forecast.daily_rate|usd }}/영업일{% endif %}</p>
   <p class="disclaimer">ⓘ 전부 공식 · 계정 전체(전 기기) · 전망은 공식 사용 추세 기반</p>
 </section>
 {% endif %}
@@ -86,11 +86,11 @@
     <tbody>
       {% for p in projects %}
       <tr><td class="col-proj" title="{{ p.project or '' }}">{{ (p.project or '(unknown)').replace('\\', '/').split('/')[-1] or '(unknown)' }}</td>
-          <td>{{ p.sessions }}</td>
-          <td>{{ p.msgs }}</td>
+          <td>{{ p.sessions|comma }}</td>
+          <td>{{ p.msgs|comma }}</td>
           <td>{{ p.tokens|humanize }}</td>
           <td>{{ '%.0f'|format(p.cache_ratio * 100) }}%</td>
-          <td>${{ '%.2f'|format(p.cost) }}</td></tr>
+          <td>{{ p.cost|usd }}</td></tr>
       {% else %}<tr><td colspan="6" class="muted">데이터 없음</td></tr>{% endfor %}
     </tbody>
   </table>
@@ -98,21 +98,26 @@
 </section>
 
 <section class="card">
-  <h2>복기 — 최근 비싼 세션 <span class="muted">(Top 10)</span></h2>
+  <div class="card-head">
+    <h2>세션별 사용량 <span class="muted">(Top 10)</span></h2>
+  </div>
+  <p class="disclaimer">ⓘ 이 기기 · 정가 환산 추정 (공식 사용량 아님)</p>
   <table class="gtable sess">
-    <thead><tr><th>기간</th><th>AI</th><th>작업요약</th><th>프로젝트</th><th>라벨</th><th>비용</th><th>메시지</th><th>캐시%</th><th></th></tr></thead>
+    <thead><tr><th>일시</th><th>폴더</th><th>내용</th><th>사용량</th><th>총 토큰</th><th>메시지</th><th>캐시%</th><th>세션 길이</th><th>AI</th><th>주사용모델</th><th></th></tr></thead>
     <tbody>
       {% for s in sessions %}
-      <tr><td class="col-time">{{ s.first_ts|kstfmt }}<br>{{ s.last_ts|kstfmt }}</td>
-          <td>{{ s.provider or '—' }}</td>
-          <td class="col-sum" title="{{ s.summary or '' }}">{{ s.summary or '—' }}</td>
+      <tr><td class="col-time">{{ s.first_ts|datetime }}</td>
           <td class="col-proj" title="{{ s.project or '' }}">{{ (s.project or '(unknown)').replace('\\', '/').split('/')[-1] or '(unknown)' }}</td>
-          <td>{{ s.label or '[라벨 없음]' }}</td>
-          <td>${{ '%.2f'|format(s.cost) }}</td>
-          <td>{{ s.msgs }}</td>
+          <td class="col-sum" title="{{ s.summary or '' }}">{{ s.summary or '—' }}</td>
+          <td>{{ s.cost|usd }}</td>
+          <td>{{ s.tokens|humanize }}</td>
+          <td>{{ s.msgs|comma }}</td>
           <td>{{ '%.0f'|format(s.cache_ratio * 100) }}%</td>
+          <td>{{ s.first_ts|dur(s.last_ts) }}</td>
+          <td>{{ s.provider or '—' }}</td>
+          <td>{{ s.top_model|modelfmt }}{% if s.top_model %}({{ '%.0f'|format(s.top_model_share * 100) }}%){% endif %}</td>
           <td><a href="/session/{{ s.session_id }}">▸</a></td></tr>
-      {% else %}<tr><td colspan="9" class="muted">데이터 없음</td></tr>{% endfor %}
+      {% else %}<tr><td colspan="11" class="muted">데이터 없음</td></tr>{% endfor %}
     </tbody>
   </table>
   <p class="muted"><a href="/history">사용 이력(로컬) 보기 →</a></p>
