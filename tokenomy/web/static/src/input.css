@@ -47,7 +47,7 @@
            bg-card border-r border-line
            sticky top-0 self-start h-screen overflow-y-auto;
   }
-  .content { @apply flex-1 min-w-0 px-6 py-5 max-w-[1100px]; }
+  .content { @apply flex-1 min-w-0 px-6 py-5 max-w-[1320px] mx-auto; }
 
   .brand { @apply flex items-center gap-2 no-underline text-fg mb-4; }
   .brand-mark { @apply text-[20px]; }
