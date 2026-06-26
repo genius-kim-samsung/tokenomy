@@ -1,7 +1,9 @@
 """공식 사용량 라이브 취득 — 유일한 아웃바운드 네트워크 모듈(옵트인·비차단).
 
-각 CLI가 로컬에 보관한 OAuth 토큰을 읽기 전용으로 사용해 공식 사용량 API를 단발 호출한다.
-토큰 직접 refresh 금지(읽기만). 실패는 예외를 삼켜 fetch_state에 기록하고 마지막 스냅샷을 유지한다.
+각 CLI가 로컬에 보관한 OAuth 토큰을 사용해 공식 사용량 API를 단발 호출한다(공식 사용량 조회는
+읽기 전용). 단, ADR 0021로 Claude access token은 만료 임박 시 조건부 능동 refresh +
+.credentials.json write-back을 수행한다(refresh_claude_token) — Codex는 여전히 읽기 전용.
+실패는 예외를 삼켜 fetch_state에 기록하고 마지막 스냅샷을 유지한다.
 PII(access_token/account_id/email/user_id)는 절대 DB에 저장하지 않는다 — 헤더에 쓰고 버린다.
 사용량 수치만 official_buckets에 적재(파서가 PII 미추출).
 """
@@ -142,8 +144,15 @@ def refresh_claude_token(path: Path = CLAUDE_CREDS, *, now_ms: int,
         o["expiresAt"] = int(now_ms) + int(exp_in) * 1000
 
     tmp = path.with_name(path.name + ".tmp")          # 같은 디렉터리 temp → atomic replace
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)               # 토큰이 담긴 임시파일 정리
+        except OSError:
+            pass
+        return None
     return at
 
 

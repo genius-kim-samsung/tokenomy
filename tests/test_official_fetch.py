@@ -639,3 +639,16 @@ def test_refresh_bad_schema_leaves_file_untouched(tmp_path):
     body = json.dumps({"unexpected": "shape"})             # access_token 없음
     assert refresh_claude_token(p, now_ms=1, urlopen=lambda req, timeout: _Resp(body)) is None
     assert p.read_text(encoding="utf-8") == before
+
+
+def test_refresh_write_failure_returns_none_and_cleans_tmp(tmp_path, monkeypatch):
+    import tokenomy.official_fetch as of
+    p = _creds(tmp_path)                       # Task 3에서 정의한 헬퍼 재사용
+    before = p.read_text(encoding="utf-8")
+    body = json.dumps({"access_token": "new-acc", "refresh_token": "new-ref", "expires_in": 28800})
+    def _boom_replace(src, dst):
+        raise OSError("disk full")
+    monkeypatch.setattr(of.os, "replace", _boom_replace)
+    assert of.refresh_claude_token(p, now_ms=1, urlopen=lambda req, timeout: _Resp(body)) is None
+    assert p.read_text(encoding="utf-8") == before          # 원본 무손상
+    assert not p.with_name(p.name + ".tmp").exists()        # 임시파일 정리됨
