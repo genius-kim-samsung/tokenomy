@@ -289,7 +289,8 @@ def _capture_raw(conn, provider: str, fetched_at: str, status: str,
 
 
 def fetch_provider(provider: str, *, now_kst, config, conn,
-                   urlopen=urllib.request.urlopen, manual=False) -> FetchResult:
+                   urlopen=urllib.request.urlopen, manual=False,
+                   _retried: bool = False) -> FetchResult:
     """공식 사용량 1회 취득(비차단·단발). 결과 FetchResult.
 
     게이트 순서: env-skip → tracked_providers 미포함 → 크레덴셜 부재 → throttle → GET(≤3s) → 파서 → 적재.
@@ -318,7 +319,8 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
     ts = now_kst.isoformat()
     try:
         if provider == "claude":
-            tok = _read_claude_token(CLAUDE_CREDS)   # 모듈 상수를 명시 전달(패치 가능)
+            tok = ensure_fresh_claude_token(config, conn, now=now_kst,
+                                            path=CLAUDE_CREDS, urlopen=urlopen)
             headers = {"Authorization": f"Bearer {tok}",
                        "anthropic-beta": _CLAUDE_BETA, "User-Agent": _CLAUDE_UA}
             raw_text, http_code = _http_get_text(CLAUDE_USAGE_URL, headers, urlopen)
@@ -337,6 +339,18 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
         # 에러 바디가 있으면 포착(4xx/5xx의 실제 원인이 거기 있다).
         _capture_raw(conn, provider, ts, "http_error", e.code, _read_err_body(e))
         if e.code == 401:
+            settings = official_fetch_settings(config)
+            if (provider == "claude" and not _retried
+                    and settings["auto_refresh_token"] != "off"
+                    and _auto_refresh_allowed(config, conn, now_kst, settings["auto_refresh_token"])):
+                with _token_lock:
+                    new = refresh_claude_token(CLAUDE_CREDS,
+                                               now_ms=int(now_kst.timestamp() * 1000),
+                                               urlopen=urlopen)
+                if new:                                   # 갱신 성공 → 딱 1회 재시도
+                    return fetch_provider(provider, now_kst=now_kst, config=config,
+                                          conn=conn, urlopen=urlopen, manual=manual,
+                                          _retried=True)
             upsert_fetch_state(conn, provider, last_attempt_at=ts, last_success_at=None,
                                last_status="auth_error", last_error="HTTP 401")
             return FetchResult(provider, "auth_error", _auth_note(provider))

@@ -715,3 +715,33 @@ def test_auto_refresh_allowed_modes():
     conn.commit()
     assert _auto_refresh_allowed({"official_fetch": {"auto_refresh_token": "auto",
                                   "auto_refresh_safety_hours": 24}}, conn, _NOW_T4, "auto") is False
+
+
+# ---------------------------------------------------------------------------
+# fetch_provider 통합 — 선제 갱신 + 401 반응형 재시도 (ADR 0021, Task 5)
+# ---------------------------------------------------------------------------
+
+_NOW2 = datetime(2026, 6, 26, 12, 0, tzinfo=timezone.utc)
+
+
+def test_reactive_refresh_on_401_then_retry(tmp_path, monkeypatch):
+    import tokenomy.official_fetch as of
+    p = tmp_path / ".credentials.json"
+    far = int(_NOW2.timestamp() * 1000) + 3_600_000       # 선제는 건너뛰게(여유)
+    p.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "a", "refreshToken": "r", "expiresAt": far}}), encoding="utf-8")
+    monkeypatch.setattr(of, "CLAUDE_CREDS", p)
+    # refresh는 성공으로 스텁(파일 토큰 교체 흉내)
+    monkeypatch.setattr(of, "refresh_claude_token", lambda path, *, now_ms, urlopen: "a2")
+    calls = {"n": 0}
+    def _op(req, timeout):
+        # usage GET만 여기 온다(refresh는 위에서 스텁). 첫 호출 401, 둘째 200.
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError("u", 401, "unauth", {}, None)
+        return _Resp(json.dumps({}))                       # 빈 버킷이라도 200이면 ok 경로
+    cfg = {"tracked_providers": ["claude"],
+           "official_fetch": {"auto_refresh_token": "always"}}
+    r = fetch_provider("claude", now_kst=_NOW2, config=cfg, conn=connect(":memory:"), urlopen=_op)
+    assert calls["n"] == 2                                 # 401 후 정확히 1회 재시도
+    assert r.status in ("ok", "http_error")               # 재시도가 일어났음을 호출 횟수로 확인
