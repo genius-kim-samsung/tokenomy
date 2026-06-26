@@ -45,8 +45,8 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 
 - **parser.py / codex_parser.py** — 각 도구 로그를 공통 `UsageRecord`로 정규화. 새 도구 추가는
   여기에 모듈 하나 더(README의 "Adding a parser" 참고).
-- **official_fetch.py** — 공식 사용량 라이브 취득(유일한 아웃바운드). **tracked_providers**(=활성 AI; 앱 전반 표시 게이트, ADR 0005) 목록에 포함된 provider만 호출한다. 각 CLI의 로컬 OAuth 토큰을
-  **읽기 전용**으로 사용해 공식 API를 단발 GET(≤3s/provider, 백오프 없음). 엔드포인트: Claude `https://api.anthropic.com/api/oauth/usage`, Codex `https://chatgpt.com/backend-api/wham/usage`. default-on + throttle(`min_interval_minutes`="자동 갱신 간격", 기본 10). 401→auth_error, 그 외 실패→http_error,
+- **official_fetch.py** — 공식 사용량 라이브 취득(유일한 아웃바운드). **tracked_providers**(=활성 AI; 앱 전반 표시 게이트, ADR 0005) 목록에 포함된 provider만 호출한다. 각 CLI의 로컬 OAuth 토큰으로
+  공식 API를 단발 GET(≤3s/provider, 백오프 없음) — **Claude는 `ensure_fresh_claude_token`으로 만료 임박(now+5분) 선제·401 반응형 1회 retry 능동 갱신**(`refresh_claude_token`, `POST api.anthropic.com/v1/oauth/token`, ADR 0021), Codex는 읽기 전용. 엔드포인트: Claude `https://api.anthropic.com/api/oauth/usage`, Codex `https://chatgpt.com/backend-api/wham/usage`. default-on + throttle(`min_interval_minutes`="자동 갱신 간격", 기본 10). 401→auth_error, 그 외 실패→http_error,
   **마지막 스냅샷·last_success_at 보존**. PII(토큰/account_id) 미저장 — 헤더에 쓰고 버린다.
   `refresh_tracked(config, providers=None, manual=False)`가 tracked(또는 지정 providers) 전체를 1회 갱신(예외 삼킴)한다.
   트리거(ADR 0003): **수동** 갱신 버튼 `POST /official/refresh`(manual=True, throttle bypass) + **자동** 폴링 `GET /official/section`(manual=False, throttle 적용 — 대시보드 `hx-trigger="load, every Nm"`, load가 起動 갱신 겸용). `cmd_ingest`(수집)는 갱신을 트리거하지 않는다. 표준 라이브러리만.
@@ -96,8 +96,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **공식 사용량은 멀티버킷(USD 통일) — Claude 버킷(월간·이벤트·rate-window)/Codex 월간(+개인 구독제 rate-window).** 한도·리셋은 모두 공식 API에서 읽는다(실제 리셋=`resets_at`). 게이지 라벨은 **창 길이 기반**으로 통일: "5시간"·"7일(All)"·"7일(Sonnet)"·"월간"·"이벤트". 옛 Codex "월÷4 주간 추정" 게이지는 로컬 used를 공식 한도에 섞던 위반이라 제거됨(ADR 0012) — 주간 흐름은 공식 글랜스("이번주 $", ADR 0011)가 대신한다. `credit_to_usd`(config, 기본 0.04)로 크레딧 환산, 토큰 cost 경로와 분리. 구 단일값 `official_usage` 테이블은 `_migrate`가 DROP(로컬 단일 사용자라 이관 없음).
 - **공식 사용량 취득(=갱신)은 default-on(tracked providers만)·비차단.** `tracked_providers` 목록에 있는 provider만 공식 API를 호출하고, 첫 실행 시 크레덴셜 파일 존재로 시드한다. 갱신은 **수집(`cmd_ingest`)과 분리** — 수집은 로컬 JSONL 재스캔만, 갱신은 웹 라우트(수동 버튼/자동 폴링)가 담당한다(ADR 0003). 起動 갱신은 대시보드 로드 시 `hx-trigger="load"`가 겸한다(launcher는 수집만 동기 실행).
   타임아웃 ≤3s, **백오프 없음**(단발 시도, 실패 즉시 포기). `min_interval_minutes`="자동 갱신 간격"(기본 10) — 자동 폴링 주기이자 자동 호출 최소 간격. **수동 갱신은 이 간격을 무시(throttle bypass)**한다. 엔드포인트 quota는 CLI와 공유 — 충돌 못 막음. `TOKENOMY_SKIP_OFFICIAL_FETCH`로 전체 강제 차단 가능.
-- **토큰은 읽기 전용, refresh 금지.** Claude `~/.claude/.credentials.json`, Codex `~/.codex/auth.json`을 읽기만.
-  Codex 401(토큰 만료)은 마지막 값 유지 + "Codex CLI 1회 실행" 안내(직접 refresh 안 함).
+- **Claude는 조건부 능동 갱신, Codex는 읽기 전용(ADR 0021).** Claude `~/.claude/.credentials.json`는 access token 만료 임박(expiresAt ≤ now+5분) 시 선제 갱신·GET 401 시 반응형 1회 갱신(`ensure_fresh_claude_token`/`refresh_claude_token`). **자동 안전망**: DB 최근 claude 세션 ts가 `now − N시간`(`auto_refresh_safety_hours`, 기본 24h) 이내면 "CLI 쓰는 기기"로 보고 skip → 기존 401 안내로 폴백. `auto_refresh_token: "auto"(기본)|"always"(안전망 무시)|"off"`. write-back = temp→atomic `os.replace`·rotation 정확(새 refresh token 기록 필수)·기존 키 보존·토큰 DB 미저장·self-race `threading.Lock`. Codex `~/.codex/auth.json`는 읽기 전용 유지 — Codex 401은 마지막 값 유지 + "Codex CLI 1회 실행" 안내(직접 refresh 안 함).
 
 ## 환경변수
 

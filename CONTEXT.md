@@ -159,3 +159,15 @@ _Avoid_: 개발자 모드(범용어), 관리자 모드(권한 함의 없음 — 
 **공식 raw 포착(official raw capture)**:
 공식 API 응답 **원문**(PII 스크럽)을 fetch마다 status 태그와 함께 보관한 디버그 사이드카. 모든 결과(성공·파싱 실패·HTTP 에러 바디)를 파싱 **전에** 잡아, 표시가 이상할 때 "응답이 실제로 어떻게 왔나"를 까볼 수 있게 한다. 7일 롤링으로 단명한다(ADR 0014).
 _Avoid_: **공식 사용량 스냅샷 이력**(그건 *파싱된* 버킷의 사용자용 시간 궤적 — raw 포착은 *원문* 디버그 증거라 본질이 다르다. 같은 `fetched_at`으로 정렬되지만 하나는 화면 데이터·하나는 진단 증거다), 로그(범용어 — 이건 구조화된 응답 원문 보관이다).
+
+## 토큰 갱신(token refresh)
+
+Tokenomy가 공식 API 취득에 앞서 만료된 Claude OAuth access token을 스스로 갱신하는 메커니즘(ADR 0021). Codex는 읽기 전용 유지 — 이 섹션은 Claude 전용이다.
+
+**`auto_refresh_token`**:
+Claude access token 능동 갱신 전략을 결정하는 `official_fetch_settings` 설정 키. `"auto"`(기본) = 자동 안전망 적용 후 갱신, `"always"` = 안전망 무시·항상 갱신, `"off"` = 갱신 안 함(읽기 전용으로 되돌림). 오설정/누락은 `"auto"`로 폴백. 설정 화면에 토글 + "이 기기에서 Claude Code를 직접 쓰지 않을 때 켜세요" 안내를 같이 표시한다.
+_Avoid_: auto_refresh(키 이름에 `_token` 접미를 빠뜨리면 다른 설정과 충돌할 수 있다 — 정확한 키명으로 쓴다), refresh 모드(이건 전략 선택이지 앱 전체 모드가 아니다 — 갱신 대상은 Claude OAuth 토큰 하나).
+
+**자동 안전망(automatic safety net)**:
+`refresh_claude_token` 실행 직전, DB의 claude provider 최신 메시지 타임스탬프를 확인해 `now − N시간`(`auto_refresh_safety_hours`, 기본 24) 이내면 "이 기기에서 Claude Code CLI를 쓰고 있다"고 판단해 갱신을 **skip**하고 기존 auth_error 안내로 폴백하는 게이트. 목적: 메모리에 옛 토큰을 캐시한 실행 중 CLI가 거의 동시에 refresh를 시도할 때 충돌(이미 사용된 refresh token → 그 CLI 세션 재로그인 요구)을 완화한다. `auto_refresh_token: "always"`면 이 게이트를 건너뛴다(CLI를 안 쓰는 기기임을 확신할 때 — 안전망이 경식님의 페인을 막지는 않는다, 그 기기는 최근 활동이 없어 안전망이 skip하지 않는다).
+_Avoid_: 안전 모드(앱 전체 상태가 아니라 갱신 함수 하나의 진입 게이트다), 자동 건너뜀(건너뜨는 게 아니라 *충돌 위험이 없을 때* 진행하는 전진 게이트다).
