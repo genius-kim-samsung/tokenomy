@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -652,3 +653,17 @@ def test_refresh_write_failure_returns_none_and_cleans_tmp(tmp_path, monkeypatch
     assert of.refresh_claude_token(p, now_ms=1, urlopen=lambda req, timeout: _Resp(body)) is None
     assert p.read_text(encoding="utf-8") == before          # 원본 무손상
     assert not p.with_name(p.name + ".tmp").exists()        # 임시파일 정리됨
+
+
+def test_refresh_creates_tmp_with_0600_mode(tmp_path, monkeypatch):
+    import tokenomy.official_fetch as of
+    p = _creds(tmp_path)                              # 기존 헬퍼 재사용
+    body = json.dumps({"access_token": "a2", "refresh_token": "r2", "expires_in": 28800})
+    seen = {}
+    real_open = os.open
+    def _spy(path_arg, flags, mode=0o777):
+        seen["mode"] = mode
+        return real_open(path_arg, flags, mode)
+    monkeypatch.setattr(of.os, "open", _spy)
+    assert of.refresh_claude_token(p, now_ms=1, urlopen=lambda req, timeout: _Resp(body)) == "a2"
+    assert seen["mode"] == 0o600

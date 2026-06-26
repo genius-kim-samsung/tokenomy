@@ -145,7 +145,10 @@ def refresh_claude_token(path: Path = CLAUDE_CREDS, *, now_ms: int,
 
     tmp = path.with_name(path.name + ".tmp")          # 같은 디렉터리 temp → atomic replace
     try:
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 토큰이 담긴 파일 — 0600으로 생성해 평문 토큰의 권한 노출 방지(spec 5.3, ADR 0021).
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, path)
     except OSError:
         try:
