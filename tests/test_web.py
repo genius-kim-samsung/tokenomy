@@ -2025,3 +2025,22 @@ def test_settings_shows_debug_off_when_on(tmp_path, monkeypatch):
     html = client.get("/settings").text
     assert "디버그 모드 끄기" in html
     assert 'value="0"' in html                              # OFF 버튼이 enabled=0 전송
+
+
+# ── Task 6 TDD: 설정 UI — 자동 갱신 토글 ─────────────────────────────────────────
+
+def test_settings_saves_auto_refresh_token(tmp_path, monkeypatch):
+    """POST /settings가 auto_refresh_token(auto/always/off)을 official_fetch에 저장한다."""
+    client, cfg_path = _client_with_config(tmp_path, monkeypatch)
+    r = client.post("/settings", data={"min_interval": "10",
+                                       "auto_refresh_token": "always"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert saved["official_fetch"]["auto_refresh_token"] == "always"
+
+
+def test_settings_page_shows_auto_refresh_control(tmp_path, monkeypatch):
+    """GET /settings 렌더에 auto_refresh_token select 컨트롤이 있어야 한다."""
+    client, _ = _client_with_config(tmp_path, monkeypatch)
+    assert 'name="auto_refresh_token"' in client.get("/settings").text

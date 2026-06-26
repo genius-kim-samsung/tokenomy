@@ -65,6 +65,17 @@
       끄면 대시보드를 열어둔 동안과 창 복원 시에만 갱신합니다. 기본 켜짐.</p>
   </div>
 
+  <div class="field">
+    <label class="field-label" for="auto_refresh_token">Claude 토큰 자동 갱신</label>
+    <span class="field-input"><select id="auto_refresh_token" name="auto_refresh_token">
+      <option value="auto"   {% if official_fetch.auto_refresh_token == 'auto'   %}selected{% endif %}>자동(이 기기에서 Claude Code를 최근에 안 썼을 때만)</option>
+      <option value="always" {% if official_fetch.auto_refresh_token == 'always' %}selected{% endif %}>항상</option>
+      <option value="off"    {% if official_fetch.auto_refresh_token == 'off'    %}selected{% endif %}>끔</option>
+    </select></span>
+    <p class="field-help">이 기기에서 Claude Code를 직접 쓰지 않을 때 켜세요.
+      자동은 마지막 Claude Code 사용 이후 일정 시간이 지났을 때만 갱신합니다. 기본 자동.</p>
+  </div>
+
   <details class="advanced">
     <summary>고급</summary>
     <div class="field">
