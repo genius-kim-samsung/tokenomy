@@ -541,3 +541,14 @@ def list_official_raw(conn, provider: str) -> list:
         (provider,),
     ).fetchall()
 
+
+def last_provider_activity_ts(conn: sqlite3.Connection, provider: str) -> str | None:
+    """이 기기 로컬 로그 기준 provider의 마지막 메시지 ts(ISO). 활동 없으면 None.
+
+    토큰 자동 갱신 안전망(official_fetch)이 "이 기기에서 최근 CLI를 썼는가" 판정에 쓴다.
+    """
+    row = conn.execute(
+        "SELECT MAX(ts) FROM messages WHERE provider=?", (provider,)
+    ).fetchone()
+    return row[0] if row and row[0] else None
+

@@ -517,3 +517,21 @@ def test_fetch_state_preserves_success_on_failure():
     assert st["last_status"] == "auth_error"
     assert st["last_success_at"] == "t1"   # COALESCE로 보존
     assert st["last_attempt_at"] == "t2"
+
+
+def test_last_provider_activity_ts_none_when_empty():
+    from tokenomy.db import last_provider_activity_ts
+    conn = connect(":memory:")
+    assert last_provider_activity_ts(conn, "claude") is None
+
+
+def test_last_provider_activity_ts_returns_max():
+    from tokenomy.db import last_provider_activity_ts
+    conn = connect(":memory:")
+    conn.executemany(
+        "INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+        [("a", "claude", "2026-06-25T10:00:00+00:00"),
+         ("b", "claude", "2026-06-26T09:00:00+00:00"),
+         ("c", "codex",  "2026-06-27T00:00:00+00:00")])
+    conn.commit()
+    assert last_provider_activity_ts(conn, "claude") == "2026-06-26T09:00:00+00:00"
