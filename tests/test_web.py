@@ -1178,6 +1178,88 @@ def test_official_history_drilldown_multi_provider_labels(tmp_path, monkeypatch)
     assert "위 증가분의 합" in r.text
 
 
+def test_official_history_context_hourly_shape_and_gap(tmp_path, monkeypatch):
+    """period=day → 시간대별(24행) + 갭 시각 covered=False + 누적선 리셋-세그먼트(갭=null)·한도선 제거(ADR 0019)."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.official_parser import OfficialBucket
+    from tokenomy.web.views import official_history_context
+    cfg = tmp_path / "c.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    monkeypatch.setenv("TOKENOMY_SKIP_OFFICIAL_FETCH", "1")
+    monkeypatch.setenv("TOKENOMY_SKIP_UPDATE_CHECK", "1")
+    conn = connect(":memory:")
+
+    def _snap(ts, used):
+        b = OfficialBucket(
+            bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit", label="spend",
+            native_unit="usd", used_native=used, limit_native=243.0, remaining_native=243.0 - used,
+            used_usd=used, limit_usd=243.0, remaining_usd=243.0 - used,
+            utilization=used / 243.0, resets_at=None)
+        insert_official_buckets(conn, provider="claude", fetched_at=ts, buckets=[b], created_at=ts)
+
+    _snap("2026-06-03T09:00:00+09:00", 100.0)   # 이 월 첫 표본(추적 시작)
+    _snap("2026-06-03T10:00:00+09:00", 112.0)   # 10시 +12
+    _snap("2026-06-03T14:00:00+09:00", 130.0)   # 11~13시 갭 → 14시에 lump +18
+    ctx = official_history_context(conn, datetime(2026, 6, 3, tzinfo=KST), period="day",
+                                   now_kst=datetime(2026, 6, 3, 23, 0, tzinfo=KST))
+    assert ctx["is_hourly"] is True
+    assert len(ctx["chart_labels"]) == 24 and len(ctx["table"]) == 24
+    by_h = {r["hour"]: r for r in ctx["table"]}
+    assert by_h[9]["used_usd"] == 100.0
+    assert by_h[10]["used_usd"] == 12.0
+    assert by_h[14]["used_usd"] == 18.0                 # 갭 lump(11~14시 소비가 14시에)
+    assert by_h[11]["covered"] is False and by_h[11]["used_usd"] is None
+    # 누적선: 한 리셋-세그먼트, 관측 시각=절대 월누적, 갭 시각=null(점선 브리지)
+    assert len(ctx["cum_segments"]) == 1
+    seg = ctx["cum_segments"][0]
+    assert seg[9] == 100.0 and seg[10] == 112.0 and seg[14] == 130.0
+    assert seg[11] is None and seg[12] is None and seg[13] is None
+    assert ctx["chart_limit"] is None                   # 일 뷰 한도선 제거
+    assert ctx["pool_limit"] == 243.0                   # 표 잔여용으로는 유지
+
+
+def _seed_oh_snap(conn, provider, ts, used, limit=243.0,
+                  kind="monthly_limit", raw="spend"):
+    """사용 이력(공식) 라우트 테스트용 단일 소진형 스냅샷 시드."""
+    from tokenomy.official_parser import OfficialBucket
+    b = OfficialBucket(
+        bucket_key="monthly", raw_key=raw, bucket_kind=kind, label=raw, native_unit="usd",
+        used_native=used, limit_native=limit, remaining_native=limit - used,
+        used_usd=used, limit_usd=limit, remaining_usd=limit - used,
+        utilization=used / limit, resets_at=None)
+    insert_official_buckets(conn, provider=provider, fetched_at=ts, buckets=[b], created_at=ts)
+
+
+def test_official_history_day_view_renders_hourly(tmp_path, monkeypatch):
+    """period=day → 시간대별 표(N시 라벨) + '일' 토글 + 갭 시간 '수집 공백' + 한도선 생략(ADR 0019)."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_oh_snap(conn, "claude", "2026-06-03T09:00:00+09:00", 100.0)
+    _seed_oh_snap(conn, "claude", "2026-06-03T14:00:00+09:00", 130.0)   # 10~13시 갭
+    r = client.get("/official-history?period=day&anchor=2026-06-03")
+    assert r.status_code == 200
+    assert "09시" in r.text and "14시" in r.text          # 시간대 라벨
+    assert "수집 공백" in r.text                            # 갭 시간대
+    assert ">일</a>" in r.text                              # 일 토글 항목
+    assert "const ohLimit = null" in r.text                 # 일 뷰 한도선 생략
+    assert "const ohZero = false" in r.text                 # 자동 줌(beginAtZero=false)
+    # 대조: 월 뷰는 한도선 유지·beginAtZero
+    m = client.get("/official-history?period=month&anchor=2026-06-03")
+    assert "const ohLimit = null" not in m.text and "const ohZero = true" in m.text
+
+
+def test_official_history_day_view_empty_day_notice(tmp_path, monkeypatch):
+    """표본 없는 날을 일 뷰로 보면 화면을 숨기지 않고 '수집 공백' 안내(ADR 0019)."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_oh_snap(conn, "claude", "2026-06-03T09:00:00+09:00", 100.0)   # 6/3만 표본
+    r = client.get("/official-history?period=day&anchor=2026-06-10")    # 6/10 표본 없음
+    assert r.status_code == 200
+    assert "이 날은" in r.text and "수집 공백" in r.text   # 빈 프레임 + 안내(숨김 아님)
+
+
 def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
     """엔터프라이즈 Codex(실측): 크레딧 한도가 credit_to_usd 환산 USD 게이지로 렌더되어야 한다.
 

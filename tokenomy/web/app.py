@@ -77,6 +77,7 @@ app.mount("/static", StaticFiles(directory=str(_BASE / "static")), name="static"
 _SORTS = ("cost", "sessions", "cache")
 _HISTORY_SORTS = ("date_desc", "date_asc", "day_cost")
 _PERIODS = ("week", "month")
+_OH_PERIODS = ("day", "week", "month")   # 사용 이력(공식)만 일 단위(시간대별) 추가(ADR 0019)
 
 
 def _parse_anchor(value: str | None) -> datetime:
@@ -148,9 +149,9 @@ def history_view(request: Request, anchor: str | None = None, provider: str = ""
 def official_history_view(request: Request, anchor: str | None = None, provider: str = "",
                           period: str | None = None, start: str | None = None,
                           end: str | None = None, notice: str | None = None):
-    """사용 이력(공식) 화면(ADR 0010) — 통합 풀 누적 선 + 일별 소비 막대 + 일별 표."""
+    """사용 이력(공식) 화면(ADR 0010/0019) — 통합 풀 누적 선 + 소비 막대 + 표(월/주/일)."""
     provider = provider if provider in PROVIDERS else ""
-    period = period if period in _PERIODS else "month"
+    period = period if period in _OH_PERIODS else "month"
     conn = connect()
     update_tag = check_update(conn)
     ctx = official_history_context(conn, _parse_anchor(anchor), provider,

@@ -14,6 +14,7 @@ from tokenomy.aggregate import (
     combined_forecast, CombinedForecast,
     _trailing_business_days, trailing_window_spend,
     pool_used_history, _segment_points, pool_history, pool_daily_history,
+    pool_hourly_history,
     pool_snapshots_by_day,
     official_period_glance, ProviderGlance, PeriodSpend,
 )
@@ -2237,6 +2238,84 @@ def test_pool_daily_history_excludes_rate_window_and_empty_pool():
     empty = pool_daily_history(connect(":memory:"), ["claude", "codex"],
                                start=_JUNE_START, nxt=_JULY_START)
     assert all(not r["covered"] for r in empty)
+
+
+# --- pool_hourly_history: 단일 날짜의 시간(0~23)별 통합 풀 소비 델타(ADR 0019) ---
+
+_JUNE3 = datetime(2026, 6, 3, tzinfo=KST)
+
+
+def test_pool_hourly_history_basic_deltas():
+    """시간별 소비 = 인접 누적차. 첫 표본은 기준 0에서의 누적(=그 값). 24개 시각 행."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend",
+               [(3, 9, 0, 10.0), (3, 10, 0, 25.0), (3, 14, 0, 40.0)])
+    rows = pool_hourly_history(conn, ["claude"], day_start=_JUNE3)
+    covered = {r["hour"]: r["used_usd"] for r in rows if r["covered"]}
+    assert covered == {9: 10.0, 10: 15.0, 14: 15.0}
+    assert len(rows) == 24
+
+
+def test_pool_hourly_history_baseline_carries_from_prior_day():
+    """당일 첫 시각 소비는 전날 마지막 표본 기준 델타 — 자정에 0으로 리셋되지 않는다."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend",
+               [(2, 23, 0, 30.0), (3, 9, 0, 35.0), (3, 10, 0, 38.0)])
+    rows = pool_hourly_history(conn, ["claude"], day_start=_JUNE3)
+    covered = {r["hour"]: r["used_usd"] for r in rows if r["covered"]}
+    assert covered == {9: 5.0, 10: 3.0}   # 35-30, 38-35 — 전날 $30 기준
+
+
+def test_pool_hourly_history_reset_counts_post_reset_only():
+    """하루 안의 리셋(누적 하락)은 음수/거대 막대 없이 post-reset 값만 계상."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend",
+               [(3, 9, 0, 80.0), (3, 10, 0, 90.0), (3, 11, 0, 5.0)])
+    rows = pool_hourly_history(conn, ["claude"], day_start=_JUNE3)
+    covered = {r["hour"]: r["used_usd"] for r in rows if r["covered"]}
+    assert covered == {9: 80.0, 10: 10.0, 11: 5.0}   # 리셋 90→5는 5(=-85/95 아님)
+
+
+def test_pool_hourly_history_gap_lumps_and_marks_uncovered():
+    """갭 가로지른 소비는 첫 post-gap 시각에 합산, 표본 없는 시각은 covered=False·used=None."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend",
+               [(3, 9, 0, 10.0), (3, 14, 0, 40.0)])   # 10~13시 표본 없음
+    rows = pool_hourly_history(conn, ["claude"], day_start=_JUNE3)
+    by_h = {r["hour"]: r for r in rows}
+    assert by_h[9]["used_usd"] == 10.0
+    assert by_h[14]["used_usd"] == 30.0               # 10~14시 소비가 14시에 lump
+    assert by_h[10]["covered"] is False and by_h[10]["used_usd"] is None
+    assert by_h[0]["covered"] is False                # 첫 표본 이전도 미커버
+
+
+def test_pool_hourly_history_per_provider_breakdown_sums():
+    """provider별 시간 델타 분해 + 통합 델타 = 그 합(스택 무결성)."""
+    conn = connect(":memory:")
+    _seed_snap(conn, "claude", "monthly_limit", "spend", [(3, 9, 0, 10.0), (3, 10, 0, 30.0)])
+    _seed_snap(conn, "codex", "codex_monthly", "individual_limit",
+               [(3, 9, 0, 5.0), (3, 10, 0, 11.0)], limit=80.0, unit="credit")
+    rows = pool_hourly_history(conn, ["claude", "codex"], day_start=_JUNE3)
+    by_h = {r["hour"]: r for r in rows}
+    assert by_h[9]["per_provider"] == {"claude": 10.0, "codex": 5.0}
+    assert by_h[10]["per_provider"] == {"claude": 20.0, "codex": 6.0}   # 30-10, 11-5
+    for r in rows:
+        if r["covered"]:
+            assert r["used_usd"] == round(sum(r["per_provider"].values()), 6)
+
+
+def test_pool_hourly_history_excludes_rate_window_and_empty_pool():
+    """rate_window-only는 소진형 풀에 0 기여, 빈 풀은 전부 미커버(라우트 숨김 근거)."""
+    conn = connect(":memory:")
+    dt = datetime(2026, 6, 3, 9, 0, tzinfo=KST)
+    insert_official_buckets(
+        conn, provider="claude", fetched_at=dt.isoformat(),
+        buckets=[_ob("rate_window", "rate_window", None, None, raw="five_hour",
+                     unit="percent", util=50.0)], created_at="x")
+    rows = pool_hourly_history(conn, ["claude"], day_start=_JUNE3)
+    assert all(not r["covered"] for r in rows)
+    empty = pool_hourly_history(connect(":memory:"), ["claude", "codex"], day_start=_JUNE3)
+    assert all(not r["covered"] for r in empty) and len(empty) == 24
 
 
 # --- pool_snapshots_by_day: 일 소비 재구성 드릴다운(ADR 0010) ---

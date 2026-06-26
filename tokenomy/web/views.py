@@ -8,7 +8,8 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup, PeriodSpend,
     _provider_where, by_day_session, by_dimension, by_project, by_session,
-    combined_forecast, daily_series, pool_history, pool_daily_history, pool_snapshots_by_day,
+    combined_forecast, daily_series, pool_history, pool_daily_history, pool_hourly_history,
+    pool_snapshots_by_day,
     official_period_glance,
     insights, month_bounds, month_spend, official_span_spend, official_view, parse_ts,
     period_bounds, pricing_coverage, range_spend, session_detail, sidechain_split,
@@ -904,7 +905,7 @@ def _resolve_range(anchor_kst: datetime, period: str, start: str | None, end: st
         nxt = e + timedelta(days=1)
         label = f"{s.strftime('%Y-%m-%d')} ~ {e.strftime('%Y-%m-%d')}"
         return s, nxt, label, period, True
-    period = period if period in ("week", "month") else "month"
+    period = period if period in ("day", "week", "month") else "month"
     start_dt, nxt_dt, label = period_bounds(period, anchor_kst)
     return start_dt, nxt_dt, label, period, False
 
@@ -1141,19 +1142,48 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
     }
 
 
+def _cum_segments_and_endcum(reset_segments, bins, bin_of):
+    """리셋-세그먼트를 bin-인덱스 배열 리스트 + bin별 말단 누적으로 매핑(ADR 0019).
+
+    각 reset_segment → bins 길이 배열(점 없는 bin=null, 같은 bin은 오름차순 last-wins).
+    템플릿이 세그먼트마다 dataset으로 그려 **리셋은 하드 끊김**(세그먼트 분리), **세그먼트 내
+    null(수집 공백)은 점선 브리지**(`segment.borderDash`). `bin_of(dt)`가 bins 밖이면 None을
+    반환해 건너뛴다(hourly에서 당일 밖 표본 제외). end_cum = bin→말단 누적(표 '누적' 컬럼).
+    """
+    idx = {b: i for i, b in enumerate(bins)}
+    seg_arrays: list = []
+    end_cum: dict = {}
+    for seg in reset_segments:
+        arr: list = [None] * len(bins)
+        for pt in seg:
+            dt = parse_ts(pt["ts"])
+            if dt is None:
+                continue
+            b = bin_of(dt)
+            if b in idx:
+                arr[idx[b]] = pt["used_usd"]
+                end_cum[b] = pt["used_usd"]   # 오름차순 + 후행 세그먼트 → last-wins
+        if any(v is not None for v in arr):
+            seg_arrays.append(arr)
+    return seg_arrays, end_cum
+
+
 def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
                              period: str = "month", start: str | None = None,
                              end: str | None = None, now_kst: datetime | None = None) -> dict:
-    """사용 이력(공식) 화면(ADR 0010) — 통합 풀의 누적 선 + 일별 소비 막대 + 일별 표.
+    """사용 이력(공식) 화면(ADR 0010/0019) — 통합 풀 누적 선 + 소비 막대 + 표.
 
-    데이터는 공식 사용량 스냅샷 이력(ADR 0007)의 새 표현 — 신규 취득 없음. 소진형
-    풀만(rate-window 제외) 보여주며, 소진형 풀이 없으면 has_pool=False(빈 상태).
+    데이터는 공식 사용량 스냅샷 이력(ADR 0007)의 새 표현 — 신규 취득 없음. 소진형 풀만
+    (rate-window 제외) 보여주며, 소진형 풀이 없으면 has_pool=False(빈 상태). period=day는
+    그날의 **시간대별(24칸)** 뷰(ADR 0019), 월/주는 일별 — 둘 다 누적선은 리셋-세그먼트로
+    그려 갭은 점선·리셋은 끊김. 누적선 점 값은 절대 월누적이고 일 뷰는 한도선을 생략한다.
     """
     now = now_kst or datetime.now(KST)
     config = load_config()
     active = tracked_providers(config)
     provider = _active_provider(provider, active)   # 비활성 provider 요청 → 전체 폴백
     s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
+    is_hourly = (period == "day" and not custom)    # 시간대별 렌더는 일 토글 한정(ADR 0019)
 
     # 소진형 풀 판정 + 한도선 값 — combined_forecast가 None이면 소진형 풀 없음(빈 상태).
     ctu = credit_to_usd(config)
@@ -1170,38 +1200,49 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
     # provider 순서 = _TREND_STYLE(스택/막대/드릴다운 일관) 우선, 나머지는 뒤로.
     prov_list = ([p for p in _TREND_STYLE if p in view_providers]
                  + [p for p in view_providers if p not in _TREND_STYLE])
-    segments = pool_history(conn, view_providers, max_gap_minutes=interval * 3, is_pooled=is_pooled)
-    daily = pool_daily_history(conn, view_providers, start=s, nxt=nxt, is_pooled=is_pooled)
-    detail_by_day = pool_snapshots_by_day(conn, prov_list, start=s, nxt=nxt, is_pooled=is_pooled)   # 일 소비 재구성(드릴다운)
     prov_label = {p: (_TREND_STYLE[p][0] if p in _TREND_STYLE else p.title()) for p in prov_list}
-    for dets in detail_by_day.values():       # provider 라벨 주입(템플릿 단순화)
-        for pd in dets:
-            pd["label"] = prov_label.get(pd["provider"], pd["provider"])
+    # 누적선용 리셋-세그먼트 — 갭은 forward-fill(점선 브리지), 리셋만 분할(하드 끊김).
+    reset_segments = pool_history(conn, view_providers, max_gap_minutes=None, is_pooled=is_pooled)
 
-    # 말일 누적/잔여 = 그 날 끝 시점의 통합 풀 used(누적 선과 동일 출처)·한도 잔여(표 컬럼).
-    end_cum: dict = {}
-    for seg in segments:
-        for pt in seg:
-            dt = parse_ts(pt["ts"])
-            if dt is not None:
-                end_cum[dt.astimezone(KST).date()] = pt["used_usd"]   # 오름차순이라 last-wins
-    table = []
-    for r in daily:
-        cum = end_cum.get(r["date"])
-        table.append({**r, "ymd": r["date"].strftime("%Y-%m-%d"), "md": r["date"].strftime("%m-%d"),
-                      "end_cumulative_usd": cum,
-                      "remaining_usd": (round(pool_limit - cum, 4) if (pool_limit and cum is not None) else None),
-                      "detail": detail_by_day.get(r["date"])})   # 펼침 시 스냅샷 재구성(없으면 None)
+    def _bar_series(rows):
+        return [{
+            "key": p, "label": _TREND_STYLE[p][0] if p in _TREND_STYLE else p.title(),
+            "color": _TREND_STYLE[p][1] if p in _TREND_STYLE else "#8a8a8a",
+            "data": [r["per_provider"].get(p) for r in rows],   # provider별 소비(미커버 None)
+        } for p in prov_list]
 
-    # 차트용 배열 — 2단 패널(상: 누적 선, 하: provider 스택 막대)이 같은 날짜축 공유.
-    chart_labels = [r["date"].strftime("%m-%d") for r in daily]
-    cum_data = [end_cum.get(r["date"]) for r in daily]   # 누적 선(갱신 없는 날 None=끊김)
-    bar_series = [{
-        "key": p,
-        "label": _TREND_STYLE[p][0] if p in _TREND_STYLE else p.title(),
-        "color": _TREND_STYLE[p][1] if p in _TREND_STYLE else "#8a8a8a",
-        "data": [r["per_provider"].get(p) for r in daily],   # provider 일별 소비(미커버 None)
-    } for p in prov_list]
+    def _remaining(cum):
+        return round(pool_limit - cum, 4) if (pool_limit and cum is not None) else None
+
+    if is_hourly:
+        hourly = pool_hourly_history(conn, view_providers, day_start=s, is_pooled=is_pooled)
+        bins = list(range(24))
+        chart_labels = [f"{h:02d}" for h in bins]
+        cum_segments, end_cum = _cum_segments_and_endcum(
+            reset_segments, bins,
+            lambda dt: (dt.astimezone(KST).hour if s <= dt.astimezone(KST) < nxt else None))
+        table = [{**r, "hlabel": f'{r["hour"]:02d}시',
+                  "end_cumulative_usd": end_cum.get(r["hour"]),
+                  "remaining_usd": _remaining(end_cum.get(r["hour"])), "detail": None}
+                 for r in hourly]
+        bar_series = _bar_series(hourly)
+        empty_day = all(not r["covered"] for r in hourly)
+    else:
+        daily = pool_daily_history(conn, view_providers, start=s, nxt=nxt, is_pooled=is_pooled)
+        bins = [r["date"] for r in daily]
+        chart_labels = [d.strftime("%m-%d") for d in bins]
+        cum_segments, end_cum = _cum_segments_and_endcum(
+            reset_segments, bins, lambda dt: dt.astimezone(KST).date())
+        detail_by_day = pool_snapshots_by_day(conn, prov_list, start=s, nxt=nxt, is_pooled=is_pooled)   # 드릴다운
+        for dets in detail_by_day.values():       # provider 라벨 주입(템플릿 단순화)
+            for pd in dets:
+                pd["label"] = prov_label.get(pd["provider"], pd["provider"])
+        table = [{**r, "ymd": r["date"].strftime("%Y-%m-%d"), "md": r["date"].strftime("%m-%d"),
+                  "end_cumulative_usd": end_cum.get(r["date"]),
+                  "remaining_usd": _remaining(end_cum.get(r["date"])),
+                  "detail": detail_by_day.get(r["date"])} for r in daily]
+        bar_series = _bar_series(daily)
+        empty_day = False
 
     return {
         "active_nav": "official_history",
@@ -1210,8 +1251,11 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
         "filter_providers": _filter_options(active), "show_filter": len(active) >= 2,
         "active_empty": not active,
         "has_pool": has_pool, "pool_limit": pool_limit,
-        "segments": segments, "daily": daily, "table": table,
-        "chart_labels": chart_labels, "cum_data": cum_data, "bar_series": bar_series,
+        "is_hourly": is_hourly, "empty_day": empty_day,
+        "table": table,
+        "chart_labels": chart_labels, "cum_segments": cum_segments,
+        "chart_limit": (None if is_hourly else pool_limit),   # 일 뷰는 한도선 생략(자동 줌)
+        "bar_series": bar_series,
         "period": period, "custom": custom, "period_label": label,
         "anchor": anchor_kst.strftime("%Y-%m-%d"),
         "start": start or "", "end": end or "",

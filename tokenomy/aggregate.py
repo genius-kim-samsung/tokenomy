@@ -784,6 +784,40 @@ def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: date
     return rows
 
 
+def pool_hourly_history(conn, providers: list[str], *, day_start: datetime,
+                        is_pooled=None) -> list:
+    """단일 날짜 [day_start, +1d)의 시각(0~23)별 통합 풀 소비 델타 + 커버리지(ADR 0019).
+
+    `pool_daily_history`의 시간 버전 — 같은 델타 공식(첫 표본=기준 0 누적, 리셋=post-reset,
+    노이즈 진동 상계)을 24개 시각 빈으로 분해한다. baseline은 당일 첫 표본 직전 스냅샷
+    (전날이어도)을 경계 넘어 carry해 첫 시각 소비를 정확히 잡는다(전체 이력을 돌며 prev를
+    갱신하되 당일 표본만 집계). 각 행 = {hour, covered, used_usd, per_provider}. 표본 있는
+    시각만 covered=True. 누적선(end_cumulative)은 뷰가 pool_history에서 시각별 last-wins로 뽑는다.
+    """
+    day_end = day_start + timedelta(days=1)
+    per_prov: dict[str, dict] = {}
+    for p in providers:
+        hourly: dict = {}
+        prev = None
+        for dt, v in pool_used_history(conn, p, is_pooled=is_pooled):   # (dt, 누적 USD) 오름차순
+            cons, _ = _consumption_delta(prev, v)
+            kst = dt.astimezone(KST)
+            if day_start <= kst < day_end:
+                hourly[kst.hour] = hourly.get(kst.hour, 0.0) + cons
+            prev = v
+        per_prov[p] = hourly
+
+    rows = []
+    for h in range(24):
+        pp = {p: round(hourly[h], 6) for p, hourly in per_prov.items() if h in hourly}
+        if pp:
+            rows.append({"hour": h, "covered": True,
+                         "used_usd": round(sum(pp.values()), 6), "per_provider": pp})
+        else:   # 표본 없는 시각 — 수집 공백(0 아님, ADR 0007/0019)
+            rows.append({"hour": h, "covered": False, "used_usd": None, "per_provider": {}})
+    return rows
+
+
 def pool_snapshots_by_day(conn, providers: list[str], *,
                           start: datetime, nxt: datetime, is_pooled=None) -> dict:
     """[start, nxt) 각 날짜의 일 소비를 만든 스냅샷 세부 재구성(ADR 0010 드릴다운).

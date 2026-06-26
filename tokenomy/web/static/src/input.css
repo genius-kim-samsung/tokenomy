@@ -107,9 +107,11 @@
   .chart-card h2 { @apply text-on-dark; }
   .chart-card .muted { color: #a09d96; }
 
-  .toggle a { @apply text-muted no-underline px-2 py-0.5 rounded-md transition-colors; }
+  /* 세그먼트 컨트롤 — 테두리 컨테이너 + 채운 활성 알약으로 "고르는 컨트롤"임을 드러낸다(ADR 0019) */
+  .toggle { @apply inline-flex items-center gap-0.5 p-0.5 rounded-lg border border-line; }
+  .toggle a { @apply text-muted no-underline px-2.5 py-1 rounded-md transition-colors; }
   .toggle a:hover { @apply text-fg; }
-  .toggle a.on { @apply text-fg bg-elev; }
+  .toggle a.on { @apply text-fg bg-elev font-medium shadow-sm; }
   .toggle.small a { @apply text-[13px]; }
 
   /* 이번 달 총지출 히어로 — 총액은 크게, 분모/사용률은 작게, 통합 진행바 아래 */

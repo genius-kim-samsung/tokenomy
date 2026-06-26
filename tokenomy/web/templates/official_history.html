@@ -31,13 +31,20 @@
   <nav class="toggle small" aria-label="기간 단위">
     <a href="/official-history?period=month&anchor={{ anchor }}&provider={{ provider }}" class="{{ 'on' if period == 'month' and not custom }}">월</a>
     <a href="/official-history?period=week&anchor={{ anchor }}&provider={{ provider }}" class="{{ 'on' if period == 'week' and not custom }}">주</a>
+    <a href="/official-history?period=day&anchor={{ anchor }}&provider={{ provider }}" class="{{ 'on' if period == 'day' and not custom }}">일</a>
   </nav>
 
-  {# 상단 패널: 누적 선(+한도선) / 하단 패널: provider 스택 막대 — 같은 날짜축 공유(ADR 0010) #}
+  {# 상단 패널: 누적 선(+한도선, 일 뷰는 생략) / 하단 패널: provider 스택 막대 — 같은 축 공유(ADR 0010/0019) #}
   <div><canvas id="oh-cum" height="120"></canvas></div>
   <div><canvas id="oh-bar" height="120"></canvas></div>
+  {% if is_hourly %}
+  {% if empty_day %}<p class="muted">이 날은 <strong>수집 공백</strong>입니다 — 표본이 없어 시간대별 궤적이 비어 있습니다(0이 아님). ‹ 이전/다음 ›으로 다른 날을 보세요.</p>{% endif %}
+  <p class="muted">막대는 마지막 표본 기준 <strong>시간대별 증가분</strong> — 앱이 꺼진 구간 소비는 다음 표본 시간대에 합산됩니다.
+    표본 없는 시간대는 “수집 공백”으로, 0이 아닙니다. 누적 선의 점선 구간은 그 공백을 대략적 추세로 이은 것입니다.</p>
+  {% else %}
   <p class="muted">막대는 마지막 표본 기준 <strong>일별 증가분</strong> — 앱이 꺼진 구간 소비는 다음 표본 날짜에 합산됩니다.
-    표본 없는 날은 “수집 공백”으로, 0이 아닙니다.</p>
+    표본 없는 날은 “수집 공백”으로, 0이 아닙니다. 누적 선의 점선 구간은 그 공백을 대략적 추세로 이은 것입니다.</p>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -45,17 +52,17 @@
   <table class="gtable">
     <thead>
       <tr>
-        <th>날짜</th>
-        <th>일 소비</th>
+        <th>{{ '시간' if is_hourly else '날짜' }}</th>
+        <th>{{ '시간대 소비' if is_hourly else '일 소비' }}</th>
         {% if bar_series|length >= 2 %}{% for s in bar_series %}<th>{{ s.label }}</th>{% endfor %}{% endif %}
-        <th>말일 누적</th>
+        <th>{{ '시간대 말 누적' if is_hourly else '말일 누적' }}</th>
         <th>잔여</th>
       </tr>
     </thead>
     <tbody>
       {% for r in table|reverse %}
       <tr class="day-row"{% if r.detail %} data-detail="1"{% endif %}>
-        <td>{% if r.detail %}<span class="caret" aria-hidden="true">▸</span> {% endif %}{{ r.ymd }}</td>
+        <td>{% if r.detail %}<span class="caret" aria-hidden="true">▸</span> {% endif %}{{ r.hlabel if is_hourly else r.ymd }}</td>
         {% if r.covered %}<td>${{ '%.2f'|format(r.used_usd) }}</td>
         {% else %}<td class="muted">수집 공백</td>{% endif %}
         {% if bar_series|length >= 2 %}{% for s in bar_series %}
@@ -100,7 +107,7 @@
       {% endfor %}
     </tbody>
   </table>
-  <p class="disclaimer">ⓘ 공식 사용량 스냅샷 이력(ADR 0007) 기반 · 소진형·통합 풀 한정(rate-window 제외) · <strong>날짜 행을 누르면</strong> 그 숫자를 만든 스냅샷을 펼쳐 봅니다.</p>
+  <p class="disclaimer">ⓘ 공식 사용량 스냅샷 이력(ADR 0007) 기반 · 소진형·통합 풀 한정(rate-window 제외){% if not is_hourly %} · <strong>날짜 행을 누르면</strong> 그 숫자를 만든 스냅샷을 펼쳐 봅니다{% endif %}.</p>
 </section>
 {% endif %}
 {% endblock %}
@@ -108,7 +115,7 @@
 {% block scripts %}
 {% if has_pool %}
 <script>
-  // 날짜 행 클릭 → 그 날 일 소비를 만든 스냅샷 재구성 행 토글(ADR 0010 드릴다운).
+  // 날짜 행 클릭 → 그 날 일 소비를 만든 스냅샷 재구성 행 토글(ADR 0010 드릴다운, 월/주만).
   document.querySelectorAll('tr.day-row[data-detail]').forEach(function (row) {
     row.style.cursor = 'pointer';
     row.addEventListener('click', function () {
@@ -124,33 +131,42 @@
 <script src="/static/vendor/chart.min.js"></script>
 <script>
   const ohLabels = {{ chart_labels|tojson }};
-  const ohCum = {{ cum_data|tojson }};        // 일별 말일 누적(없는 날 null=끊김)
-  const ohLimit = {{ pool_limit|tojson }};    // 통합 풀 한도(수평선)
-  const ohBars = {{ bar_series|tojson }};      // [{key,label,color,data}] provider 스택
+  const ohCumSegs = {{ cum_segments|tojson }};   // 리셋-세그먼트별 누적 배열(갭=null=점선 브리지)
+  const ohLimit = {{ chart_limit|tojson }};      // 통합 풀 한도(수평선) — 일 뷰는 null(생략)
+  const ohBars = {{ bar_series|tojson }};        // [{key,label,color,data}] provider 스택
+  const ohZero = {{ 'false' if is_hourly else 'true' }};   // 일 뷰는 자동 줌(beginAtZero=false)
 
-  // 상단: 누적 선 + 한도 수평선(자기 축)
-  const cumSets = [{
-    label: '공식 누적(USD)', data: ohCum,
-    borderColor: 'rgba(122,162,247,0.95)', borderWidth: 2,
-    backgroundColor: 'transparent', fill: false, tension: .1, pointRadius: 0, spanGaps: false,
-  }];
+  // 상단: 누적 선 — 세그먼트마다 dataset(리셋=하드 끊김), 세그먼트 내 갭 span은 점선(ADR 0019).
+  const cumSets = ohCumSegs.map(function (data, i) {
+    return {
+      label: i === 0 ? '공식 누적(USD)' : '',
+      data: data,
+      borderColor: 'rgba(122,162,247,0.95)', borderWidth: 2,
+      backgroundColor: 'transparent', fill: false, tension: .1, pointRadius: 0, spanGaps: true,
+      segment: { borderDash: function (ctx) {
+        // 갭 브리지=점선: null(skip) 점에 닿거나 인덱스를 건너뛴 세그먼트(Chart.js v4 둘 다 커버)
+        var gap = ctx.p0.skip || ctx.p1.skip || (ctx.p1DataIndex - ctx.p0DataIndex > 1);
+        return gap ? [4, 4] : undefined;
+      } },
+    };
+  });
   if (ohLimit != null) {
     cumSets.push({
-      label: '통합 한도', data: ohLabels.map(() => ohLimit),
+      label: '통합 한도', data: ohLabels.map(function () { return ohLimit; }),
       borderColor: 'rgba(229,107,84,0.9)', borderWidth: 1.5, borderDash: [2, 2],
-      backgroundColor: 'transparent', fill: false, pointRadius: 0,
+      backgroundColor: 'transparent', fill: false, pointRadius: 0, spanGaps: true,
     });
   }
   new Chart(document.getElementById('oh-cum'), {
     type: 'line',
     data: { labels: ohLabels, datasets: cumSets },
     options: {
-      plugins: { legend: { labels: { color: '#3d3d3a' } } },
-      scales: { x: { ticks: { color: '#a09d96' } }, y: { ticks: { color: '#a09d96' }, beginAtZero: true } },
+      plugins: { legend: { labels: { color: '#3d3d3a', filter: function (it) { return it.text !== ''; } } } },
+      scales: { x: { ticks: { color: '#a09d96' } }, y: { ticks: { color: '#a09d96' }, beginAtZero: ohZero } },
     },
   });
 
-  // 하단: provider 스택 막대(자기 축) — 같은 날짜 라벨 공유
+  // 하단: provider 스택 막대(자기 축) — 같은 라벨 공유
   new Chart(document.getElementById('oh-bar'), {
     type: 'bar',
     data: {
