@@ -433,6 +433,21 @@ def test_overview_context_shape(monkeypatch, tmp_path):
     assert "daily_labels" in ctx and "insights" in ctx and "sessions" in ctx
 
 
+def test_overview_context_exposes_ingesting_flag(monkeypatch, tmp_path):
+    """수집 중이면 ctx['ingesting']=True → 대시보드 '수집 중' 배너 게이트(ADR 0023)."""
+    from tokenomy.web import control
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    conn = connect(":memory:")
+    monkeypatch.setattr(control, "is_ingesting", lambda: True)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["ingesting"] is True
+    monkeypatch.setattr(control, "is_ingesting", lambda: False)
+    ctx = overview_context(conn, sort="cost", now_kst=_NOW_STATUS)
+    assert ctx["ingesting"] is False
+
+
 def test_overview_context_provider_without_data(monkeypatch, tmp_path):
     cfg = tmp_path / "cfg.json"
     cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")

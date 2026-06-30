@@ -6,6 +6,19 @@ import pytest
 from tokenomy import launcher
 
 
+class _FakeLock:
+    """단일 인스턴스 락 페이크 — acquire가 정해진 값을 반환(ADR 0023 main 테스트용)."""
+    def __init__(self, acquired): self._acquired = acquired; self.released = False
+    def acquire(self): return self._acquired
+    def release(self): self.released = True
+
+
+def _patch_lock(monkeypatch, acquired):
+    lk = _FakeLock(acquired)
+    monkeypatch.setattr(launcher, "SingleInstanceLock", lambda data_dir: lk)
+    return lk
+
+
 def test_version_flag(capsys):
     launcher.main(["--version"])
     out = capsys.readouterr().out.strip()
@@ -66,11 +79,14 @@ def test_wait_until_ready_false_when_closed():
 
 
 def test_main_uses_window_when_webview_available(monkeypatch):
+    """창 우선 기동(ADR 0023) — 락 획득 후 서버·런타임·창을 먼저 띄우고, 수집은 동기로 안 한다
+    (창 표시 후 _on_gui_start가 백그라운드로 기동)."""
     calls = {}
-    monkeypatch.setattr(launcher, "_safe_ingest", lambda: None)
+    _patch_lock(monkeypatch, acquired=True)
+    monkeypatch.setattr(launcher, "_init_db", lambda: calls.__setitem__("init_db", True))
+    monkeypatch.setattr(launcher, "_safe_ingest", lambda: calls.__setitem__("ingested", True))
     monkeypatch.setattr(launcher, "find_free_port", lambda: 9999)
     monkeypatch.setattr(launcher, "_webview_available", lambda: True)
-    monkeypatch.setattr(launcher, "_existing_instance_port", lambda: None)
     monkeypatch.setattr(launcher, "_write_runtime", lambda port: calls.__setitem__("runtime", port))
     monkeypatch.setattr(launcher, "_clear_runtime", lambda: calls.__setitem__("cleared", True))
     monkeypatch.setattr(launcher, "_wait_until_ready", lambda port, **k: True)
@@ -100,11 +116,14 @@ def test_main_uses_window_when_webview_available(monkeypatch):
     assert "browser" not in calls
     assert calls.get("runtime") == 9999
     assert calls.get("cleared") is True
+    assert calls.get("init_db") is True        # 스레드 기동 전 스키마 워밍
+    assert "ingested" not in calls             # webview 경로는 동기 수집 안 함(창 우선 → 백그라운드)
 
 
 def test_main_signals_existing_instance_and_exits(monkeypatch):
+    """락 점유 실패(이미 다른 인스턴스) → 기존 창 복원 신호 후 종료, 서버·창·수집 없음."""
     calls = {}
-    monkeypatch.setattr(launcher, "_webview_available", lambda: True)
+    _patch_lock(monkeypatch, acquired=False)
     monkeypatch.setattr(launcher, "_existing_instance_port", lambda: 8765)
     monkeypatch.setattr(launcher, "_signal_show", lambda port: calls.__setitem__("signaled", port))
     monkeypatch.setattr(launcher, "_safe_ingest", lambda: calls.__setitem__("ingested", True))
@@ -117,9 +136,12 @@ def test_main_signals_existing_instance_and_exits(monkeypatch):
 
 def test_main_falls_back_to_browser_when_no_webview(monkeypatch):
     calls = {}
-    monkeypatch.setattr(launcher, "_safe_ingest", lambda: None)
+    _patch_lock(monkeypatch, acquired=True)
+    monkeypatch.setattr(launcher, "_safe_ingest", lambda: calls.__setitem__("ingested", True))
     monkeypatch.setattr(launcher, "find_free_port", lambda: 9999)
     monkeypatch.setattr(launcher, "_webview_available", lambda: False)
+    monkeypatch.setattr(launcher, "_write_runtime", lambda port: calls.__setitem__("runtime", port))
+    monkeypatch.setattr(launcher, "_clear_runtime", lambda: None)
     monkeypatch.setattr(launcher, "_serve", lambda port: calls.__setitem__("serve", port))
     monkeypatch.setattr(launcher, "_launch_window",
                         lambda port: calls.__setitem__("window", port))
@@ -143,6 +165,7 @@ def test_main_falls_back_to_browser_when_no_webview(monkeypatch):
     assert calls.get("thread_kwargs", {}).get("daemon") is True
     assert calls.get("serve") == 9999
     assert "window" not in calls
+    assert calls.get("ingested") is True       # 브라우저 fallback은 동기 수집 유지(창 우선 무의미)
 
 
 def test_ensure_std_streams_replaces_none(monkeypatch):
@@ -272,6 +295,8 @@ def test_show_window_shows_and_spawns_reingest(monkeypatch):
 
 
 def test_reingest_reloads_only_when_changed(monkeypatch):
+    from tokenomy.web import control
+    control.end_ingest()                        # 수집 상태 정규화(가드 통과 보장)
     w = _FakeWindow()
     _reset_tray_state(monkeypatch, window=w)
     monkeypatch.setattr("tokenomy.db.connect", lambda: object())
@@ -281,10 +306,13 @@ def test_reingest_reloads_only_when_changed(monkeypatch):
 
 
 def test_reingest_no_reload_when_unchanged(monkeypatch):
+    from tokenomy.web import control
+    control.end_ingest()
     w = _FakeWindow()
     _reset_tray_state(monkeypatch, window=w)
     monkeypatch.setattr("tokenomy.db.connect", lambda: object())
     monkeypatch.setattr("tokenomy.cli.cmd_ingest", lambda conn: 0)   # 변화 없음
+    # 복원 경로(clear_banner=False) — 변경 없으면 리로드도 배너 제거 JS도 없다.
     launcher._reingest_and_maybe_reload()
     assert all(c[0] != "js" for c in w.calls if isinstance(c, tuple))
 
@@ -454,6 +482,7 @@ def test_launch_window_starts_in_mini_when_last_view_mini(monkeypatch, tmp_path)
     _isolate_config(monkeypatch, tmp_path, '{"mini_view": {"last_view": "mini"}}')
     log, created = [], []
     _install_fake_webview(monkeypatch, log, created)
+    monkeypatch.setattr(launcher, "_is_first_run", lambda: False)   # 복귀 사용자 — last_view 존중(ADR 0023)
     monkeypatch.setattr(launcher, "_build_tray", lambda: type("I", (), {"run": lambda s: None, "stop": lambda s: None})())
     monkeypatch.setattr(launcher, "_tray_state", _fresh_state(quitting=True))
     monkeypatch.setattr(launcher.threading, "Thread", type("T", (), {"__init__": lambda s, **k: None, "start": lambda s: None}))
@@ -833,6 +862,7 @@ def _tray_branch_fakes(monkeypatch, tmp_path, platform):
         def stop(self): self.stopped = True
     icon = FakeIcon()
     monkeypatch.setattr(launcher, "_build_tray", lambda: icon)
+    monkeypatch.setattr(launcher, "_is_first_run", lambda: False)   # 뷰 시드 결정성(빈 DB CI 영향 차단)
     monkeypatch.setattr(launcher, "_tray_state", _fresh_state(quitting=True))
     monkeypatch.setattr(launcher, "_start_background_poll", lambda: None)
     monkeypatch.setattr("tokenomy.web.control.set_show_callback", lambda fn: None)
@@ -889,4 +919,107 @@ def test_launch_window_forces_main_when_mini_unavailable(monkeypatch, tmp_path):
 
     launcher._launch_window(9999)
     assert launcher._tray_state["current_view"] == "main"   # 비가용 → main으로 clamp
+    assert all(c["kind"] != "mini" for c in created)         # 미니 미생성
+
+
+# ──────────────────────────────────────────────
+# ADR 0023: 창 우선 기동 — 백그라운드 수집 / 락 / 첫 실행 뷰
+# ──────────────────────────────────────────────
+
+def test_background_ingest_reloads_when_changed(monkeypatch):
+    """변경이 있으면 전체 리로드(데이터 반영 + 배너 제거) + 가드 해제."""
+    from tokenomy.web import control
+    control.end_ingest()
+    w = _FakeWindow()
+    _reset_tray_state(monkeypatch, window=w)
+    monkeypatch.setattr("tokenomy.db.connect", lambda: object())
+    monkeypatch.setattr("tokenomy.cli.cmd_ingest", lambda conn: 5)
+    launcher._background_ingest(clear_banner=True)
+    assert ("js", "window.location.reload()") in w.calls
+    assert control.is_ingesting() is False        # finally에서 해제
+
+
+def test_background_ingest_clears_banner_without_reload_when_no_change(monkeypatch):
+    """변경 없는 첫 수집 — 전체 리로드 깜빡임 없이 '수집 중' 배너만 제거(영영 안 남게)."""
+    from tokenomy.web import control
+    control.end_ingest()
+    w = _FakeWindow()
+    _reset_tray_state(monkeypatch, window=w)
+    monkeypatch.setattr("tokenomy.db.connect", lambda: object())
+    monkeypatch.setattr("tokenomy.cli.cmd_ingest", lambda conn: 0)
+    launcher._background_ingest(clear_banner=True)
+    js = [c[1] for c in w.calls if isinstance(c, tuple) and c[0] == "js"]
+    assert any("ingest-banner" in s for s in js)              # 배너 제거 JS
+    assert not any(s == "window.location.reload()" for s in js)  # 전체 리로드는 안 함
+
+
+def test_background_ingest_skips_when_already_running(monkeypatch):
+    """다른 진입점이 수집 중이면 중복 cmd_ingest 안 함(동시 writer 방지)."""
+    from tokenomy.web import control
+    control.end_ingest()
+    control.begin_ingest()                       # 이미 수집 중
+    w = _FakeWindow()
+    _reset_tray_state(monkeypatch, window=w)
+    ran = []
+    monkeypatch.setattr("tokenomy.cli.cmd_ingest", lambda conn: ran.append(1))
+    try:
+        launcher._background_ingest(clear_banner=True)
+        assert ran == []
+    finally:
+        control.end_ingest()
+
+
+def test_on_gui_start_kicks_background_ingest(monkeypatch):
+    """GUI 시작 직후 — 백그라운드 첫 수집(clear_banner=True)을 데몬 스레드로 기동(창 우선 기동)."""
+    _reset_mini_state(monkeypatch, current_view="main")
+    seen = {}
+    monkeypatch.setattr(launcher, "_background_ingest", lambda **k: seen.__setitem__("kw", k))
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None, **k): self.target = target; seen["daemon"] = daemon
+        def start(self): seen["started"] = True; self.target()
+
+    monkeypatch.setattr(launcher.threading, "Thread", FakeThread)
+    launcher._on_gui_start()
+    assert seen.get("started") is True
+    assert seen.get("daemon") is True
+    assert seen.get("kw") == {"clear_banner": True}
+
+
+def test_signal_existing_window_retries_then_signals(monkeypatch):
+    """1차가 아직 준비 안 돼 첫 ping이 실패해도 짧게 재시도해 결국 기존 창을 복원시킨다."""
+    ports = [None, None, 8765]
+    monkeypatch.setattr(launcher, "_existing_instance_port", lambda: ports.pop(0))
+    monkeypatch.setattr(launcher.time, "sleep", lambda s: None)
+    signaled = []
+    monkeypatch.setattr(launcher, "_signal_show", lambda p: signaled.append(p))
+    launcher._signal_existing_window(retries=5, interval=0.01)
+    assert signaled == [8765]
+
+
+def test_signal_existing_window_quiet_when_unreachable(monkeypatch):
+    """끝내 못 찾으면(1차 hang 등) show를 보내지 않고 조용히 종료한다 — 2번째 창은 안 띄움."""
+    monkeypatch.setattr(launcher, "_existing_instance_port", lambda: None)
+    monkeypatch.setattr(launcher.time, "sleep", lambda s: None)
+    signaled = []
+    monkeypatch.setattr(launcher, "_signal_show", lambda p: signaled.append(p))
+    launcher._signal_existing_window(retries=3, interval=0.01)
+    assert signaled == []
+
+
+def test_launch_window_first_run_forces_main_view(monkeypatch, tmp_path):
+    """첫 실행(빈 DB) — config last_view='mini'여도 일반뷰로 시작해 '수집 중' 배너가 보이게 한다(ADR 0023)."""
+    _isolate_config(monkeypatch, tmp_path, '{"mini_view": {"last_view": "mini"}}')
+    log, created = [], []
+    _install_fake_webview(monkeypatch, log, created)
+    monkeypatch.setattr(launcher, "mini_view_available", lambda: True)
+    monkeypatch.setattr(launcher, "_is_first_run", lambda: True)    # 빈 DB
+    monkeypatch.setattr(launcher, "_build_tray", lambda: type("I", (), {"run": lambda s: None, "stop": lambda s: None})())
+    monkeypatch.setattr(launcher, "_tray_state", _fresh_state(quitting=True))
+    monkeypatch.setattr(launcher.threading, "Thread", type("T", (), {"__init__": lambda s, **k: None, "start": lambda s: None}))
+    monkeypatch.setattr("tokenomy.web.control.set_show_callback", lambda fn: None)
+    monkeypatch.setattr(launcher, "_persist_mini", lambda **k: None)
+
+    launcher._launch_window(9999)
+    assert launcher._tray_state["current_view"] == "main"   # 첫 실행 → main 강제
     assert all(c["kind"] != "mini" for c in created)         # 미니 미생성

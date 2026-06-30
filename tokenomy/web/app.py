@@ -292,11 +292,16 @@ def analysis_view(request: Request, anchor: str | None = None, provider: str = "
 
 @app.post("/ingest")
 def do_ingest():
-    conn = connect()
+    # 수집 가드(ADR 0023) — 시작 지연수집·복원 re-ingest가 도는 중이면 중복 실행 안 함(동시 writer 방지).
+    if not control.begin_ingest():
+        return RedirectResponse("/", status_code=303)
     try:
+        conn = connect()
         cmd_ingest(conn)
     except Exception:
         return RedirectResponse("/?notice=ingest-failed", status_code=303)
+    finally:
+        control.end_ingest()
     return RedirectResponse("/", status_code=303)
 
 
@@ -329,7 +334,10 @@ def official_section(request: Request):
     conn = connect()
     config = load_config()
     now = datetime.now(KST)
-    refresh_tracked(config, now_kst=now, conn=conn, manual=False)
+    # 첫 수집 중엔 자동 갱신을 미룬다(ADR 0023) — 공식 갱신도 writer라 수집과 writer/writer 충돌.
+    # 마지막 스냅샷만 렌더하고, 수집 완료 후 리로드가 갱신을 재발동한다.
+    if not control.is_ingesting():
+        refresh_tracked(config, now_kst=now, conn=conn, manual=False)
     return _official_section_response(request, conn, config, now)
 
 
@@ -351,7 +359,8 @@ def mini_section(request: Request):
     conn = connect()
     config = load_config()
     now = datetime.now(KST)
-    refresh_tracked(config, now_kst=now, conn=conn, manual=False)
+    if not control.is_ingesting():       # 첫 수집 중 자동 갱신 skip(ADR 0023, /official/section과 동일)
+        refresh_tracked(config, now_kst=now, conn=conn, manual=False)
     return templates.TemplateResponse(
         request, "_mini_section.html", mini_view_context(conn, config, now))
 

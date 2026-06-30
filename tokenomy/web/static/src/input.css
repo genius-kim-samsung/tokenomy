@@ -412,6 +412,13 @@
   .onboarding-steps li { @apply pl-1; }
   .onboarding-steps li::marker { color: var(--color-accent); font-weight: 600; }
   .onboarding-card form { @apply my-4; }
+
+  /* ── 창 우선 기동: 첫 수집 중 배너(ADR 0023) ── */
+  .ingest-banner {
+    @apply mb-4 rounded-lg px-4 py-2.5 text-sm font-medium bg-elev;
+    color: var(--color-accent);
+    border-left: 3px solid var(--color-accent);
+  }
 }
 
 /* ── 세션 표(.sess) 반응형: 11열(세션별 사용량 카드, ADR 0020) ──

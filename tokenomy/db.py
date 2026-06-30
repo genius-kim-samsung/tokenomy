@@ -183,6 +183,12 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
             Path(target).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(target)
     conn.row_factory = sqlite3.Row
+    # 동시성(ADR 0023) — busy_timeout을 먼저 깔아 이후 PRAGMA/DDL도 잠금 대기로 보호하고,
+    # 파일 DB는 WAL로 전환해 서빙 읽기가 백그라운드 수집 쓰기와 충돌하지 않게 한다.
+    # :memory:는 WAL 불가(journal_mode=memory가 정상)라 건드리지 않는다.
+    conn.execute("PRAGMA busy_timeout=5000")
+    if target != ":memory:":
+        conn.execute("PRAGMA journal_mode=WAL")
     _migrate(conn)
     conn.executescript(SCHEMA)
     return conn

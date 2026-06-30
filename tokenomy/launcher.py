@@ -16,7 +16,8 @@ import urllib.request
 import webbrowser
 
 from tokenomy import __version__
-from tokenomy.paths import mini_view_available
+from tokenomy.paths import data_dir, mini_view_available
+from tokenomy.single_instance import SingleInstanceLock
 
 WINDOW_TITLE = "Tokenomy"
 WINDOW_WIDTH = 1200
@@ -95,22 +96,60 @@ def _show_window() -> None:
     threading.Thread(target=_reingest_and_maybe_reload, daemon=True).start()
 
 
-def _reingest_and_maybe_reload() -> None:
-    """창 복원 시 1회 수집 — 화면 영향 변경이 있을 때만 페이지 리로드(불필요한 깜빡임 방지)."""
+def _background_ingest(clear_banner: bool = False) -> None:
+    """백그라운드 수집(창 우선 기동·창 복원 공용, ADR 0023).
+
+    수집 가드(`begin_ingest`)로 동시 수집을 막고, **finally에서 반드시 해제**한다.
+    완료 후: 변경이 있으면 페이지 리로드(데이터 반영 + 배너 제거), 변경이 없더라도
+    `clear_banner=True`(시작 지연수집)면 "수집 중" 배너만 제거한다 — 변경 없는 기동에서
+    불필요한 전체 리로드 깜빡임을 피우지 않으면서 배너가 영영 안 남게 한다."""
+    from tokenomy.web import control
+    if not control.begin_ingest():
+        return                                  # 이미 수집 중(다른 진입점) — 중복 방지
+    changed = 0
     try:
         from tokenomy.cli import cmd_ingest
         from tokenomy.db import connect
         changed = cmd_ingest(connect())
     except Exception as e:
-        print(f"[launcher] 복원 시 수집 건너뜀: {e}")
+        print(f"[launcher] 수집 건너뜀: {e}")
+    finally:
+        control.end_ingest()
+    window = _tray_state.get("window")
+    if window is None:
         return
-    if changed:
-        window = _tray_state["window"]
-        if window is not None:
-            try:
-                window.evaluate_js("window.location.reload()")
-            except Exception:
-                pass
+    try:
+        if changed:
+            window.evaluate_js("window.location.reload()")
+        elif clear_banner:
+            window.evaluate_js(
+                "var b=document.querySelector('.ingest-banner');if(b)b.remove();")
+    except Exception:
+        pass
+
+
+def _reingest_and_maybe_reload() -> None:
+    """창 복원 시 1회 수집 — 화면 영향 변경이 있을 때만 페이지 리로드(불필요한 깜빡임 방지)."""
+    _background_ingest(clear_banner=False)
+
+
+def _is_first_run() -> bool:
+    """첫 실행(수집 이력 없음) 판정 — messages가 비면 True. 배너 가시성 위해 첫 실행은 일반뷰 강제."""
+    try:
+        from tokenomy.db import connect
+        row = connect().execute("SELECT 1 FROM messages LIMIT 1").fetchone()
+        return row is None
+    except Exception:
+        return False
+
+
+def _init_db() -> None:
+    """서버·수집 스레드 기동 전 DB 1회 연결 — 스키마/마이그레이션을 선행해 첫-수집 레이스 제거(ADR 0023)."""
+    try:
+        from tokenomy.db import connect
+        connect()
+    except Exception as e:
+        print(f"[launcher] DB 초기화 건너뜀: {e}")
 
 
 def _on_open(icon=None, item=None) -> None:
@@ -496,7 +535,10 @@ def _launch_window(port: int) -> None:
         # 미니뷰 비가용 플랫폼(Linux, ADR 0013)에선 'main'으로 clamp — last_view='mini'(타 OS에서 동기화된
         # config 등)여도 큰 창으로 시작하고, 트레이 '열기'·GUI 시작 콜백이 미니로 새지 않게 한다.
         last_view = mini_view_settings(load_config())["last_view"]
-        _tray_state["current_view"] = last_view if mini_view_available() else "main"
+        view = last_view if mini_view_available() else "main"
+        if _is_first_run():        # 첫 실행(빈 DB)은 "수집 중" 배너 가시성 위해 일반뷰 강제(ADR 0023)
+            view = "main"
+        _tray_state["current_view"] = view
         if sys.platform == "win32":
             # Windows: 트레이는 자체 Win32 메시지 루프 → 데몬 스레드에서 독립 실행(기존).
             threading.Thread(target=icon.run, daemon=True).start()
@@ -520,10 +562,13 @@ def _launch_window(port: int) -> None:
 
 
 def _on_gui_start() -> None:
-    """GUI 루프 시작 직후 — 마지막 뷰가 미니면 미니로 전환(큰 창 숨김 + 미니 lazy 생성).
-    일반뷰면 아무것도 안 한다(큰 창이 이미 보임)."""
+    """GUI 루프 시작 직후 — 마지막 뷰가 미니면 미니로 전환(큰 창 숨김 + 미니 lazy 생성),
+    그리고 **첫 수집을 백그라운드로 기동**한다(창 우선 기동, ADR 0023). 창이 이미 떠 있으므로
+    무거운 첫 수집이 창 표시를 막지 않고, 도는 동안 대시보드엔 "수집 중" 배너가 보인다."""
     if _tray_state.get("current_view") == "mini":
         _to_mini()
+    threading.Thread(
+        target=lambda: _background_ingest(clear_banner=True), daemon=True).start()
 
 
 def _open_browser_when_ready(port: int) -> None:
@@ -533,6 +578,22 @@ def _open_browser_when_ready(port: int) -> None:
         print(f"[launcher] 서버가 {port}에서 응답하지 않아 브라우저를 열지 않습니다")
 
 
+def _signal_existing_window(retries: int = 12, interval: float = 0.25) -> None:
+    """락 점유(다른 인스턴스 활성) — runtime.json+ping으로 포트를 ~3초 내 찾아 /app/show.
+
+    1차 인스턴스가 락 획득~서버 준비 사이(수백 ms)라 즉시 응답 못 할 수 있어 짧게 재시도한다.
+    찾으면 기존 창을 복원시키고, 끝내 못 찾으면(1차가 hang 등) 로그만 남기고 조용히 종료한다 —
+    **2번째 창은 절대 띄우지 않는다**(락이 점유라 했으니)."""
+    for _ in range(max(1, retries)):
+        port = _existing_instance_port()
+        if port is not None:
+            _signal_show(port)
+            print(f"[Tokenomy] 이미 실행 중 — 기존 창을 띄웁니다 (포트 {port})")
+            return
+        time.sleep(interval)
+    print("[Tokenomy] 이미 실행 중이지만 기존 창을 찾지 못했습니다 — 잠시 후 다시 시도하세요")
+
+
 def main(argv: list[str] | None = None) -> None:
     _ensure_std_streams()
     argv = argv if argv is not None else sys.argv[1:]
@@ -540,33 +601,38 @@ def main(argv: list[str] | None = None) -> None:
         print(__version__)
         return
 
-    if _webview_available():
-        # 단일 인스턴스 — 이미 우리 앱이 떠 있으면 그 창을 복원시키고 본인은 종료.
-        existing = _existing_instance_port()
-        if existing is not None:
-            _signal_show(existing)
-            print(f"[Tokenomy] 이미 실행 중 — 기존 창을 띄웁니다 (포트 {existing})")
-            return
-        _safe_ingest()
-        port = find_free_port()
-        _write_runtime(port)
-        try:
+    # 단일 인스턴스 락(ADR 0023) — main 최상단, webview/브라우저 공통. 가계부(data_dir)당 하나.
+    # 프로세스 생애 동안 보유(사망 시 OS 자동 해제). runtime.json+ping은 "어느 창 띄울지" 라우팅만.
+    lock = SingleInstanceLock(data_dir())
+    if not lock.acquire():
+        _signal_existing_window()       # 이미 점유 — 기존 창 복원 신호 후 본인 종료
+        return
+    try:
+        if _webview_available():
+            # 창 우선 기동(ADR 0023): 서버·런타임·창을 수집보다 **먼저** 띄운다. 무거운 첫 수집은
+            # 창 표시 후 _on_gui_start가 백그라운드로 기동 — 창이 즉시 떠 재실행 유인을 끊는다.
+            _init_db()                  # 스레드 기동 전 스키마 워밍(첫-수집 레이스 제거)
+            port = find_free_port()
+            _write_runtime(port)
             threading.Thread(target=_serve, args=(port,), daemon=True).start()
             if not _wait_until_ready(port):
                 print(f"[Tokenomy] 서버가 {port}에서 응답하지 않습니다")
                 return
-            _launch_window(port)
-        finally:
-            _clear_runtime()
-    else:
-        # WebView 미가용(구형 환경) — 기존 방식: 브라우저 + uvicorn 메인 블로킹(단발)
-        _safe_ingest()
-        port = find_free_port()
-        threading.Thread(
-            target=_open_browser_when_ready, args=(port,), daemon=True
-        ).start()
-        print(f"[Tokenomy] http://127.0.0.1:{port}/  (이 창을 닫으면 종료됩니다)")
-        _serve(port)
+            _launch_window(port)        # 블로킹. 시작 직후 콜백이 백그라운드 첫 수집을 기동.
+        else:
+            # WebView 미가용(구형 환경) — 브라우저 + uvicorn 메인 블로킹. 네이티브 창이 없어
+            # 창 우선이 무의미하므로 기존대로 동기 수집 후 서빙(단일 인스턴스는 락이 보장).
+            _safe_ingest()
+            port = find_free_port()
+            _write_runtime(port)
+            threading.Thread(
+                target=_open_browser_when_ready, args=(port,), daemon=True
+            ).start()
+            print(f"[Tokenomy] http://127.0.0.1:{port}/  (이 창을 닫으면 종료됩니다)")
+            _serve(port)
+    finally:
+        _clear_runtime()
+        lock.release()
 
 
 if __name__ == "__main__":

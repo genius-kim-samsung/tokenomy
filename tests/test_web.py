@@ -1870,6 +1870,74 @@ def test_app_show_invokes_request_show():
     control.set_show_callback(None)
 
 
+# ── 창 우선 기동(ADR 0023): 수집 중 배너 ──────────────────────────────────────────
+def test_dashboard_shows_ingest_banner_while_ingesting(tmp_path, monkeypatch):
+    """첫 수집이 백그라운드로 도는 동안 대시보드에 '수집 중' 배너가 뜨고, 끝나면 사라진다."""
+    from tokenomy.web import control
+    client, _ = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(control, "is_ingesting", lambda: True)
+    assert "사용 로그를 읽는 중" in client.get("/").text
+    monkeypatch.setattr(control, "is_ingesting", lambda: False)
+    assert "사용 로그를 읽는 중" not in client.get("/").text
+
+
+# ── 수집 가드 + 공식 갱신 지연(ADR 0023) — 모든 writer 진입점 ─────────────────────
+def test_do_ingest_skips_when_already_ingesting(tmp_path, monkeypatch):
+    """수동 /ingest는 진행 중인 수집이 있으면 cmd_ingest를 중복 실행하지 않는다(동시 writer 방지)."""
+    from tokenomy.web import control
+    client, _ = _client(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(app_module, "cmd_ingest", lambda conn: calls.append(1))
+    control.begin_ingest()                       # 다른 수집이 진행 중이라고 표시
+    try:
+        client.post("/ingest", follow_redirects=False)
+        assert calls == []                       # 중복 수집 안 함
+    finally:
+        control.end_ingest()
+
+
+def test_do_ingest_runs_and_releases_when_free(tmp_path, monkeypatch):
+    """수집 미진행이면 /ingest는 cmd_ingest를 돌리고 finally에서 상태를 해제한다."""
+    from tokenomy.web import control
+    control.end_ingest()                         # 정규화
+    client, _ = _client(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(app_module, "cmd_ingest", lambda conn: calls.append(1))
+    client.post("/ingest", follow_redirects=False)
+    assert calls == [1]                          # 수집 실행
+    assert control.is_ingesting() is False       # 해제됨(배너 안 굳음)
+
+
+def test_official_section_skips_refresh_while_ingesting(tmp_path, monkeypatch):
+    """첫 수집 중 자동 공식 갱신(/official/section)은 writer/writer라 skip — 마지막 스냅샷만 렌더."""
+    from tokenomy.web import control
+    client, _ = _client(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(app_module, "refresh_tracked", lambda *a, **k: calls.append(1))
+    control.begin_ingest()
+    try:
+        client.get("/official/section")
+        assert calls == []                       # 수집 중 — 자동 갱신 skip
+    finally:
+        control.end_ingest()
+    client.get("/official/section")
+    assert calls == [1]                          # 수집 끝나면 자동 갱신 재개
+
+
+def test_mini_section_skips_refresh_while_ingesting(tmp_path, monkeypatch):
+    """미니 자동 폴링도 같은 지연 — 첫 수집 중 공식 갱신 skip."""
+    from tokenomy.web import control
+    client, _ = _client(tmp_path, monkeypatch)
+    calls = []
+    monkeypatch.setattr(app_module, "refresh_tracked", lambda *a, **k: calls.append(1))
+    control.begin_ingest()
+    try:
+        client.get("/mini/section")
+        assert calls == []
+    finally:
+        control.end_ingest()
+
+
 # ── 미니 뷰(ADR 0008): /mini 셸 + /mini/section 자동 폴링 ─────────────────────────
 
 def _seed_monthly(conn, provider, used, limit, util):

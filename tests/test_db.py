@@ -29,6 +29,27 @@ def _rec(msg_id, **kw):
     )
 
 
+def test_connect_file_db_uses_wal(tmp_path):
+    """파일 DB는 WAL 저널 모드 — 서빙 읽기가 백그라운드 수집 쓰기와 충돌해 잠기지 않게(ADR 0023)."""
+    conn = connect(tmp_path / "t.db")
+    mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"
+
+
+def test_connect_memory_db_skips_wal():
+    """:memory:는 WAL을 못 쓴다 — journal_mode=memory가 정상(Codex 리뷰: WAL 대상서 제외)."""
+    conn = connect(":memory:")
+    mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() != "wal"
+
+
+def test_connect_sets_busy_timeout():
+    """busy_timeout>0 — writer/writer·checkpoint·schema lock 대기(WAL서도 필요)."""
+    conn = connect(":memory:")
+    timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert timeout > 0
+
+
 def test_roundtrip_and_cost():
     conn = connect(":memory:")
     ingest_records(conn, [_rec("m1")], PRICING)

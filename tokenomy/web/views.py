@@ -24,6 +24,7 @@ from tokenomy.db import (
 )
 from tokenomy.freshness import LAST_INGEST_KEY
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
+from tokenomy.web import control
 
 # 통합 추세 스택 영역 — provider별 (라벨, 선 색, 채움 색[반투명]).
 # 스택 순서 = 등록 순서(아래→위). 신규 provider는 여기 한 줄만 추가하면 밴드가 자동 생성된다.
@@ -851,6 +852,8 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "user_label": user_label(config),
         # 완전 신규(미설정 + 빈 시드) → 빈 껍데기 대신 시작 안내 카드로 대체(A 모집단).
         "onboarding": onboarding_pending(config),
+        # 첫 수집이 백그라운드로 도는 중이면 "수집 중" 배너를 건다(창 우선 기동, ADR 0023).
+        "ingesting": control.is_ingesting(),
         "tracked": active,
         "combined": combined, "solo_label": solo_label, "active_empty": not active,
         "month": now.strftime("%Y-%m"),

@@ -2,6 +2,11 @@
 {% block body %}
 <h1 class="page-title">대시보드 <span class="muted">· {{ month }} (KST){% if user_label %} · {{ user_label }}{% endif %}</span></h1>
 
+{% if ingesting %}
+{# 창 우선 기동(ADR 0023) — 첫 수집이 백그라운드로 도는 동안 표시. 완료 시 런처가 리로드해 사라진다. #}
+<div class="ingest-banner" role="status" aria-live="polite">⏳ 사용 로그를 읽는 중…</div>
+{% endif %}
+
 {% if onboarding %}
 {# 완전 신규(크레덴셜·config 없음) — 빈 껍데기 대신 시작 안내(A 모집단). official-section 폴링도 숨김. #}
 <section class="card onboarding-card">
