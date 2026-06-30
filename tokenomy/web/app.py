@@ -402,7 +402,7 @@ async def settings_post(request: Request):
     if arm not in ("auto", "always", "off"):
         arm = "auto"
     # background_poll: 체크박스(미체크면 폼에 키 부재 → False). 상주 백그라운드 폴 토글(ADR 0007).
-    # auto_refresh_token: Claude OAuth 토큰 자동 갱신 모드(ADR 0021). auto/always/off.
+    # auto_refresh_token: Claude(ADR 0021)·Codex(ADR 0022) OAuth 토큰 공용 자동 갱신 모드. auto/always/off.
     config["official_fetch"] = {"min_interval_minutes": mi if mi > 0 else 10,
                                 "background_poll": bool(form.get("background_poll")),
                                 "auto_refresh_token": arm,

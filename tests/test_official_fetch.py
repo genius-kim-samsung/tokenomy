@@ -759,3 +759,161 @@ def test_reactive_refresh_on_401_then_retry(tmp_path, monkeypatch):
     r = fetch_provider("claude", now_kst=_NOW2, config=cfg, conn=connect(":memory:"), urlopen=_op)
     assert calls["n"] == 2                                 # 401 후 정확히 1회 재시도
     assert r.status in ("ok", "http_error")               # 재시도가 일어났음을 호출 횟수로 확인
+
+
+# ---------------------------------------------------------------------------
+# Codex 토큰 능동 갱신 (ADR 0022) — _jwt_exp_ms / refresh_codex_token /
+# ensure_fresh_codex_token / fetch_provider codex 401 반응형
+# ---------------------------------------------------------------------------
+
+import base64
+
+
+def _b64url(obj) -> str:
+    return base64.urlsafe_b64encode(json.dumps(obj).encode("utf-8")).rstrip(b"=").decode("ascii")
+
+
+def _codex_jwt(exp_sec: int) -> str:
+    """exp 클레임만 든 가짜 access_token JWT(서명 검증 안 하므로 sig는 더미)."""
+    return f"{_b64url({'alg': 'RS256'})}.{_b64url({'exp': exp_sec})}.sig"
+
+
+def test_jwt_exp_ms_decodes_exp_to_ms():
+    from tokenomy.official_fetch import _jwt_exp_ms
+    assert _jwt_exp_ms(_codex_jwt(1782920685)) == 1782920685 * 1000
+
+
+def test_jwt_exp_ms_bad_token_returns_none():
+    from tokenomy.official_fetch import _jwt_exp_ms
+    assert _jwt_exp_ms("not-a-jwt") is None
+    assert _jwt_exp_ms("") is None
+    assert _jwt_exp_ms("a.b.c") is None                     # payload가 base64 JSON 아님
+
+
+def _codex_auth(tmp_path, *, refresh="old-ref", auth_mode="chatgpt", access="old-acc"):
+    p = tmp_path / "auth.json"
+    p.write_text(json.dumps({
+        "auth_mode": auth_mode, "OPENAI_API_KEY": None,
+        "tokens": {"id_token": "old-id", "access_token": access,
+                   "refresh_token": refresh, "account_id": "acc-keep"},
+        "last_refresh": "2026-06-21T00:00:00.000000000Z"}), encoding="utf-8")
+    return p
+
+
+def test_refresh_codex_success_writes_back_rotation_preserves_account(tmp_path):
+    from tokenomy.official_fetch import refresh_codex_token
+    p = _codex_auth(tmp_path)
+    body = json.dumps({"access_token": "new-acc", "refresh_token": "new-ref",
+                       "id_token": "new-id", "expires_in": 864000})
+    new = refresh_codex_token(p, now_ms=1_000_000_000, urlopen=lambda req, timeout: _Resp(body))
+    assert new == "new-acc"
+    d = json.loads(p.read_text(encoding="utf-8"))
+    assert d["tokens"]["access_token"] == "new-acc"
+    assert d["tokens"]["refresh_token"] == "new-ref"        # rotation 기록(필수)
+    assert d["tokens"]["id_token"] == "new-id"
+    assert d["tokens"]["account_id"] == "acc-keep"          # 보존(재유도 안 함)
+    assert d["last_refresh"] != "2026-06-21T00:00:00.000000000Z"   # 갱신됨
+    assert d["auth_mode"] == "chatgpt"                      # 기존 키 보존
+
+
+def test_refresh_codex_http_error_leaves_file_untouched(tmp_path):
+    from tokenomy.official_fetch import refresh_codex_token
+    p = _codex_auth(tmp_path)
+    before = p.read_text(encoding="utf-8")
+    def _boom(req, timeout):
+        raise urllib.error.HTTPError("u", 400, "bad", {}, None)
+    assert refresh_codex_token(p, now_ms=1, urlopen=_boom) is None
+    assert p.read_text(encoding="utf-8") == before          # 무손상
+
+
+def test_refresh_codex_bad_schema_leaves_file_untouched(tmp_path):
+    from tokenomy.official_fetch import refresh_codex_token
+    p = _codex_auth(tmp_path)
+    before = p.read_text(encoding="utf-8")
+    body = json.dumps({"no": "access_token"})               # access_token 없음
+    assert refresh_codex_token(p, now_ms=1, urlopen=lambda req, timeout: _Resp(body)) is None
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_refresh_codex_apikey_mode_is_noop(tmp_path):
+    """auth_mode가 chatgpt가 아니면(API-key 로그인) 갱신할 OAuth 토큰이 없어 네트워크도 안 친다."""
+    from tokenomy.official_fetch import refresh_codex_token
+    p = _codex_auth(tmp_path, auth_mode="apikey")
+    before = p.read_text(encoding="utf-8")
+    assert refresh_codex_token(p, now_ms=1, urlopen=_never) is None
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_refresh_codex_missing_refresh_token_is_noop(tmp_path):
+    from tokenomy.official_fetch import refresh_codex_token
+    p = tmp_path / "auth.json"
+    p.write_text(json.dumps({"auth_mode": "chatgpt",
+                             "tokens": {"access_token": "a", "account_id": "x"}}),
+                 encoding="utf-8")
+    assert refresh_codex_token(p, now_ms=1, urlopen=_never) is None
+
+
+def test_auto_refresh_allowed_codex_gates_on_codex_activity():
+    """안전망은 provider별 활동으로 판정 — codex 갱신은 *codex* 활동에만 묶인다(ADR 0022 공유설정).
+
+    최근 claude 활동이 있어도 codex 활동이 없으면 codex 갱신은 허용되어야 한다(혼합 기기).
+    """
+    cfg = {"official_fetch": {"auto_refresh_token": "auto", "auto_refresh_safety_hours": 24}}
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+                 ("kc", "claude", "2026-06-26T11:00:00+00:00"))   # _NOW_T4 1h 전(최근)
+    conn.commit()
+    assert _auto_refresh_allowed(cfg, conn, _NOW_T4, "auto", "codex") is True   # codex 활동 없음 → 허용
+    conn.execute("INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+                 ("kx", "codex", "2026-06-26T11:00:00+00:00"))
+    conn.commit()
+    assert _auto_refresh_allowed(cfg, conn, _NOW_T4, "auto", "codex") is False  # codex 최근 활동 → skip
+
+
+def test_ensure_codex_refreshes_when_jwt_expiring(tmp_path):
+    from tokenomy.official_fetch import ensure_fresh_codex_token
+    near = int(_NOW_T4.timestamp()) + 60                    # 1분 뒤 만료(초) → JWT exp
+    p = _codex_auth(tmp_path, access=_codex_jwt(near))
+    fresh = _codex_jwt(near + 864000)
+    body = json.dumps({"access_token": fresh, "refresh_token": "r2",
+                       "id_token": "id2", "expires_in": 864000})
+    cfg = {"official_fetch": {"auto_refresh_token": "always"}}
+    tok, acct = ensure_fresh_codex_token(cfg, connect(":memory:"), now=_NOW_T4, path=p,
+                                         urlopen=lambda req, timeout: _Resp(body))
+    assert tok == fresh                                     # 갱신된 access_token 반환
+    assert acct == "acc-keep"                              # account_id 동반 반환·보존
+
+
+def test_ensure_codex_skips_when_not_expiring(tmp_path):
+    from tokenomy.official_fetch import ensure_fresh_codex_token
+    far = int(_NOW_T4.timestamp()) + 864000                 # 10일 뒤(여유)
+    p = _codex_auth(tmp_path, access=_codex_jwt(far))
+    cfg = {"official_fetch": {"auto_refresh_token": "always"}}
+    tok, acct = ensure_fresh_codex_token(cfg, connect(":memory:"), now=_NOW_T4, path=p, urlopen=_never)
+    assert tok == _codex_jwt(far)                           # 기존 토큰 그대로(네트워크 미호출)
+    assert acct == "acc-keep"
+
+
+def test_reactive_refresh_codex_on_401_then_retry(tmp_path, monkeypatch):
+    """fetch_provider("codex")가 401을 만나면 refresh_codex_token으로 갱신 후 1회 재시도(ADR 0022)."""
+    import tokenomy.official_fetch as of
+    from tokenomy import paths
+    far = int(_NOW2.timestamp()) + 864000                   # 선제는 건너뛰게(JWT exp 여유)
+    p = tmp_path / "auth.json"
+    p.write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {
+        "access_token": _codex_jwt(far), "refresh_token": "r",
+        "id_token": "i", "account_id": "acc"}}), encoding="utf-8")
+    monkeypatch.setattr(of, "CODEX_AUTH", p)
+    monkeypatch.setattr(paths, "CODEX_AUTH", p)             # creds_present 게이트용
+    monkeypatch.setattr(of, "refresh_codex_token", lambda path, *, now_ms, urlopen: "a2")
+    calls = {"n": 0}
+    def _op(req, timeout):
+        calls["n"] += 1                                     # usage GET만 여기 온다(refresh는 스텁)
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError("u", 401, "unauth", {}, None)
+        return _Resp(json.dumps({}))                        # 200(빈 버킷이라도 ok 경로)
+    cfg = {"tracked_providers": ["codex"], "credit_to_usd": 0.04,
+           "official_fetch": {"auto_refresh_token": "always"}}
+    r = fetch_provider("codex", now_kst=_NOW2, config=cfg, conn=connect(":memory:"), urlopen=_op)
+    assert calls["n"] == 2                                  # 401 후 정확히 1회 재시도
+    assert r.status in ("ok", "http_error")

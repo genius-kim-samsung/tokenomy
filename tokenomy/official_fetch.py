@@ -1,20 +1,22 @@
 """공식 사용량 라이브 취득 — 유일한 아웃바운드 네트워크 모듈(옵트인·비차단).
 
-각 CLI가 로컬에 보관한 OAuth 토큰을 사용해 공식 사용량 API를 단발 호출한다(공식 사용량 조회는
-읽기 전용). 단, ADR 0021로 Claude access token은 만료 임박 시 조건부 능동 refresh +
-.credentials.json write-back을 수행한다(refresh_claude_token) — Codex는 여전히 읽기 전용.
+각 CLI가 로컬에 보관한 OAuth 토큰을 사용해 공식 사용량 API를 단발 호출한다(사용량 조회 GET 자체는
+읽기 전용). 단, **Claude(ADR 0021)·Codex(ADR 0022) 두 access token 모두** 만료 임박 시 조건부
+능동 refresh + 토큰 파일 atomic write-back을 수행한다(refresh_claude_token / refresh_codex_token).
 실패는 예외를 삼켜 fetch_state에 기록하고 마지막 스냅샷을 유지한다.
 PII(access_token/account_id/email/user_id)는 절대 DB에 저장하지 않는다 — 헤더에 쓰고 버린다.
 사용량 수치만 official_buckets에 적재(파서가 PII 미추출).
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from tokenomy import paths
@@ -40,9 +42,11 @@ _CODEX_UA = "codex_cli_rs"
 _CLAUDE_BETA = "oauth-2025-04-20"
 _TIMEOUT = 3  # 초(최대 3s, 백오프 없음)
 
-# OAuth refresh(능동 갱신, ADR 0021) — Claude만. console.*는 Cloudflare 403이라 api.* 사용.
+# OAuth refresh(능동 갱신) — Claude(ADR 0021)·Codex(ADR 0022). console.*는 Cloudflare 403이라 api.* 사용.
 _CLAUDE_REFRESH_URL = "https://api.anthropic.com/v1/oauth/token"
 _CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+_CODEX_REFRESH_URL = "https://auth.openai.com/oauth/token"
+_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 _REFRESH_TIMEOUT = 10  # 초(백오프 없음)
 _PREEMPT_MS = 5 * 60 * 1000  # 만료 5분 전이면 선제 갱신
 
@@ -98,6 +102,50 @@ def _read_codex_auth(path: Path = CODEX_AUTH) -> tuple[str, str]:
     return tok, acct
 
 
+def _jwt_exp_ms(token: str) -> int | None:
+    """JWT의 `exp` 클레임(초)을 ms로 반환(ADR 0022). 서명 검증은 안 한다 — 발급자가 아니라
+    "곧 만료?"만 판정하므로 페이로드(가운데 세그먼트)만 base64url 디코드한다.
+
+    Codex `auth.json`엔 Claude의 평문 `expiresAt` 같은 만료 필드가 없어 access_token JWT에서
+    읽는다. 토큰이 JWT가 아니거나 exp가 없으면 None(상위가 선제 갱신을 건너뛰고 401 반응형에 맡김).
+    """
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)               # base64 패딩 복원
+        exp = json.loads(base64.urlsafe_b64decode(payload))["exp"]
+        return int(exp) * 1000
+    except (IndexError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _atomic_write_json(path: Path, data) -> bool:
+    """data(dict)를 path에 원자적·0600으로 기록(ADR 0021/0022 토큰 write-back 공용).
+
+    토큰이 담긴 파일이라 평문 권한 노출을 막으려 0600으로 생성한다(POSIX 권한; Windows는 상위
+    디렉터리 ACL 상속). 같은 디렉터리 temp→`os.replace`로 부분 기록을 차단한다. 성공 True,
+    실패(OSError) 시 임시파일을 정리하고 False를 반환하며 **원본은 건드리지 않는다**(무손상 폴백).
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def _iso_z(now_ms: int) -> str:
+    """ms epoch → RFC3339 UTC(Z) 문자열. Codex `auth.json`의 `last_refresh` 형식에 맞춘다."""
+    return datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.000000000Z")
+
+
 def refresh_claude_token(path: Path = CLAUDE_CREDS, *, now_ms: int,
                          urlopen=urllib.request.urlopen) -> str | None:
     """refresh token으로 새 access token을 받아 .credentials.json에 atomic write-back(ADR 0021).
@@ -144,33 +192,78 @@ def refresh_claude_token(path: Path = CLAUDE_CREDS, *, now_ms: int,
     if exp_in:
         o["expiresAt"] = int(now_ms) + int(exp_in) * 1000
 
-    tmp = path.with_name(path.name + ".tmp")          # 같은 디렉터리 temp → atomic replace
-    try:
-        # 토큰이 담긴 파일 — 0600으로 생성해 평문 토큰의 권한 노출 방지(spec 5.3, ADR 0021).
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-    except OSError:
-        try:
-            tmp.unlink(missing_ok=True)               # 토큰이 담긴 임시파일 정리
-        except OSError:
-            pass
+    if not _atomic_write_json(path, data):
         return None
     return at
 
 
-def _auto_refresh_allowed(config, conn, now, mode: str) -> bool:
-    """자동 갱신 안전망(ADR 0021). off=불허, always=허용, auto=최근 claude 활동 없을 때만 허용.
+def refresh_codex_token(path: Path = CODEX_AUTH, *, now_ms: int,
+                        urlopen=urllib.request.urlopen) -> str | None:
+    """Codex refresh token으로 새 access token을 받아 auth.json에 atomic write-back(ADR 0022).
 
-    auto는 이 기기의 마지막 claude 메시지 ts가 safety_hours 이내면 'CLI 쓰는 기기'로 보고 skip한다
-    (실행 중 CLI의 메모리 토큰과 충돌 회피). 활동 없음/파싱 불가는 허용(=CLI 안 쓰는 기기로 간주).
+    성공 시 새 access_token을 반환하고, 실패(파일/네트워크/스키마)나 비-OAuth 모드는 None을 반환하며
+    **원본 파일을 절대 건드리지 않는다**(무손상 폴백). rotation으로 매번 새 refresh_token이 오므로
+    반드시 기록한다(누락 시 다음 갱신이 죽은 토큰으로 실패). account_id는 같은 로그인에서 불변이라
+    보존(재유도 안 함). API-key 모드(`auth_mode != chatgpt`)나 refresh_token 부재면 갱신할 OAuth
+    토큰이 없어 None. 토큰은 파일에만 쓰고 DB에는 저장하지 않는다.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("auth_mode") not in (None, "chatgpt"):
+            return None                                    # API-key 모드 등 — 갱신 대상 아님
+        toks = data["tokens"]
+        rt = toks["refresh_token"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not rt:
+        return None
+
+    body = json.dumps({"client_id": _CODEX_CLIENT_ID, "grant_type": "refresh_token",
+                       "refresh_token": rt, "scope": "openid profile email"}).encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json",
+               "User-Agent": _CODEX_UA}
+    req = urllib.request.Request(_CODEX_REFRESH_URL, data=body, headers=headers, method="POST")
+    try:
+        with urlopen(req, timeout=_REFRESH_TIMEOUT) as resp:
+            text = resp.read().decode("utf-8")
+    except Exception:
+        return None  # 비200/네트워크/타임아웃 — 원본 불변
+
+    try:
+        r = json.loads(text)
+        at = r["access_token"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not at:
+        return None
+
+    # access/refresh/id 토큰만 갱신, account_id·기타 키 보존. last_refresh는 codex 형식으로 갱신.
+    toks["access_token"] = at
+    nrt = r.get("refresh_token")
+    if nrt:
+        toks["refresh_token"] = nrt
+    nid = r.get("id_token")
+    if nid:
+        toks["id_token"] = nid
+    data["last_refresh"] = _iso_z(int(now_ms))
+
+    if not _atomic_write_json(path, data):
+        return None
+    return at
+
+
+def _auto_refresh_allowed(config, conn, now, mode: str, provider: str = "claude") -> bool:
+    """자동 갱신 안전망(ADR 0021/0022). off=불허, always=허용, auto=최근 *해당 provider* 활동 없을 때만 허용.
+
+    auto는 이 기기의 마지막 provider 메시지 ts가 safety_hours 이내면 '그 CLI를 쓰는 기기'로 보고
+    skip한다(실행 중 CLI의 메모리 토큰과 충돌 회피). 활동 없음/파싱 불가는 허용(=CLI 안 쓰는 기기로
+    간주). provider별 활동 판정이라 claude·codex가 한 기기에서 섞여도 각각 옳게 게이팅된다(ADR 0022).
     """
     if mode == "off":
         return False
     if mode == "always":
         return True
-    last = last_provider_activity_ts(conn, "claude")
+    last = last_provider_activity_ts(conn, provider)
     if last is None:
         return True
     dt = parse_ts(last)
@@ -203,6 +296,32 @@ def ensure_fresh_claude_token(config, conn, *, now, path: Path = CLAUDE_CREDS,
                 if exp2 is not None and exp2 - int(now.timestamp() * 1000) < _PREEMPT_MS:
                     refresh_claude_token(path, now_ms=int(now.timestamp() * 1000), urlopen=urlopen)
     return _read_claude_token(path)
+
+
+def ensure_fresh_codex_token(config, conn, *, now, path: Path = CODEX_AUTH,
+                             urlopen=urllib.request.urlopen) -> tuple[str, str]:
+    """필요 시 Codex access token을 선제 갱신하고 (access_token, account_id)를 반환(ADR 0022).
+
+    Codex엔 평문 만료 필드가 없어 access_token JWT의 exp로 판정한다(`_jwt_exp_ms`). 만료 5분 이내
+    + 안전망 허용이면 락 안에서 double-check 후 refresh한다. 어떤 경우든 마지막엔 파일의 현재
+    (혹은 갱신된) 토큰·account_id를 읽어 돌려준다(갱신 실패해도 기존 토큰으로 진행 → 상위가 401 폴백).
+    """
+    mode = official_fetch_settings(config)["auto_refresh_token"]
+    if mode != "off":
+        now_ms = int(now.timestamp() * 1000)
+        try:
+            exp = _jwt_exp_ms(json.loads(path.read_text(encoding="utf-8"))["tokens"]["access_token"])
+        except (OSError, ValueError, KeyError, TypeError):
+            exp = None
+        if exp is not None and exp - now_ms < _PREEMPT_MS and _auto_refresh_allowed(config, conn, now, mode, "codex"):
+            with _token_lock:
+                try:                                  # double-check — 다른 스레드가 그새 갱신했으면 skip
+                    exp2 = _jwt_exp_ms(json.loads(path.read_text(encoding="utf-8"))["tokens"]["access_token"])
+                except (OSError, ValueError, KeyError, TypeError):
+                    exp2 = None
+                if exp2 is not None and exp2 - int(now.timestamp() * 1000) < _PREEMPT_MS:
+                    refresh_codex_token(path, now_ms=int(now.timestamp() * 1000), urlopen=urlopen)
+    return _read_codex_auth(path)
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +444,8 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
                        "anthropic-beta": _CLAUDE_BETA, "User-Agent": _CLAUDE_UA}
             raw_text, http_code = _http_get_text(CLAUDE_USAGE_URL, headers, urlopen)
         else:
-            tok, acct = _read_codex_auth(CODEX_AUTH)   # 모듈 상수를 명시 전달(패치 가능)
+            tok, acct = ensure_fresh_codex_token(config, conn, now=now_kst,
+                                                 path=CODEX_AUTH, urlopen=urlopen)
             headers = {"Authorization": f"Bearer {tok}",
                        "ChatGPT-Account-Id": acct, "User-Agent": _CODEX_UA}
             raw_text, http_code = _http_get_text(CODEX_USAGE_URL, headers, urlopen)
@@ -340,13 +460,15 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
         _capture_raw(conn, provider, ts, "http_error", e.code, _read_err_body(e))
         if e.code == 401:
             settings = official_fetch_settings(config)
-            if (provider == "claude" and not _retried
-                    and settings["auto_refresh_token"] != "off"
-                    and _auto_refresh_allowed(config, conn, now_kst, settings["auto_refresh_token"])):
-                with _token_lock:
-                    new = refresh_claude_token(CLAUDE_CREDS,
-                                               now_ms=int(now_kst.timestamp() * 1000),
-                                               urlopen=urlopen)
+            if (not _retried and settings["auto_refresh_token"] != "off"
+                    and _auto_refresh_allowed(config, conn, now_kst,
+                                              settings["auto_refresh_token"], provider)):
+                now_ms = int(now_kst.timestamp() * 1000)
+                with _token_lock:                         # provider별 refresh로 디스패치(ADR 0021/0022)
+                    if provider == "claude":
+                        new = refresh_claude_token(CLAUDE_CREDS, now_ms=now_ms, urlopen=urlopen)
+                    else:
+                        new = refresh_codex_token(CODEX_AUTH, now_ms=now_ms, urlopen=urlopen)
                 if new:                                   # 갱신 성공 → 딱 1회 재시도
                     return fetch_provider(provider, now_kst=now_kst, config=config,
                                           conn=conn, urlopen=urlopen, manual=manual,
