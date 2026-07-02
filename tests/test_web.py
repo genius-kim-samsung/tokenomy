@@ -1,12 +1,29 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from tokenomy.aggregate import KST
 from tokenomy.db import connect, insert_official_buckets, insert_official_raw
 from tokenomy.web import app as app_module
+from tokenomy.web import views as views_module
 
 _FIX = Path(__file__).parent / "fixtures" / "official"
+
+# 라우트 경유 테스트의 고정 시계. 시드·골든 fixture가 전부 2026-06이라 실제 시계로는
+# 2026-07부터 월 스코프 밖으로 밀리고 resets_at(2026-07-01) 만료 필터에 걸린다.
+# view 직접 호출은 now_kst 주입으로 이미 고정 — 라우트(TestClient) 경로만 실제 시계를
+# 타던 것을 같은 6월 시점으로 고정한다(공식 fixture fetched_at 이후 · 리셋 이전).
+_FROZEN_NOW = datetime(2026, 6, 20, 12, 0, tzinfo=KST)
+
+
+class _FrozenDatetime(datetime):
+    """now만 고정 시점을 돌려주는 대역 — strptime 등 나머지 클래스 메서드는 상속."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return _FROZEN_NOW.astimezone(tz) if tz else _FROZEN_NOW.replace(tzinfo=None)
 
 
 def _seed_official(conn, provider, fixture, parse):
@@ -32,6 +49,9 @@ def _client(tmp_path, monkeypatch):
         return connect(str(db))
 
     monkeypatch.setattr(app_module, "connect", fake_connect)
+    # 라우트는 now_kst를 안 넘기고 모듈의 datetime.now(KST)로 시계를 읽는다 → 고정 대역으로 교체.
+    monkeypatch.setattr(app_module, "datetime", _FrozenDatetime)
+    monkeypatch.setattr(views_module, "datetime", _FrozenDatetime)
     return TestClient(app_module.app), fake_connect
 
 

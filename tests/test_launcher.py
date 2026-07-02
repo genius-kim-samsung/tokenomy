@@ -32,18 +32,21 @@ def test_find_free_port_returns_bindable():
 
 
 def test_find_free_port_skips_occupied():
+    # 8765 고정 bind는 실행 중인 Tokenomy 앱과 충돌한다 — OS가 주는 임시 포트를 기준점으로 쓴다.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occ:
-        occ.bind(("127.0.0.1", 8765))
-        port = launcher.find_free_port(8765)
-        assert port != 8765
-        assert 8765 < port < 8785
+        occ.bind(("127.0.0.1", 0))
+        base = occ.getsockname()[1]
+        port = launcher.find_free_port(base)
+        assert port != base
+        assert base < port < base + 20
 
 
 def test_find_free_port_raises_when_exhausted():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 8765))
+        s.bind(("127.0.0.1", 0))
+        base = s.getsockname()[1]
         with pytest.raises(RuntimeError, match="빈 포트"):
-            launcher.find_free_port(8765, tries=1)
+            launcher.find_free_port(base, tries=1)
 
 
 def test_api_open_external_opens_http(monkeypatch):
