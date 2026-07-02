@@ -1254,10 +1254,12 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
         cum_segments, end_cum = _cum_segments_and_endcum(
             reset_segments, bins,
             lambda dt: (dt.astimezone(KST).hour if s <= dt.astimezone(KST) < nxt else None))
+        # 표에서 미래 시간대 제외(빈 시작 시각 > now) — 과거 날짜는 24행 전부, 오늘은
+        # 현재(부분 관측) 시간대까지. 차트 축은 24칸 유지(월/주 뷰와 같은 규칙).
         table = [{**r, "hlabel": f'{r["hour"]:02d}시',
                   "end_cumulative_usd": end_cum.get(r["hour"]),
                   "remaining_usd": _remaining(end_cum.get(r["hour"])), "detail": None}
-                 for r in hourly]
+                 for r in hourly if s + timedelta(hours=r["hour"]) <= now]
         bar_series = _bar_series(hourly)
         empty_day = all(not r["covered"] for r in hourly)
     else:
@@ -1270,10 +1272,14 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
         for dets in detail_by_day.values():       # provider 라벨 주입(템플릿 단순화)
             for pd in dets:
                 pd["label"] = prov_label.get(pd["provider"], pd["provider"])
+        # 표에서 미래 날짜 제외 — 미래는 "수집 공백"이 아니라 미관측 대상(행 없음).
+        # 차트 축은 기간 전체 유지(축은 라벨이지 관측 주장이 아님 — CONTEXT.md).
+        today = now.astimezone(KST).date()
         table = [{**r, "ymd": r["date"].strftime("%Y-%m-%d"), "md": r["date"].strftime("%m-%d"),
                   "end_cumulative_usd": end_cum.get(r["date"]),
                   "remaining_usd": _remaining(end_cum.get(r["date"])),
-                  "detail": detail_by_day.get(r["date"])} for r in daily]
+                  "detail": detail_by_day.get(r["date"])} for r in daily
+                 if r["date"] <= today]
         bar_series = _bar_series(daily)
         empty_day = False
 

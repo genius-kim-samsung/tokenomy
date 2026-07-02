@@ -1312,6 +1312,69 @@ def test_official_history_context_hourly_shape_and_gap(tmp_path, monkeypatch):
     assert ctx["pool_limit"] == 243.0                   # 표 잔여용으로는 유지
 
 
+def _oh_ctx_conn(tmp_path, monkeypatch):
+    """context 레벨(사용 이력 공식) 테스트용 격리 conn — tracked=claude, 네트워크 skip."""
+    cfg = tmp_path / "c.json"
+    cfg.write_text('{"tracked_providers": ["claude"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    monkeypatch.setenv("TOKENOMY_SKIP_OFFICIAL_FETCH", "1")
+    monkeypatch.setenv("TOKENOMY_SKIP_UPDATE_CHECK", "1")
+    return connect(":memory:")
+
+
+def test_official_history_month_table_hides_future_days(tmp_path, monkeypatch):
+    """월 뷰 표는 오늘(KST)까지만 — 미래 날짜는 수집 공백이 아니라 미관측 대상(행 없음).
+
+    차트 x축은 월 전체를 유지한다(축은 라벨이지 관측 주장이 아님 — CONTEXT.md).
+    """
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import official_history_context
+    conn = _oh_ctx_conn(tmp_path, monkeypatch)
+    _seed_oh_snap(conn, "claude", "2026-06-10T09:00:00+09:00", 100.0)
+    _seed_oh_snap(conn, "claude", "2026-06-11T09:00:00+09:00", 130.0)
+    ctx = official_history_context(conn, datetime(2026, 6, 15, tzinfo=KST), period="month",
+                                   now_kst=datetime(2026, 6, 15, 12, 0, tzinfo=KST))
+    assert len(ctx["table"]) == 15                       # 6/1~6/15 — 오늘 행 포함, 내일부터 숨김
+    assert ctx["table"][-1]["ymd"] == "2026-06-15"
+    assert len(ctx["chart_labels"]) == 30                # 차트 축은 6월 전체 유지
+    assert all(len(s["data"]) == 30 for s in ctx["bar_series"])
+
+
+def test_official_history_day_table_hides_future_hours_today(tmp_path, monkeypatch):
+    """오늘의 일 뷰 표는 현재 시간대까지만(부분 관측 포함) — 이후 시간대는 행 없음.
+
+    차트는 24칸 유지. 과거 날짜의 일 뷰는 24행 전부(기존 테스트가 커버).
+    """
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import official_history_context
+    conn = _oh_ctx_conn(tmp_path, monkeypatch)
+    _seed_oh_snap(conn, "claude", "2026-06-15T09:00:00+09:00", 100.0)
+    ctx = official_history_context(conn, datetime(2026, 6, 15, tzinfo=KST), period="day",
+                                   now_kst=datetime(2026, 6, 15, 14, 30, tzinfo=KST))
+    assert ctx["is_hourly"] is True
+    assert len(ctx["table"]) == 15                       # 0~14시 — 현재(부분) 시간대 포함
+    assert ctx["table"][-1]["hour"] == 14
+    assert len(ctx["chart_labels"]) == 24                # 차트 축은 24칸 유지
+
+
+def test_official_history_custom_range_hides_future_days(tmp_path, monkeypatch):
+    """사용자 지정 구간이 미래를 포함해도 같은 규칙 — 표는 오늘까지, 차트 축은 구간 전체."""
+    from datetime import datetime
+    from tokenomy.aggregate import KST
+    from tokenomy.web.views import official_history_context
+    conn = _oh_ctx_conn(tmp_path, monkeypatch)
+    _seed_oh_snap(conn, "claude", "2026-06-10T09:00:00+09:00", 100.0)
+    ctx = official_history_context(conn, datetime(2026, 6, 15, tzinfo=KST), period="month",
+                                   start="2026-06-10", end="2026-06-20",
+                                   now_kst=datetime(2026, 6, 15, 12, 0, tzinfo=KST))
+    assert ctx["custom"] is True
+    assert len(ctx["table"]) == 6                        # 6/10~6/15 — 명시 조회여도 미래는 숨김
+    assert ctx["table"][-1]["ymd"] == "2026-06-15"
+    assert len(ctx["chart_labels"]) == 11                # 차트 축은 6/10~6/20 구간 전체
+
+
 def _seed_oh_snap(conn, provider, ts, used, limit=243.0,
                   kind="monthly_limit", raw="spend"):
     """사용 이력(공식) 라우트 테스트용 단일 소진형 스냅샷 시드."""
@@ -1322,6 +1385,17 @@ def _seed_oh_snap(conn, provider, ts, used, limit=243.0,
         used_usd=used, limit_usd=limit, remaining_usd=limit - used,
         utilization=used / limit, resets_at=None)
     insert_official_buckets(conn, provider=provider, fetched_at=ts, buckets=[b], created_at=ts)
+
+
+def test_official_history_table_sorted_ascending(tmp_path, monkeypatch):
+    """표는 날짜 오름차순(과거 위 → 최신 아래) — 옛 |reverse 내림차순 폐지."""
+    client, conn_factory = _client(tmp_path, monkeypatch)
+    conn = conn_factory()
+    _seed_oh_snap(conn, "claude", "2026-06-10T09:00:00+09:00", 100.0)
+    _seed_oh_snap(conn, "claude", "2026-06-11T09:00:00+09:00", 130.0)
+    r = client.get("/official-history?period=month&anchor=2026-06-15")
+    assert r.status_code == 200
+    assert r.text.index("2026-06-10") < r.text.index("2026-06-11")
 
 
 def test_official_history_day_view_renders_hourly(tmp_path, monkeypatch):

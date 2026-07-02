@@ -60,7 +60,7 @@
       </tr>
     </thead>
     <tbody>
-      {% for r in table|reverse %}
+      {% for r in table %}
       <tr class="day-row"{% if r.detail %} data-detail="1"{% endif %}>
         <td>{% if r.detail %}<span class="caret" aria-hidden="true">▸</span> {% endif %}{{ r.hlabel if is_hourly else r.ymd }}</td>
         {% if r.covered %}<td>{{ r.used_usd|usd }}</td>
