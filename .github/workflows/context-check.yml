@@ -1,0 +1,27 @@
+# 컨텍스트 문서(CLAUDE.md·AGENTS.md·README.md) 경로 참조 검증.
+# stale reference(리네임 후 미갱신 경로)가 머지되는 것을 차단한다 —
+# 로컬 pytest(tests/test_context_paths.py)와 같은 스크립트를 공유한다.
+name: context-check
+on:
+  push:
+    branches: ['main']
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validate-context-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate context path references
+        run: python scripts/check_context_paths.py

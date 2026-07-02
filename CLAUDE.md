@@ -43,6 +43,8 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 공식 사용량 API ── official_fetch.py(유일한 아웃바운드, ≤3s, 백오프 없음, tracked providers만) ─ raw JSON ─ official_parser.py ─→ db.py(official_buckets)
 ```
 
+모듈별 상세는 [tokenomy/CLAUDE.md](tokenomy/CLAUDE.md), 테스트 관행은 [tests/CLAUDE.md](tests/CLAUDE.md), dev 스크립트는 [scripts/CLAUDE.md](scripts/CLAUDE.md) 참고.
+
 - **parser.py / codex_parser.py** — 각 도구 로그를 공통 `UsageRecord`로 정규화. 새 도구 추가는
   여기에 모듈 하나 더(README의 "Adding a parser" 참고).
 - **official_fetch.py** — 공식 사용량 라이브 취득(유일한 아웃바운드). **tracked_providers**(=활성 AI; 앱 전반 표시 게이트, ADR 0005) 목록에 포함된 provider만 호출한다. 각 CLI의 로컬 OAuth 토큰으로
@@ -58,9 +60,9 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
   `cost_usd`는 (토큰×단가)의 **캐시값** — 단가(pricing.json/overrides)가 바뀌면 `ingest`가 단가
   핑거프린트로 감지해 기존 행을 **자동 재계산**(`db.maybe_reprice`). 1h 캐시 분리는 `cache_creation_1h`
   컬럼에 저장해 재계산도 정확. 증분 적재 + dedup 가드는 옛 행을 다시 안 건드리므로 이 경로가 필수.
-- **web/app.py** — FastAPI 라우트(얇게: 라우팅 + 입력검증만). 데이터 조립은 **web/views.py**.
+- **tokenomy/web/app.py** — FastAPI 라우트(얇게: 라우팅 + 입력검증만). 데이터 조립은 **tokenomy/web/views.py**.
 - **launcher.py** — exe(Windows)·소스(Linux `start_tokenomy.sh`) 공통 진입점. ingest 1회 → 빈 포트 탐색 → uvicorn(127.0.0.1) → pywebview 창 + 트레이 상주(없으면 브라우저 fallback). 미니 전환·`current_view` 시드는 `mini_view_available()`(Windows 전용)로 게이트 — Linux는 큰 창+트레이만(아래 플랫폼 분기 게시).
-- **web/control.py** — 창 복원 신호용 in-process 콜백 레지스트리. launcher(메인 스레드 webview)와 라우트(데몬 스레드)의 순환 import를 끊는다 — launcher가 `set_show_callback`, `/app/show` 라우트가 `request_show`(ADR 0006).
+- **tokenomy/web/control.py** — 창 복원 신호용 in-process 콜백 레지스트리. launcher(메인 스레드 webview)와 라우트(데몬 스레드)의 순환 import를 끊는다 — launcher가 `set_show_callback`, `/app/show` 라우트가 `request_show`(ADR 0006).
 - **paths.py** — 경로 중앙 해석. 데이터 위치가 실행 형태로 갈린다(아래 게시). `mini_view_available()`(=Windows 전용, ADR 0013)도 여기 — 미니뷰 플랫폼 게이트의 **단일 진실원**(launcher + 웹 사이드바가 공유).
 - **config.py** — 설정 모델(`config/tokenomy.config.json` 로더). `load_config`/`save_config` ·
   `tracked_providers`(=**활성 AI**; 미설정/None이면 크레덴셜 존재로 시드, 명시적 `[]`는 빈 집합 영속 — 재시드 안 함) · `credit_to_usd`(기본 0.04) ·
@@ -75,7 +77,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 
 - **exe는 반드시 `.venv`로 빌드.** 시스템 Python으로 빌드하면 pywebview가 번들에서 빠져
   네이티브 창 대신 브라우저로 fallback한다. (PyInstaller는 런타임 의존성이 아니라 CI는 별도 설치.)
-- **webview 경로는 상주 모드(ADR 0006).** exe에서 창 X = 트레이로 숨김(종료 아님), 트레이 우클릭 "종료"로만 완전 종료. 단일 인스턴스(`data/runtime.json`) — 재실행 시 기존 창 복원(`/app/ping` 정체 확인 → `/app/show`). 창 복원 시 ingest 1회 + 조건부 리로드. 트레이는 pystray+Pillow(번들). 브라우저 fallback·개발 모드는 단발 유지.
+- **webview 경로는 상주 모드(ADR 0006).** exe에서 창 X = 트레이로 숨김(종료 아님), 트레이 우클릭 "종료"로만 완전 종료. 단일 인스턴스(`data/runtime.json` — 런타임 생성) — 재실행 시 기존 창 복원(`/app/ping` 정체 확인 → `/app/show`). 창 복원 시 ingest 1회 + 조건부 리로드. 트레이는 pystray+Pillow(번들). 브라우저 fallback·개발 모드는 단발 유지.
 - **플랫폼 분기는 좁게 — `mini_view_available()`(Windows 전용)가 단일 게이트(ADR 0013).** Ubuntu 24.04 기본 Wayland(GNOME)는 절대좌표·항상위·프레임리스를 막아 미니 뷰가 깨진다 → Linux에선 미니뷰 버튼(웹 사이드바 `{% if mini_view_available %}`)·전환·복원(launcher `_to_mini` 가드 + `current_view` 시드 clamp)을 모두 비활성. 큰 창+트레이만 남는데 둘 다 Wayland-clean. 트레이 아이콘은 `_tray_icon_name()`이 분기 — Windows `.ico`/Linux `.png`(AppIndicator는 .ico 비호환). **트레이 기동도 분기**(`_launch_window`): Windows는 데몬 스레드 `icon.run()`(Win32 메시지 루프), **Linux는 메인 스레드 `icon.run_detached()`** — pystray(GTK/AppIndicator)와 pywebview(GTK)가 같은 GLib **기본 메인 컨텍스트**를 공유해야 하기 때문. `icon.run()`을 데몬 스레드로 돌리면 두 번째 GLib 루프가 같은 컨텍스트를 두고 메인 스레드 webview와 충돌(`GLib-GIO-CRITICAL: can not acquire the default main context`) → **창이 안 뜸**. `run_detached()`는 루프를 안 만들어 webview의 단일 루프가 창+트레이를 함께 처리한다. **Linux 배포는 소스 실행**(단일 바이너리 없음 — PyInstaller 크로스컴파일 불가, 사용자 증가 시 별건): `install.sh`(apt 의존성 + `venv --system-site-packages`로 apt `python3-gi` 가시화 + pip + `.desktop` 등록) + `start_tokenomy.sh`(launcher 기동) + `tokenomy.desktop`(앱 메뉴 템플릿, `@TOKENOMY_DIR@` 치환). apt 의존성: `python3-gi`·`gir1.2-gtk-3.0`·`gir1.2-webkit2-4.1`·`libwebkit2gtk-4.1-0`(pywebview GTK), `libayatana-appindicator3-1`·`gir1.2-ayatanaappindicator3-0.1`(트레이). 셸 스크립트·`.desktop`은 `.gitattributes`로 **LF 강제**(CRLF면 Ubuntu에서 `#!...\r` bad interpreter). 코어(parser/db/aggregate/official_fetch/pricing)는 OS 중립이라 무변경 — 회귀만 확인.
 - **프라이버시 경계 — 발췌선을 지킬 것.** 파서는 토큰 usage 메타를 추출하고, Codex는
   세션 식별용으로 **첫 사용자 프롬프트만 120자 발췌**해 `sessions.summary`에 저장한다.

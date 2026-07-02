@@ -18,7 +18,7 @@ Tokenomy는 AI 코딩 토큰 지출용 로컬 가계부다. Claude Code / Codex 
 # 테스트
 .venv\Scripts\python -m pytest
 
-# CSS 빌드: static/src/input.css 또는 템플릿 클래스 변경 시 실행하고 app.css 커밋
+# CSS 빌드: tokenomy/web/static/src/input.css 또는 템플릿 클래스 변경 시 실행하고 app.css 커밋
 .\build_css.ps1
 
 # exe 빌드: 반드시 .venv Python 사용
