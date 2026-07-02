@@ -12,7 +12,7 @@ from tokenomy.aggregate import (
     pool_snapshots_by_day,
     official_period_glance,
     insights, month_bounds, month_spend, official_span_spend, official_view, parse_ts,
-    period_bounds, pricing_coverage, range_spend, session_detail, sidechain_split,
+    period_bounds, pricing_coverage, range_spend, session_detail, sidechain_split, this_month_spend,
     stacked_trend, token_composition,
 )
 from tokenomy.config import (
@@ -95,6 +95,9 @@ def _forecast_hero(fc) -> dict | None:
         "daily_rate": fc.daily_rate_usd,
         "pct_now": round(fc.used_usd / fc.limit_usd * 100) if fc.limit_usd else 0,
         "exhaust_date": fc.exhaust_date.strftime("%m-%d") if fc.exhaust_date else None,
+        # 헤드라인 숫자 = 이번달 흐름(위치=used와 분리, ADR 0024). partial이면 만료형 몫 미집계.
+        "this_month_used": fc.this_month_used_usd,
+        "this_month_partial": fc.this_month_partial,
     }
     if fc.is_exhausted:
         base["level"] = "exhausted"
@@ -393,13 +396,15 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[
     now = now_kst or datetime.now(KST)
     ctu = credit_to_usd(config)
     weeks = forecast_settings(config)["rate_window_weeks"]
+    max_gap = official_fetch_settings(config)["min_interval_minutes"] * 3
     active = set(tracked_providers(config))
     curation, is_pooled = _curation_for(config)
     cards: list[dict] = []
     for p in PROVIDERS:
         if p not in active:
             continue
-        view = official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled)
+        view = official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled,
+                             max_gap_minutes=max_gap)
         cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now,
                                     curation=curation, is_pooled=is_pooled))
     return cards
@@ -470,8 +475,9 @@ class ShareRow:
     label: str
     today: PeriodSpend
     week: PeriodSpend
-    month_usd: float | None      # 이번달 = 월간 버킷 used(라이브). 없으면 None
-    util_pct: int | None         # 한도% = 월간 버킷 util(라이브). 없으면 None
+    month_usd: float | None      # 이번달 = 흐름(주기형 라이브 + 만료형 월초 델타, ADR 0024). 없으면 None
+    util_pct: int | None         # 한도% = 위치(라이브 누적 pool_used/pool_limit). 없으면 None
+    month_partial: bool = False  # 만료형 이번달 몫 미집계(월초 경계 미관측, ADR 0024)
 
 
 @dataclass
@@ -480,6 +486,7 @@ class PoolGlance:
     today: PeriodSpend
     week: PeriodSpend
     month_usd: float | None
+    month_partial: bool = False
 
 
 def _round_spend(ps: PeriodSpend) -> PeriodSpend:
@@ -511,6 +518,7 @@ def pool_glance(rows: list[ShareRow]) -> PoolGlance:
         today=_pool_period([r.today for r in rows]),
         week=_pool_period([r.week for r in rows]),
         month_usd=round(sum(months), 4) if months else None,
+        month_partial=any(r.month_partial for r in rows),
     )
 
 
@@ -581,6 +589,7 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
     now = now_kst or datetime.now(KST)
     ctu = credit_to_usd(config)
     weeks = forecast_settings(config)["rate_window_weeks"]
+    interval = official_fetch_settings(config)["min_interval_minutes"]
     active = set(tracked_providers(config))
     _, is_pooled = _curation_for(config)
     rows: list[ShareRow] = []
@@ -588,20 +597,25 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
     for p in PROVIDERS:
         if p not in active:
             continue
-        view = official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled)
+        view = official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled,
+                             max_gap_minutes=interval * 3)
         if view.pool_limit_usd is None:
             continue
         pool_providers.append(p)
         meta = _PROVIDER_META.get(p, {"label": p.title()})
         g = official_period_glance(conn, p, now, is_pooled=is_pooled)
-        # 이번달·한도%는 **통합 풀**(월간+포함크레딧, pool_used) 기준 — 오늘/이번주 글랜스와 같은
-        # 스코프라 오늘≤이번주≤이번달이 성립한다. 월간 버킷만 쓰면 크레딧 선소진 시 0으로 어긋난다.
+        # 한도%(util) = 위치(라이브 누적 pool_used/pool_limit) — 만료형 크레딧이 있어도 "지금 한도의
+        # 몇 % 소진"이라 누적이 맞다(크레딧 만료 임박을 계속 알린다). ADR 0024.
         util = None
         if view.pool_used_usd is not None and view.pool_limit_usd:
             util = round(view.pool_used_usd / view.pool_limit_usd * 100)
-        month = None if view.pool_used_usd is None else round(view.pool_used_usd, 4)
+        # 이번달 = 흐름(주기형 라이브 + 만료형 월초 델타) — 라이브 누적을 그대로 쓰면 만료형 크레딧의
+        # 지난달분이 이번달로 샌다(ADR 0024). 만료형 경계 미관측 시 그 몫만 미집계(month_partial).
+        month, month_partial = this_month_spend(conn, [p], now,
+                                                max_gap_minutes=interval * 3, is_pooled=is_pooled)
         rows.append(ShareRow(label=meta["label"], today=_round_spend(g.today),
-                             week=_round_spend(g.week), month_usd=month, util_pct=util))
+                             week=_round_spend(g.week), month_usd=month,
+                             month_partial=month_partial, util_pct=util))
     if not rows:
         return None
     date_label = f"{now.astimezone(KST):%Y-%m-%d}"
@@ -679,8 +693,10 @@ def period_card_context(conn, config: dict, now_kst: datetime | None = None) -> 
     if official:
         pool, providers = share["pool"], share["providers"]
         max_gap = interval * 3   # 그보다 긴 공백은 수집 단절 — 경계 미관측으로 본다
+        # 이번달 state=partial ⇐ 만료형 이번달 몫 미집계(월초 경계 미관측, ADR 0024) → 캐비엇.
         cur = {"오늘": pool.today, "이번주": pool.week,
-               "이번달": PeriodSpend(usd=pool.month_usd, state="complete")}
+               "이번달": PeriodSpend(usd=pool.month_usd,
+                                   state="partial" if pool.month_partial else "complete")}
         periods = []
         for key, _cur_start, ps, pe, prev_label in windows:
             c = cur[key]
@@ -688,8 +704,12 @@ def period_card_context(conn, config: dict, now_kst: datetime | None = None) -> 
             prev = official_span_spend(conn, providers, ps, pe,
                                        max_gap_minutes=max_gap, is_pooled=is_pooled)
             pace = _pace(c.usd, prev) if c.state == "complete" else None
+            # partial 캐비엇 방향이 기간마다 다르다(ADR 0024): 오늘/이번주=추적 공백→부풀 위험,
+            # 이번달=만료형 크레딧 이번달 몫 미집계→축소. 툴팁을 방향에 맞춘다.
+            note = ("크레딧 이번달 소비 미집계 — 월초 스냅샷이 쌓이면 반영" if key == "이번달"
+                    else "추적 공백 — 부풀 수 있음")
             periods.append({"key": key, "usd": c.usd, "state": c.state, "pace": pace,
-                            "prev_usd": prev, "prev_label": prev_label})
+                            "prev_usd": prev, "prev_label": prev_label, "partial_note": note})
         return {
             "mode": "official", "source_label": "공식 · 계정 전체",
             "disclaimer": "공식 API 사용량 · 계정 전체(전 기기)",
@@ -802,9 +822,12 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     # 화면의 "전체"가 곧 활성 합산이므로 forecast 풀도 활성만 본다(combined_forecast가 한도 보유분만 필터).
     ctu = credit_to_usd(config)
     weeks = forecast_settings(config)["rate_window_weeks"]
+    max_gap = official_fetch_settings(config)["min_interval_minutes"] * 3
     _, is_pooled = _curation_for(config)
-    forecast_views = [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled) for p in active]
-    forecast_obj = combined_forecast(conn, forecast_views, now, weeks, is_pooled=is_pooled)
+    forecast_views = [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled,
+                                    max_gap_minutes=max_gap) for p in active]
+    forecast_obj = combined_forecast(conn, forecast_views, now, weeks, is_pooled=is_pooled,
+                                     max_gap_minutes=max_gap)
     # A군 모드 게이트(ADR 0015): 공식(엔터) vs 로컬(개인구독제). 헤드라인·히어로·추세 오버레이를 가른다.
     a_official = _a_zone_official(config, forecast_obj)
     # 이번 달 총지출 헤드라인 — 엔터=공식 풀 used(계정 전체·실청구), 개인구독제/로컬=이 기기 추정.
@@ -1195,9 +1218,12 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
     # 소진형 풀 판정 + 한도선 값 — combined_forecast가 None이면 소진형 풀 없음(빈 상태).
     ctu = credit_to_usd(config)
     weeks = forecast_settings(config)["rate_window_weeks"]
+    max_gap = official_fetch_settings(config)["min_interval_minutes"] * 3
     _, is_pooled = _curation_for(config)
-    fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled)
-                                    for p in active], now, weeks, is_pooled=is_pooled)
+    fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled,
+                                                  max_gap_minutes=max_gap)
+                                    for p in active], now, weeks, is_pooled=is_pooled,
+                             max_gap_minutes=max_gap)
     has_pool = fobj is not None
     pool_limit = fobj.limit_usd if fobj else None
     pool_providers = fobj.providers if fobj else active

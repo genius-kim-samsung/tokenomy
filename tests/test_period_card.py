@@ -72,6 +72,33 @@ def _snap(conn, provider, dt, used, *, limit=200.0):
             remaining_usd=limit - used, utilization=used / limit * 100, resets_at=None)])
 
 
+def _snap_credit(conn, dt, monthly_used, credit_used, *, provider="claude",
+                 monthly_limit=1000.0, credit_limit=1000.0, credit_raw="cinder"):
+    """월간(주기형) + 만료형 크레딧 버킷을 한 스냅샷에 적재(ADR 0024 테스트용)."""
+    from datetime import datetime as _dt
+    insert_official_buckets(
+        conn, provider=provider, fetched_at=dt.isoformat(), created_at=dt.isoformat(),
+        buckets=[
+            OfficialBucket(bucket_key="monthly", raw_key="spend", bucket_kind="monthly_limit",
+                           label="월", native_unit="usd", used_native=monthly_used,
+                           limit_native=monthly_limit, remaining_native=monthly_limit - monthly_used,
+                           used_usd=monthly_used, limit_usd=monthly_limit,
+                           remaining_usd=monthly_limit - monthly_used,
+                           utilization=monthly_used / monthly_limit * 100, resets_at=None),
+            OfficialBucket(bucket_key="event", raw_key=credit_raw, bucket_kind="event_credit",
+                           label="이벤트", native_unit="usd", used_native=credit_used,
+                           limit_native=credit_limit, remaining_native=credit_limit - credit_used,
+                           used_usd=credit_used, limit_usd=credit_limit,
+                           remaining_usd=credit_limit - credit_used,
+                           utilization=credit_used / credit_limit * 100,
+                           resets_at=_dt(2026, 9, 10, tzinfo=KST))])
+
+
+# 만료형 크레딧을 풀에 opt-in하는 엔터 config(ADR 0016 오버라이드 + ADR 0024).
+_ENT_CREDIT_CFG = {"tracked_providers": ["claude"], "account_mode": "enterprise",
+                   "bucket_overrides": {"claude:cinder": {"pooled": True}}}
+
+
 def _periods(ctx):
     return {p["key"]: p for p in ctx["periods"]}
 
@@ -163,6 +190,40 @@ def test_period_card_official_mode_month_and_share():
     assert p["오늘"]["prev_label"] == "어제"
     assert "한도" in ctx["share_text"]
     assert "공식" in ctx["source_label"]
+
+
+def test_period_card_official_month_excludes_pre_month_credit():
+    """엔터 이번달 = 흐름(주기형 라이브 + 만료형 월초 델타), 크레딧 지난달 누적 제외 — ADR 0024."""
+    from tokenomy.web.views import period_card_context
+    conn = connect(":memory:")
+    _snap_credit(conn, datetime(2026, 6, 1, 0, 0, tzinfo=KST), 10.0, 900.0)
+    _snap_credit(conn, datetime(2026, 6, 10, 12, 0, tzinfo=KST), 10.0, 950.0)
+    p = _periods(period_card_context(conn, _ENT_CREDIT_CFG, NOW))
+    assert p["이번달"]["usd"] == 60.0 and p["이번달"]["state"] == "complete"
+
+
+def test_period_card_official_month_partial_when_no_baseline():
+    """월초 경계 스냅샷 없으면 만료형 몫 미집계 → 이번달=주기형만 + state=partial((B) 분업)."""
+    from tokenomy.web.views import period_card_context
+    conn = connect(":memory:")
+    _snap_credit(conn, datetime(2026, 6, 10, 12, 0, tzinfo=KST), 10.0, 950.0)  # 6/1 baseline 없음
+    p = _periods(period_card_context(conn, _ENT_CREDIT_CFG, NOW))
+    assert p["이번달"]["usd"] == 10.0 and p["이번달"]["state"] == "partial"
+
+
+def test_share_context_month_is_flow_util_is_cumulative():
+    """공유 문구: 이번달=흐름(만료형 월초 델타), 한도%=위치(라이브 누적) — ADR 0024.
+
+    크레딧 지난달 누적 $900, 이번달 델타 50. 이번달=월간라이브10+50=60(≠누적960).
+    한도%=누적 960/2000=48%(위치라 만료 임박을 계속 알린다).
+    """
+    from tokenomy.web.views import share_context
+    conn = connect(":memory:")
+    _snap_credit(conn, datetime(2026, 6, 1, 0, 0, tzinfo=KST), 10.0, 900.0)
+    _snap_credit(conn, datetime(2026, 6, 10, 12, 0, tzinfo=KST), 10.0, 950.0)
+    ctx = share_context(conn, _ENT_CREDIT_CFG, NOW)
+    assert ctx["pool"].month_usd == 60.0        # 흐름(주기형 라이브 + 만료형 델타)
+    assert "한도 48%" in ctx["text"]            # 위치(누적) 96/200... 960/2000=48%
 
 
 def test_period_card_official_today_pace():

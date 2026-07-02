@@ -225,7 +225,7 @@ def _row_to_bucket_dict(r) -> dict:
 def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
                       limit_usd: float | None, used_usd: float | None,
                       reset_date: date | None, weeks: int = 2,
-                      *, pool_used: float | None = None, is_pooled=None) -> OfficialLens | None:
+                      *, is_pooled=None, max_gap_minutes: int | None = None) -> OfficialLens | None:
     """공식 일일 소비속도(official_daily_rate)로 소진예상·리셋 D-day 산출(ADR 0015 D3).
 
     rate = 공식 스냅샷 기반 기울기((a)트레일링 델타 → (b)월초누적 폴백). 로컬 기울기 폐기 —
@@ -234,7 +234,8 @@ def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
     월간+이벤트) rate는 풀 합산 기울기 — active 버킷이 그 풀의 주 소진처라 근사로 타당하다.
     bucket_key는 반환값 식별용으로만 사용(rate 계산에 미사용).
     """
-    rate = official_daily_rate(conn, [provider], now_kst, weeks, pool_used=pool_used, is_pooled=is_pooled)
+    rate = official_daily_rate(conn, [provider], now_kst, weeks,
+                               is_pooled=is_pooled, max_gap_minutes=max_gap_minutes)
 
     exhaust_date: date | None = None
     if rate and limit_usd and used_usd is not None and limit_usd > used_usd:
@@ -249,7 +250,8 @@ def _lens_from_series(conn, provider: str, bucket_key: str, now_kst: datetime,
 
 
 def official_view(conn, provider: str, now_kst: datetime,
-                  credit_to_usd: float, weeks: int = 2, *, is_pooled=None) -> OfficialView:
+                  credit_to_usd: float, weeks: int = 2, *, is_pooled=None,
+                  max_gap_minutes: int | None = None) -> OfficialView:
     """공식 미러 패널 컨텍스트. 최신 스냅샷(공식)에서 버킷·풀·예측 렌즈를 조립한다.
 
     - period_used/limit = 월간 버킷(공식 ground truth). 없으면 None.
@@ -337,7 +339,7 @@ def official_view(conn, provider: str, now_kst: datetime,
         # 렌즈 rate=공식(official_daily_rate, ADR 0015 D3). pool_used=이 provider 풀 누적(=(b)월초누적 분자).
         lens = _lens_from_series(conn, provider, active_key, now_kst,
                                  active["limit_usd"], active["used_usd"], reset_date, weeks,
-                                 pool_used=pool_used, is_pooled=is_pooled)
+                                 is_pooled=is_pooled, max_gap_minutes=max_gap_minutes)
 
     note = None if rows else "공식 미취득 — 로컬 추정(USD)"
     return OfficialView(
@@ -367,6 +369,8 @@ class CombinedForecast:
     is_exhausted: bool
     per_provider: list[dict]
     month_end: date
+    this_month_used_usd: float | None = None   # 이번달 흐름(주기형 라이브+만료형 델타, ADR 0024). 히어로 헤드라인용
+    this_month_partial: bool = False           # 만료형 이번달 몫 미집계(월초 경계 미관측)
 
 
 def _trailing_window_bounds(now_kst: datetime, weeks: int) -> tuple[datetime, datetime]:
@@ -412,21 +416,17 @@ def trailing_window_spend(conn, provider: str | None, now_kst: datetime, weeks: 
     return round(sum((r["cost_usd"] or 0) for r in _range_rows(conn, provider, start, nxt, providers=providers)), 4)
 
 
-def _pool_used_at(conn, providers: list[str], T: datetime, *, is_pooled=None) -> float | None:
-    """T 시점 통합 풀 used = 각 provider의 T 이하 최신 스냅샷 used 합. 기여 provider 없으면 None.
+def _pool_used_latest(conn, providers: list[str], *, is_pooled=None) -> float | None:
+    """각 provider 최신 스냅샷의 풀 used 합(시각 무관). 기여 provider 없으면 None.
 
-    pool_used_history(소진형 USD 버킷만)를 forward-fill해 합산한다 — 누적 시계열의 그 시점 위치.
+    위치(official_view의 pool_used = latest_official_snapshot)와 같은 "현재 위치" 의미 —
+    주기형 이번달 used는 곧 이 라이브 위치라 시각 게이트 없이 최신값을 쓴다(ADR 0024).
     """
     total = None
     for p in providers:
-        val = None
-        for dt, v in pool_used_history(conn, p, is_pooled=is_pooled):    # 오름차순
-            if dt <= T:
-                val = v
-            else:
-                break
-        if val is not None:
-            total = (total or 0.0) + val
+        hist = pool_used_history(conn, p, is_pooled=is_pooled)
+        if hist:
+            total = (total or 0.0) + hist[-1][1]
     return total
 
 
@@ -468,21 +468,26 @@ def _official_mtd_rate(now_kst: datetime, pool_used: float | None) -> float | No
 
 
 def official_daily_rate(conn, providers: list[str], now_kst: datetime, weeks: int,
-                        *, pool_used: float | None, is_pooled=None) -> float | None:
+                        *, is_pooled=None, max_gap_minutes: int | None = None) -> float | None:
     """엔터프라이즈 전망 기울기(USD/영업일) — **공식만**(로컬 기울기 폐기, ADR 0015 D3).
 
     (a) 공식 스냅샷 델타 트레일링 우선 → 이력 부족 시 (b) 월초누적 평균 → 둘 다 불가면 None(위치만).
     다중 기기 사용자에서 한 기기 로컬 속도만 보던 과소추정과 '공식 위에 로컬을 얹는' 하이브리드 혼란을
     없앤다 — 위치(used)도 기울기도 모두 공식 계정 전체다. 풀 멤버십은 큐레이션(is_pooled, ADR 0016).
+    (b) 월초누적 분자 = **이번달 흐름**(this_month_spend: 주기형 라이브 + 만료형 월초 델타, ADR 0024)
+    — 옛 raw pool_used는 만료형 크레딧의 지난달 누적을 이번달로 과다계상해 기울기를 부풀렸다.
     """
     r = _official_trailing_rate(conn, providers, now_kst, weeks, is_pooled=is_pooled)
     if r is not None:
         return r
-    return _official_mtd_rate(now_kst, pool_used)
+    flow, _partial = this_month_spend(conn, providers, now_kst,
+                                      max_gap_minutes=max_gap_minutes, is_pooled=is_pooled)
+    return _official_mtd_rate(now_kst, flow)
 
 
 def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
-                      weeks: int = 2, *, is_pooled=None) -> CombinedForecast | None:
+                      weeks: int = 2, *, is_pooled=None,
+                      max_gap_minutes: int | None = None) -> CombinedForecast | None:
     """공식 USD/크레딧 한도가 있는 provider를 한 풀로 합쳐 달력 월말 예상 잔여를 낸다.
 
     풀 = pool_limit_usd가 있는 view들. 없으면 None(히어로 숨김).
@@ -507,7 +512,11 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
     month_end = (next_month - timedelta(days=1)).date()
     pool_providers = [v.provider for v in pool]
     # 기울기 = 공식만(ADR 0015 D3). (a)스냅샷 델타 트레일링 → (b)월초누적 폴백 → 없으면 None.
-    daily_rate = official_daily_rate(conn, pool_providers, now_kst, weeks, pool_used=used, is_pooled=is_pooled)
+    daily_rate = official_daily_rate(conn, pool_providers, now_kst, weeks,
+                                     is_pooled=is_pooled, max_gap_minutes=max_gap_minutes)
+    # 헤드라인용 이번달 흐름(위치=used는 라이브 누적, 흐름=this_month은 만료형 델타로 분리, ADR 0024).
+    tm_used, tm_partial = this_month_spend(conn, pool_providers, now_kst,
+                                           max_gap_minutes=max_gap_minutes, is_pooled=is_pooled)
     bdays_remaining = business_days_between(now_kst.date() + timedelta(days=1), next_month.date())
 
     is_exhausted = used >= limit
@@ -529,6 +538,7 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
         per_provider=[{"provider": v.provider, "used_usd": v.pool_used_usd or 0.0,
                        "limit_usd": v.pool_limit_usd} for v in pool],
         month_end=month_end,
+        this_month_used_usd=tm_used, this_month_partial=tm_partial,
     )
 
 
@@ -692,13 +702,15 @@ def pool_history(conn, providers: list[str], *, max_gap_minutes: int | None = No
 
 
 def _provider_span_spend(hist: list, start: datetime, end: datetime,
-                         gap_sec: float | None) -> float | None:
+                         gap_sec: float | None, *, require_end_boundary: bool = True) -> float | None:
     """한 provider 누적 시계열에서 [start, end] 소비 = consumption_delta 합. 경계 게이트 적용.
 
     baseline = start 이하 최근 표본(없으면 추적 시작 이전 → None). baseline이 start에서
     gap_sec보다 오래거나(leading gap), 구간 마지막 표본이 end에서 gap_sec보다 오래면
     (trailing gap) None — 경계가 깨끗이 관측됐을 때만 값. 리셋(누적 하락)은 consumption_delta가
     post-reset 값으로 계상해 월 경계 이전 구간도 성립한다.
+    require_end_boundary=False면 trailing gap을 무시한다 — end가 "지금"인 진행 중 창(이번달
+    소비, ADR 0024)엔 최신 표본이 곧 현재라 tail이 없어 leading gate만 필요하다.
     """
     if not hist:
         return None
@@ -723,13 +735,14 @@ def _provider_span_spend(hist: list, start: datetime, end: datetime,
         i += 1
     if last_dt is None:
         return None   # 구간 내 표본 없음 → end 미관측
-    if gap_sec is not None and (end - last_dt).total_seconds() > gap_sec:
+    if require_end_boundary and gap_sec is not None and (end - last_dt).total_seconds() > gap_sec:
         return None   # end 경계 미관측(trailing gap → 소비 일부 누락)
     return round(spend, 4)
 
 
 def official_span_spend(conn, providers: list[str], start: datetime, end: datetime,
-                        *, max_gap_minutes: int | None, is_pooled=None) -> float | None:
+                        *, max_gap_minutes: int | None, is_pooled=None,
+                        require_end_boundary: bool = True) -> float | None:
     """[start, end] 구간의 통합 풀 공식 소비(USD) — 페이스 신호의 '이전 동일 구간'용(ADR 0017).
 
     각 provider 스냅샷 이력에서 구간 소비를 consumption_delta 합으로 내고(리셋은 post-reset
@@ -743,11 +756,49 @@ def official_span_spend(conn, providers: list[str], start: datetime, end: dateti
     total = 0.0
     for p in providers:
         s = _provider_span_spend(pool_used_history(conn, p, is_pooled=is_pooled),
-                                 start, end, gap_sec)
+                                 start, end, gap_sec, require_end_boundary=require_end_boundary)
         if s is None:
             return None
         total += s
     return round(total, 4)
+
+
+def this_month_spend(conn, providers: list[str], now_kst: datetime, *,
+                     max_gap_minutes: int | None = None, is_pooled=None):
+    """이번달 소비(흐름, USD) + 만료형 부분관측 플래그(ADR 0024).
+
+    "지금 얼마 남았나(위치)"가 아니라 "이번 달에 얼마 흘렀나(흐름)"를 낸다.
+    [주기형 버킷]=라이브 used(월 리셋이라 누적이 곧 이번달 — 월초 경계 스냅샷 불필요),
+    [만료형 버킷]=월초~now 델타(만료일까지 누적돼 라이브 used엔 지난달분이 섞이므로).
+    판별은 bucket_kind(주기형=POOL_DEFAULT_KINDS). 반환 (usd, expiring_partial):
+    expiring_partial=만료형이 풀에 있으나 월초 경계 미관측이라 그 몫이 빠졌는가(카드/공유 캐비엇).
+    풀 기여가 전혀 없으면 (None, False).
+    """
+    ip = _resolve_is_pooled(is_pooled)
+    is_periodic = lambda p, rk, bk: ip(p, rk, bk) and bk in POOL_DEFAULT_KINDS       # noqa: E731
+    is_expiring = lambda p, rk, bk: ip(p, rk, bk) and bk not in POOL_DEFAULT_KINDS   # noqa: E731
+    providers = list(providers)
+
+    # 주기형 이번달 = 라이브 위치(최신 스냅샷) — 월 리셋이라 누적이 곧 이번달. 위치(pool_used)와 동형.
+    periodic = _pool_used_latest(conn, providers, is_pooled=is_periodic)
+    # 만료형 버킷 있는 provider만(빈 hist가 official_span_spend를 None으로 오판하지 않게).
+    exp_providers = [p for p in providers if pool_used_history(conn, p, is_pooled=is_expiring)]
+    if periodic is None and not exp_providers:
+        return None, False
+
+    total = periodic or 0.0
+    partial = False
+    if exp_providers:
+        month_start, _ = month_bounds(now_kst)
+        # 만료형 이번달 델타 = 월초 baseline 대비 소비. trailing gate 없음(end=now=최신 표본).
+        expiring = official_span_spend(conn, exp_providers, month_start, now_kst,
+                                       max_gap_minutes=max_gap_minutes, is_pooled=is_expiring,
+                                       require_end_boundary=False)
+        if expiring is not None:
+            total += expiring
+        else:
+            partial = True   # 만료형 있으나 월초 경계 미관측 → 그 몫 미집계
+    return round(total, 4), partial
 
 
 def pool_daily_history(conn, providers: list[str], *, start: datetime, nxt: datetime,

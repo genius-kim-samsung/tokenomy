@@ -36,9 +36,9 @@
   {% else %}
     <p class="forecast-headline">현재 잔여 {{ forecast.remaining|usd }} <span class="muted">· 추세 데이터 부족</span></p>
   {% endif %}
-  <p class="muted">현재 {{ forecast.used|usd }} / ${{ '{:,.0f}'.format(forecast.limit) }} 사용 ({{ forecast.pct_now }}%)
-    {% if forecast.daily_rate %}· 하루 {{ forecast.daily_rate|usd }}/영업일{% endif %}</p>
-  <p class="disclaimer">ⓘ 전부 공식 · 계정 전체(전 기기) · 전망은 공식 사용 추세 기반</p>
+  <p class="muted">이번달 {{ (forecast.this_month_used or 0)|usd }} 소비{% if forecast.this_month_partial %} <span class="badge" title="크레딧 이번달 소비는 월초 스냅샷이 쌓이면 집계됩니다">일부</span>{% endif %}
+    {% if forecast.daily_rate %}· 하루 {{ forecast.daily_rate|usd }}/영업일{% endif %} · 잔여 {{ forecast.remaining|usd }}</p>
+  <p class="disclaimer">ⓘ 이번달 소비=이번 달 흐름 · 잔여=공식 라이브 누적(계정 전체) · 전망은 공식 사용 추세 기반</p>
 </section>
 {% endif %}
 

@@ -12,6 +12,7 @@ from tokenomy.aggregate import (
     parse_ts, period_bounds, session_detail, sidechain_split,
     SidechainSplit, stacked_trend, token_composition, pricing_coverage, CoverageReport,
     combined_forecast, CombinedForecast,
+    this_month_spend, official_daily_rate,
     _trailing_business_days, trailing_window_spend,
     pool_used_history, _segment_points, pool_history, pool_daily_history,
     pool_hourly_history,
@@ -21,7 +22,7 @@ from tokenomy.aggregate import (
 from tokenomy.db import connect, insert_official_buckets, ingest_records
 from tokenomy.official_parser import OfficialBucket
 from tokenomy.parser import UsageRecord
-from tokenomy.web.views import build_date_tree, history_context, dimension_context, overview_context, session_context, pool_history_to_daily
+from tokenomy.web.views import build_date_tree, history_context, dimension_context, overview_context, session_context, pool_history_to_daily, _forecast_hero
 
 # June 2026 has 30 days
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
@@ -1724,6 +1725,115 @@ def test_combined_forecast_includes_event_credit():
     # per_provider도 풀(월간+크레딧) 합산을 반영
     claude = next(p for p in fc.per_provider if p["provider"] == "claude")
     assert claude["used_usd"] == 125.0 and claude["limit_usd"] == 600.0
+
+
+# ─── 이번달 소비(흐름): this_month_spend — 주기형 라이브 + 만료형 월초 델타(ADR 0024) ───
+
+
+def test_this_month_spend_periodic_only_uses_live_used():
+    # 순수 주기형(monthly-only): 라이브 used가 곧 이번달(월 리셋). 만료형 없음 → partial=False.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 40.0, 100.0, raw="spend")],
+                            created_at="x")
+    usd, partial = this_month_spend(conn, ["claude"], NOW, max_gap_minutes=30)
+    assert usd == 40.0 and partial is False
+
+
+def test_this_month_spend_expiring_uses_month_delta_not_cumulative():
+    # 만료형 크레딧(9/10 만료)이 지난달부터 누적 $900. 월초 baseline이 있으면 이번달은
+    # 델타(950-900=50)만 계상 — 누적 $950이 이번달로 새지 않는다. 주기형 라이브 40 + 50 = 90.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-01T00:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 10.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 900.0, 1000.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 40.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 950.0, 1000.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    usd, partial = this_month_spend(conn, ["claude"], NOW, max_gap_minutes=30,
+                                    is_pooled=_pool_with("cinder"))
+    assert usd == 90.0 and partial is False
+
+
+def test_this_month_spend_expiring_no_baseline_is_partial():
+    # 월초 경계 스냅샷 없음(6/10 스냅샷만) → 만료형 이번달 델타 계산 불가 → 주기형(40)만, partial=True.
+    # 주기형은 늘 온전(경계 스냅샷 불필요)이라 데이터가 통째로 사라지지 않는다((B) 버킷별 분업).
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 40.0, 100.0, raw="spend"),
+                                     _ob("event", "event_credit", 950.0, 1000.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    usd, partial = this_month_spend(conn, ["claude"], NOW, max_gap_minutes=30,
+                                    is_pooled=_pool_with("cinder"))
+    assert usd == 40.0 and partial is True
+
+
+def test_official_daily_rate_mtd_uses_month_flow_not_cumulative():
+    # 트레일링 창 이전 베이스 없음 → MTD 폴백. 분자는 이번달 흐름(주기형10 + 만료형델타50=60),
+    # raw 누적(monthly10 + cinder950=960) 아님. rate=60/8영업일=7.5(≠960/8=120).
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-01T00:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 10.0, 1000.0, raw="spend"),
+                                     _ob("event", "event_credit", 900.0, 1000.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 10.0, 1000.0, raw="spend"),
+                                     _ob("event", "event_credit", 950.0, 1000.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    rate = official_daily_rate(conn, ["claude"], NOW, 2, is_pooled=_pool_with("cinder"),
+                               max_gap_minutes=30)
+    assert rate == 7.5
+
+
+def test_combined_forecast_position_cumulative_but_month_flow_delta():
+    # 위치(used/limit/remaining)=라이브 누적 불변; this_month_used_usd=이번달 흐름(만료형은 델타).
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-01T00:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 10.0, 1000.0, raw="spend"),
+                                     _ob("event", "event_credit", 900.0, 1000.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 10.0, 1000.0, raw="spend"),
+                                     _ob("event", "event_credit", 950.0, 1000.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    ip = _pool_with("cinder")
+    views = [official_view(conn, "claude", NOW, 0.04, is_pooled=ip, max_gap_minutes=30)]
+    fc = combined_forecast(conn, views, NOW, is_pooled=ip, max_gap_minutes=30)
+    # 위치 = 라이브 누적(공식 정본): 10 + 950 = 960 / 1000 + 1000 = 2000
+    assert fc.used_usd == 960.0 and fc.limit_usd == 2000.0 and fc.remaining_usd == 1040.0
+    # 흐름 = 이번달: 주기형 라이브 10 + 만료형 델타 50 = 60(누적 960이 이번달로 새지 않음)
+    assert fc.this_month_used_usd == 60.0 and fc.this_month_partial is False
+
+
+def test_forecast_hero_shows_this_month_flow_and_live_remaining():
+    # 히어로: 헤드라인 숫자=이번달 흐름(60), 잔여=라이브 누적(1040) — ADR 0024.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-01T00:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 10.0, 1000.0, raw="spend"),
+                                     _ob("event", "event_credit", 900.0, 1000.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 10.0, 1000.0, raw="spend"),
+                                     _ob("event", "event_credit", 950.0, 1000.0, raw="cinder",
+                                         resets=datetime(2026, 9, 10, tzinfo=KST))],
+                            created_at="x")
+    ip = _pool_with("cinder")
+    views = [official_view(conn, "claude", NOW, 0.04, is_pooled=ip, max_gap_minutes=30)]
+    fc = combined_forecast(conn, views, NOW, is_pooled=ip, max_gap_minutes=30)
+    hero = _forecast_hero(fc)
+    assert hero["this_month_used"] == 60.0      # 헤드라인 = 흐름
+    assert hero["this_month_partial"] is False
+    assert hero["remaining"] == 1040.0          # 잔여 = 라이브 누적(위치)
 
 
 # ─── 트레일링 소비속도(행동 속성): _trailing_business_days / trailing_window_spend ───

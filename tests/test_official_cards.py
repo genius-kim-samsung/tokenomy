@@ -140,19 +140,20 @@ def test_card_no_official_omits_local_fallback():
 # ── 고스트(예측) + forecast 텍스트 — active 버킷 2스냅샷 ───────────────────────
 def test_active_bucket_ghost_and_forecast():
     # opt-in한 코드네임 크레딧(ADR 0016)이 풀·active·고스트를 구동. (기본은 풀 제외라 opt-in 필요)
+    # 기울기=공식(ADR 0015 D3, ADR 0024). 만료형 크레딧이라 이번달 흐름은 월초 baseline 대비 델타로
+    # 잡는다 — 월초(6/1) 스냅샷을 두어(상주 운영) 크레딧의 지난달 누적이 이번달로 새지 않게 한다.
     conn = _conn()
-    # 기울기=공식(ADR 0015 D3). 단일 윈도우 내 스냅샷 → (b)월초누적 820/15영업일(6/1~6/21)≈54.67/일
-    # → 예상 used = 820 + 54.67×7(영업일 6/22~6/30) > 1000 → 고스트
-    # → exhaust = ceil(180/54.67)=4영업일 후 = 6/25 < 7/1 → dday_warning=True
     conn.execute(    # 로컬 소비(무시돼야 — 공식 기울기로 전환)
         "INSERT INTO messages(dedup_key,provider,session_id,project,ts,model,"
         "input_tokens,cache_creation,cache_read,cost_usd,priced) "
         "VALUES('k','claude','s','/p','2026-06-15T01:00:00Z','claude-opus-4-8',0,0,0,450.0,1)")
     conn.commit()
     reset = NOW + timedelta(days=10)
+    month_start = datetime(2026, 6, 1, 0, 0, tzinfo=KST)   # 월초 baseline(만료형 이번달 델타 기준)
     old = (NOW - timedelta(days=5)).isoformat()
     new = NOW.isoformat()
-    for fa, used, util in [(old, 700.0, 70.0), (new, 820.0, 82.0)]:
+    for fa, used, util in [(month_start.isoformat(), 600.0, 60.0),
+                           (old, 700.0, 70.0), (new, 820.0, 82.0)]:
         insert_official_buckets(
             conn, provider="claude", fetched_at=fa, created_at=fa,
             buckets=[_bucket(bucket_key="event", bucket_kind="event_credit", raw_key="cinder_cove",
@@ -163,7 +164,7 @@ def test_active_bucket_ghost_and_forecast():
     card = _card(official_cards(conn, cfg, NOW), "claude")
     g = card["gauges"][0]
     assert g["ghost_pct"] is not None and g["ghost_pct"] > g["fill_pct"]
-    assert g["ghost_warn"] is True                  # 82% + 리셋 전 소진 → 빨간 고스트
+    assert g["ghost_warn"] is True                  # 82% 소진 → dday(≥0.80) → 빨간 고스트
     assert "소진 예상" in (g["forecast"] or "")   # 고스트 의미를 텍스트로 명시(여유/부족 통일)
 
 
