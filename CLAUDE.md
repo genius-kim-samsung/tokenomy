@@ -96,6 +96,11 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - **공식 사용량은 멀티버킷(USD 통일) — Claude 버킷(월간·이벤트·rate-window)/Codex 월간(+개인 구독제 rate-window).** 한도·리셋은 모두 공식 API에서 읽는다(실제 리셋=`resets_at`). 게이지 라벨은 **창 길이 기반**으로 통일: "5시간"·"7일(All)"·"7일(Sonnet)"·"월간"·"이벤트". 옛 Codex "월÷4 주간 추정" 게이지는 로컬 used를 공식 한도에 섞던 위반이라 제거됨(ADR 0012) — 주간 흐름은 공식 글랜스("이번주 $", ADR 0011)가 대신한다. `credit_to_usd`(config, 기본 0.04)로 크레딧 환산, 토큰 cost 경로와 분리. 구 단일값 `official_usage` 테이블은 `_migrate`가 DROP(로컬 단일 사용자라 이관 없음).
 - **공식 사용량 취득(=갱신)은 default-on(tracked providers만)·비차단.** `tracked_providers` 목록에 있는 provider만 공식 API를 호출하고, 첫 실행 시 크레덴셜 파일 존재로 시드한다. 갱신은 **수집(`cmd_ingest`)과 분리** — 수집은 로컬 JSONL 재스캔만, 갱신은 웹 라우트(수동 버튼/자동 폴링)가 담당한다(ADR 0003). 起動 갱신은 대시보드 로드 시 `hx-trigger="load"`가 겸한다(launcher는 수집만 동기 실행).
   타임아웃 ≤3s, **백오프 없음**(단발 시도, 실패 즉시 포기). `min_interval_minutes`="자동 갱신 간격"(기본 10) — 자동 폴링 주기이자 자동 호출 최소 간격. **수동 갱신은 이 간격을 무시(throttle bypass)**한다. 엔드포인트 quota는 CLI와 공유 — 충돌 못 막음. `TOKENOMY_SKIP_OFFICIAL_FETCH`로 전체 강제 차단 가능.
+- **테스트는 실제 시계·고정 포트를 쓰지 않는다.** 시드·골든 fixture는 전부 2026-06 기준 —
+  view 직접 호출 테스트는 `now_kst` 주입, 라우트(TestClient) 경유는 `test_web.py`의 `_client`가
+  app/views의 datetime을 고정 대역(2026-06-20 12:00 KST, fixture fetched_at 이후·resets_at 이전)으로
+  교체한다. 새 시간 의존 테스트도 6월 시드 + 이 관행을 따를 것(골든 fixture 날짜 변조 금지).
+  포트 테스트는 8765 하드코딩 대신 임시 포트(`bind 0`)를 기준점으로(실행 중인 앱과 충돌).
 - **Claude·Codex 모두 조건부 능동 갱신(ADR 0021/0022).** 만료 임박 시 선제 갱신·GET 401 시 반응형 1회 갱신. **만료 판정**: Claude는 `~/.claude/.credentials.json`의 평문 `expiresAt`(≤ now+5분), Codex는 `~/.codex/auth.json` access token **JWT `exp` 디코드**(`_jwt_exp_ms` — 평문 만료 필드 없음). **자동 안전망**: DB 최근 *해당 provider* 세션 ts가 `now − N시간`(`auto_refresh_safety_hours`, 기본 24h) 이내면 "그 CLI 쓰는 기기"로 보고 skip → 기존 401 안내로 폴백(`_auto_refresh_allowed`가 provider별 판정 — 한 기기에서 claude·codex 섞여도 각각 옳게 게이팅). `auto_refresh_token: "auto"(기본)|"always"(안전망 무시)|"off"`는 **두 provider 공용**(provider별 모드 플래그 없음). write-back = temp→atomic `os.replace`(`_atomic_write_json` 공용)·rotation 정확(두 토큰 다 매 호출 회전 → 새 refresh token 기록 필수)·기존 키 보존(Codex는 account_id 보존·재유도 안 함, `last_refresh` 갱신)·토큰파일 0600 생성(POSIX 권한; Windows는 상위 디렉터리 ACL 상속)·토큰 DB 미저장·self-race `threading.Lock`. **Codex API-key 모드(`auth_mode != chatgpt`)나 refresh_token 부재는 무손상 no-op** → 기존 "Codex CLI 1회 실행" 안내로 폴백.
 
 ## 환경변수
