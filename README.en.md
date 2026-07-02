@@ -214,10 +214,13 @@ re-ingest your raw logs.
 ## Official usage fetch
 
 Tokenomy automatically fetches live official usage for each provider listed in
-`tracked_providers`. It uses the locally stored OAuth token in **read-only** mode
-(no token refresh) and makes a single HTTP GET per provider (≤ 3 s, no retry).
-**No PII is stored** — the access token and account ID are used only for the
-request header and then discarded; only usage numbers are written to the local DB.
+`tracked_providers`. It uses the locally stored OAuth token and makes a single
+HTTP GET per provider (≤ 3 s, no retry). **No PII is stored** — the access token
+and account ID are used only for the request header and then discarded; only
+usage numbers are written to the local DB. If the token is about to expire (or a
+call returns 401), Tokenomy conditionally refreshes it and writes it back to the
+credential file atomically — skipped on machines that used that CLI recently
+(`auto_refresh_token`: `auto` (default) / `always` / `off`).
 
 - **Fetching is decoupled from ingest.** Ingest only re-scans local JSONL; the dashboard
   drives official refresh — opening a page auto-polls (every `min_interval_minutes`), and
@@ -226,6 +229,27 @@ request header and then discarded; only usage numbers are written to the local D
   (e.g. limit-less) fall back to a usage-only view.
 - Set `TOKENOMY_SKIP_OFFICIAL_FETCH` to disable all network calls (offline /
   CI / testing).
+
+## Architecture
+
+One-way data pipeline — local logs and the official API meet in SQLite, then flow into aggregation and views:
+
+```mermaid
+flowchart LR
+    CL["~/.claude/projects/**/*.jsonl"] --> PA["parser.py"]
+    CX["~/.codex/sessions/**/rollout-*"] --> CP["codex_parser.py"]
+    CL -.-> AR["archive.py (raw kept ~30 days)"]
+    CX -.-> AR
+    PA --> UR(["UsageRecord"])
+    CP --> UR
+    UR --> DB[("db.py — SQLite")]
+    API["official usage API"] --> OF["official_fetch.py (sole outbound call)"]
+    OF --> OP["official_parser.py"]
+    OP --> DB
+    DB --> AG["aggregate.py"]
+    AG --> CLI["cli.py (report)"]
+    AG --> WEB["web/ (FastAPI + Jinja2)"]
+```
 
 ## Adding a parser for another tool
 

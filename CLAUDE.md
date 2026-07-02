@@ -1,9 +1,7 @@
 # Tokenomy
 
-AI 코딩 토큰 지출용 로컬 "가계부". Claude Code / Codex CLI의 **로컬** 세션 로그(JSONL)를
-파싱해 공식 사용량 기반 한도·잔여·예측·프로젝트/세션별 비용·캐시 효율을 보여준다.
-단발(single-shot) 데스크톱 앱(exe) 또는 소스로 실행. 전 과정 로컬,
-**DB에는 토큰 메타 + 세션 식별용 첫 프롬프트 발췌만 적재**한다(대화 본문 전체는 미저장 — raw JSONL 원문은 archive.py가 약 30일 임시 보존).
+AI 코딩 토큰 지출용 로컬 "가계부". Claude Code / Codex CLI의 **로컬** 세션 로그(JSONL)를 파싱해 공식 사용량 기반 한도·잔여·예측·프로젝트/세션별 비용·캐시 효율을 보여준다.
+단발(single-shot) 데스크톱 앱(exe) 또는 소스로 실행. 전 과정 로컬, **DB에는 토큰 메타 + 세션 식별용 첫 프롬프트 발췌만 적재**한다(대화 본문 전체는 미저장 — raw JSONL 원문은 archive.py가 약 30일 임시 보존).
 
 ## 명령어
 
@@ -43,67 +41,22 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 공식 사용량 API ── official_fetch.py(유일한 아웃바운드, ≤3s, 백오프 없음, tracked providers만) ─ raw JSON ─ official_parser.py ─→ db.py(official_buckets)
 ```
 
-모듈별 상세는 [tokenomy/CLAUDE.md](tokenomy/CLAUDE.md), 테스트 관행은 [tests/CLAUDE.md](tests/CLAUDE.md), dev 스크립트는 [scripts/CLAUDE.md](scripts/CLAUDE.md) 참고.
-
-- **parser.py / codex_parser.py** — 각 도구 로그를 공통 `UsageRecord`로 정규화. 새 도구 추가는
-  여기에 모듈 하나 더(README의 "Adding a parser" 참고).
-- **official_fetch.py** — 공식 사용량 라이브 취득(유일한 아웃바운드). **tracked_providers**(=활성 AI; 앱 전반 표시 게이트, ADR 0005) 목록에 포함된 provider만 호출한다. 각 CLI의 로컬 OAuth 토큰으로
-  공식 API를 단발 GET(≤3s/provider, 백오프 없음) — **Claude·Codex 모두 만료 임박(now+5분) 선제·401 반응형 1회 retry 능동 갱신**(`ensure_fresh_claude_token`/`refresh_claude_token` `POST https://api.anthropic.com/v1/oauth/token` ADR 0021; `ensure_fresh_codex_token`/`refresh_codex_token` `POST https://auth.openai.com/oauth/token` ADR 0022). 엔드포인트: Claude `https://api.anthropic.com/api/oauth/usage`, Codex `https://chatgpt.com/backend-api/wham/usage`. default-on + throttle(`min_interval_minutes`="자동 갱신 간격", 기본 10). 401→auth_error, 그 외 실패→http_error,
-  **마지막 스냅샷·last_success_at 보존**. PII(토큰/account_id) 미저장 — 헤더에 쓰고 버린다.
-  `refresh_tracked(config, providers=None, manual=False)`가 tracked(또는 지정 providers) 전체를 1회 갱신(예외 삼킴)한다.
-  트리거(ADR 0003): **수동** 갱신 버튼 `POST /official/refresh`(manual=True, throttle bypass) + **자동** 폴링 `GET /official/section`(manual=False, throttle 적용 — 대시보드 `hx-trigger="load, every Nm"`, load가 起動 갱신 겸용). `cmd_ingest`(수집)는 갱신을 트리거하지 않는다. 표준 라이브러리만.
-- **db.py** — SQLite 적재. `messages`(메시지별 토큰/비용, `dedup_key` UNIQUE로 중복 제거),
-  `sessions`(메타 + 요약 + 턴수), `session_day_turns`(세션×날짜 턴 수), `scan_offsets`(증분 스캔용 byte-offset),
-  `official_buckets`(공식 사용량 멀티버킷 USD 스냅샷), `official_fetch_state`(자동 취득 상태), `meta`(key-value — 단가 reprice 핑거프린트 등). 스키마 변경은 `_MIGRATE_COLS`에 ALTER 추가.
-- **aggregate.py** — 공식 사용량 기반 예측(`official_view`+`lens`) · 프로젝트별/세션별 집계 · 사용량 전용 폴백. 월 경계는 **KST** 기준(ts는 UTC라 변환). 공식 데이터가 없으면 로컬 JSONL 기반 사용량 전용 view로 자동 폴백. 집계 함수는 `provider:str|None`(None=DB전체) 외에 키워드 `providers:list[str]|None`(=**활성 AI** 집합)을 받는다 — `provider=None and providers!=None`이면 `WHERE provider IN (...)`로 합산, 빈 집합 `[]`은 `WHERE 0`(빈 결과). 뷰 경계가 활성 집합을 주입하므로 화면의 "전체"는 **DB 전체가 아니라 활성 AI 합산**이다(ADR 0005).
-- **pricing.py + config/pricing.json** — 모델명 매칭으로 토큰→USD. `pricing_overrides`로 사용자 단가 override.
-  `cost_usd`는 (토큰×단가)의 **캐시값** — 단가(pricing.json/overrides)가 바뀌면 `ingest`가 단가
-  핑거프린트로 감지해 기존 행을 **자동 재계산**(`db.maybe_reprice`). 1h 캐시 분리는 `cache_creation_1h`
-  컬럼에 저장해 재계산도 정확. 증분 적재 + dedup 가드는 옛 행을 다시 안 건드리므로 이 경로가 필수.
-- **tokenomy/web/app.py** — FastAPI 라우트(얇게: 라우팅 + 입력검증만). 데이터 조립은 **tokenomy/web/views.py**.
-- **launcher.py** — exe(Windows)·소스(Linux `start_tokenomy.sh`) 공통 진입점. ingest 1회 → 빈 포트 탐색 → uvicorn(127.0.0.1) → pywebview 창 + 트레이 상주(없으면 브라우저 fallback). 미니 전환·`current_view` 시드는 `mini_view_available()`(Windows 전용)로 게이트 — Linux는 큰 창+트레이만(아래 플랫폼 분기 게시).
-- **tokenomy/web/control.py** — 창 복원 신호용 in-process 콜백 레지스트리. launcher(메인 스레드 webview)와 라우트(데몬 스레드)의 순환 import를 끊는다 — launcher가 `set_show_callback`, `/app/show` 라우트가 `request_show`(ADR 0006).
-- **paths.py** — 경로 중앙 해석. 데이터 위치가 실행 형태로 갈린다(아래 게시). `mini_view_available()`(=Windows 전용, ADR 0013)도 여기 — 미니뷰 플랫폼 게이트의 **단일 진실원**(launcher + 웹 사이드바가 공유).
-- **config.py** — 설정 모델(`config/tokenomy.config.json` 로더). `load_config`/`save_config` ·
-  `tracked_providers`(=**활성 AI**; 미설정/None이면 크레덴셜 존재로 시드, 명시적 `[]`는 빈 집합 영속 — 재시드 안 함) · `credit_to_usd`(기본 0.04) ·
-  `official_fetch_settings`(min_interval_minutes) · `pricing_overrides`. **config 키를 찾으면 여기다**
-  (`TOKENOMY_CONFIG`로 경로 override). (구 `budget.py`에서 리네임 — 예산 로직은 제거됨.)
-- **freshness.py** — 수집 신선도. 마지막 ingest 경과 + 디스크상 최고령 raw 파일 나이(vs 30일 cleanup) →
-  ≥25일이면 `warn`. 트리거가 다 실패해도 데이터 유실 위험을 사람에게 노출.
-- **update.py** — 인앱 업데이트 확인(GitHub Releases 최신 태그 vs `__version__`, 1일 1회).
-  실패/오프라인은 조용히 skip(`TOKENOMY_SKIP_UPDATE_CHECK`로 끔). stdlib(urllib)만.
+모듈별 소유("어느 파일이 뭘 하나")와 상세 게시의 정본은 [tokenomy/CLAUDE.md](tokenomy/CLAUDE.md). 테스트 관행은 [tests/CLAUDE.md](tests/CLAUDE.md), dev 스크립트는 [scripts/CLAUDE.md](scripts/CLAUDE.md).
 
 ## 핵심 게시(gotchas)
 
-- **exe는 반드시 `.venv`로 빌드.** 시스템 Python으로 빌드하면 pywebview가 번들에서 빠져
-  네이티브 창 대신 브라우저로 fallback한다. (PyInstaller는 런타임 의존성이 아니라 CI는 별도 설치.)
+전 모듈 공통 불변식만 여기 둔다 — 모듈 한정 게시(플랫폼 분기·토큰 능동 갱신·증분 파싱·dedup·reprice·멀티버킷 상세)는 [tokenomy/CLAUDE.md](tokenomy/CLAUDE.md)가 정본.
+
+- **exe는 반드시 `.venv`로 빌드.** 시스템 Python으로 빌드하면 pywebview가 번들에서 빠져 네이티브 창 대신 브라우저로 fallback한다. (PyInstaller는 런타임 의존성이 아니라 CI는 별도 설치.)
 - **webview 경로는 상주 모드(ADR 0006).** exe에서 창 X = 트레이로 숨김(종료 아님), 트레이 우클릭 "종료"로만 완전 종료. 단일 인스턴스(`data/runtime.json` — 런타임 생성) — 재실행 시 기존 창 복원(`/app/ping` 정체 확인 → `/app/show`). 창 복원 시 ingest 1회 + 조건부 리로드. 트레이는 pystray+Pillow(번들). 브라우저 fallback·개발 모드는 단발 유지.
-- **플랫폼 분기는 좁게 — `mini_view_available()`(Windows 전용)가 단일 게이트(ADR 0013).** Ubuntu 24.04 기본 Wayland(GNOME)는 절대좌표·항상위·프레임리스를 막아 미니 뷰가 깨진다 → Linux에선 미니뷰 버튼(웹 사이드바 `{% if mini_view_available %}`)·전환·복원(launcher `_to_mini` 가드 + `current_view` 시드 clamp)을 모두 비활성. 큰 창+트레이만 남는데 둘 다 Wayland-clean. 트레이 아이콘은 `_tray_icon_name()`이 분기 — Windows `.ico`/Linux `.png`(AppIndicator는 .ico 비호환). **트레이 기동도 분기**(`_launch_window`): Windows는 데몬 스레드 `icon.run()`(Win32 메시지 루프), **Linux는 메인 스레드 `icon.run_detached()`** — pystray(GTK/AppIndicator)와 pywebview(GTK)가 같은 GLib **기본 메인 컨텍스트**를 공유해야 하기 때문. `icon.run()`을 데몬 스레드로 돌리면 두 번째 GLib 루프가 같은 컨텍스트를 두고 메인 스레드 webview와 충돌(`GLib-GIO-CRITICAL: can not acquire the default main context`) → **창이 안 뜸**. `run_detached()`는 루프를 안 만들어 webview의 단일 루프가 창+트레이를 함께 처리한다. **Linux 배포는 소스 실행**(단일 바이너리 없음 — PyInstaller 크로스컴파일 불가, 사용자 증가 시 별건): `install.sh`(apt 의존성 + `venv --system-site-packages`로 apt `python3-gi` 가시화 + pip + `.desktop` 등록) + `start_tokenomy.sh`(launcher 기동) + `tokenomy.desktop`(앱 메뉴 템플릿, `@TOKENOMY_DIR@` 치환). apt 의존성: `python3-gi`·`gir1.2-gtk-3.0`·`gir1.2-webkit2-4.1`·`libwebkit2gtk-4.1-0`(pywebview GTK), `libayatana-appindicator3-1`·`gir1.2-ayatanaappindicator3-0.1`(트레이). 셸 스크립트·`.desktop`은 `.gitattributes`로 **LF 강제**(CRLF면 Ubuntu에서 `#!...\r` bad interpreter). 코어(parser/db/aggregate/official_fetch/pricing)는 OS 중립이라 무변경 — 회귀만 확인.
-- **프라이버시 경계 — 발췌선을 지킬 것.** 파서는 토큰 usage 메타를 추출하고, Codex는
-  세션 식별용으로 **첫 사용자 프롬프트만 120자 발췌**해 `sessions.summary`에 저장한다.
-  그 외 content/프롬프트/대화 본문 전체는 DB에 적재하지 않는다(raw JSONL 원문은 archive.py가
-  약 30일 임시 보존 — 아래 "raw 로그는 약 30일 후 휘발" 게시 참고).
-- **데이터 위치가 실행 형태로 갈림**(`paths.data_dir()`): 소스 실행 → **repo 루트**(`data/`, `config/`),
-  exe → `~/.tokenomy/`. `TOKENOMY_DATA`로 전체 override.
-- **증분 파싱은 byte-offset 기반**(`scan_offsets`). 파일은 append되므로 mtime이 아닌 offset으로
-  신규 라인만 읽는다. 단, ai-title은 세션 종료 시 갱신되어 `parse_titles`가 매번 전체 스캔한다.
-- **raw 로그는 약 30일 후 휘발.** archive.py가 원문을 `data/archive/`에 보존하고,
-  세션 요약(aiTitle)은 휘발 전 `sessions.summary`에 영구 캐시한다.
-- **dedup은 ccusage와 동형.** `(provider, message_id, request_id)` 키 — 리트라이는 별개 과금으로 보존,
-  비sidechain(부모)이 sidechain replay를 이긴다.
-- **리셋 주기는 공식 API `resets_at` 기준.** Claude=월간 리셋(공식 API가 `resets_at` 타임스탬프 제공). Codex(엔터프라이즈)=월간 리셋(월 크레딧 예산, 공식 API가 남은 크레딧·리셋 시각 제공) — 옛 "월÷4 주간 한도(매주 월요일 충전)" 조직 정책은 폐지돼 Claude와 동일한 월 예산이다. 개인 구독제 Codex는 별도로 공식 rate-window(7일 등)를 가진다. 한도·리셋 정보는 모두 공식 취득 스냅샷에서 읽는다 — 수동 예산 입력이나 `budget_start` clamp는 더 이상 없다.
+- **프라이버시 경계 — 발췌선을 지킬 것.** 파서는 토큰 usage 메타만 추출하고, Codex는 세션 식별용으로 **첫 사용자 프롬프트만 120자 발췌**해 `sessions.summary`에 저장한다. 그 외 content/프롬프트/대화 본문 전체는 DB에 적재하지 않는다.
+- **데이터 위치가 실행 형태로 갈림**(`paths.data_dir()`): 소스 실행 → **repo 루트**(`data/`, `config/`), exe → `~/.tokenomy/`. `TOKENOMY_DATA`로 전체 override.
+- **raw 로그는 약 30일 후 휘발.** archive.py가 원문을 `data/archive/`에 보존하고, 세션 요약(aiTitle)은 휘발 전 `sessions.summary`에 영구 캐시한다.
+- **한도·리셋의 정본은 공식 API.** 공식 사용량은 멀티버킷(USD 통일) — 실제 리셋=`resets_at`, 크레딧은 `credit_to_usd`(config, 기본 0.04)로 환산. 수동 예산 입력·`budget_start` clamp는 없다. 버킷 구성·게이지 라벨 규약은 tokenomy/CLAUDE.md 참고.
+- **공식 사용량 취득(=갱신)은 default-on(tracked providers만)·비차단.** 갱신은 **수집(`cmd_ingest`)과 분리** — 수집은 로컬 JSONL 재스캔만, 갱신은 웹 라우트(수동 버튼=throttle bypass, 자동 폴링=`min_interval_minutes` 기본 10 — 대시보드 load가 起動 갱신 겸용)가 담당한다(ADR 0003). `TOKENOMY_SKIP_OFFICIAL_FETCH`로 전체 강제 차단.
 - **웹은 `127.0.0.1`만 바인딩** — 네트워크 노출 금지. 쿼리 파라미터는 화이트리스트 fallback(`provider`/`sort`/`period` 등).
-  사용 이력(로컬)·기준별은 주/월 토글 + 사용자 지정 날짜 구간(`start`/`end`) 조회(`views._resolve_range`).
-- **CSS는 Tailwind(standalone CLI)로 빌드.** `tokenomy/web/static/src/input.css`(토큰+`@layer components`) → `tokenomy/web/static/app.css`(커밋). 런타임/exe는 무빌드 유지. htmx는 `tokenomy/web/static/vendor/`에 vendored(오프라인). Alpine은 실수요 시 추가(현재 미사용).
-- **공식 사용량은 멀티버킷(USD 통일) — Claude 버킷(월간·이벤트·rate-window)/Codex 월간(+개인 구독제 rate-window).** 한도·리셋은 모두 공식 API에서 읽는다(실제 리셋=`resets_at`). 게이지 라벨은 **창 길이 기반**으로 통일: "5시간"·"7일(All)"·"7일(Sonnet)"·"월간"·"이벤트". 옛 Codex "월÷4 주간 추정" 게이지는 로컬 used를 공식 한도에 섞던 위반이라 제거됨(ADR 0012) — 주간 흐름은 공식 글랜스("이번주 $", ADR 0011)가 대신한다. `credit_to_usd`(config, 기본 0.04)로 크레딧 환산, 토큰 cost 경로와 분리. 구 단일값 `official_usage` 테이블은 `_migrate`가 DROP(로컬 단일 사용자라 이관 없음).
-- **공식 사용량 취득(=갱신)은 default-on(tracked providers만)·비차단.** `tracked_providers` 목록에 있는 provider만 공식 API를 호출하고, 첫 실행 시 크레덴셜 파일 존재로 시드한다. 갱신은 **수집(`cmd_ingest`)과 분리** — 수집은 로컬 JSONL 재스캔만, 갱신은 웹 라우트(수동 버튼/자동 폴링)가 담당한다(ADR 0003). 起動 갱신은 대시보드 로드 시 `hx-trigger="load"`가 겸한다(launcher는 수집만 동기 실행).
-  타임아웃 ≤3s, **백오프 없음**(단발 시도, 실패 즉시 포기). `min_interval_minutes`="자동 갱신 간격"(기본 10) — 자동 폴링 주기이자 자동 호출 최소 간격. **수동 갱신은 이 간격을 무시(throttle bypass)**한다. 엔드포인트 quota는 CLI와 공유 — 충돌 못 막음. `TOKENOMY_SKIP_OFFICIAL_FETCH`로 전체 강제 차단 가능.
-- **테스트는 실제 시계·고정 포트를 쓰지 않는다.** 시드·골든 fixture는 전부 2026-06 기준 —
-  view 직접 호출 테스트는 `now_kst` 주입, 라우트(TestClient) 경유는 `test_web.py`의 `_client`가
-  app/views의 datetime을 고정 대역(2026-06-20 12:00 KST, fixture fetched_at 이후·resets_at 이전)으로
-  교체한다. 새 시간 의존 테스트도 6월 시드 + 이 관행을 따를 것(골든 fixture 날짜 변조 금지).
-  포트 테스트는 8765 하드코딩 대신 임시 포트(`bind 0`)를 기준점으로(실행 중인 앱과 충돌).
-- **Claude·Codex 모두 조건부 능동 갱신(ADR 0021/0022).** 만료 임박 시 선제 갱신·GET 401 시 반응형 1회 갱신. **만료 판정**: Claude는 `~/.claude/.credentials.json`의 평문 `expiresAt`(≤ now+5분), Codex는 `~/.codex/auth.json` access token **JWT `exp` 디코드**(`_jwt_exp_ms` — 평문 만료 필드 없음). **자동 안전망**: DB 최근 *해당 provider* 세션 ts가 `now − N시간`(`auto_refresh_safety_hours`, 기본 24h) 이내면 "그 CLI 쓰는 기기"로 보고 skip → 기존 401 안내로 폴백(`_auto_refresh_allowed`가 provider별 판정 — 한 기기에서 claude·codex 섞여도 각각 옳게 게이팅). `auto_refresh_token: "auto"(기본)|"always"(안전망 무시)|"off"`는 **두 provider 공용**(provider별 모드 플래그 없음). write-back = temp→atomic `os.replace`(`_atomic_write_json` 공용)·rotation 정확(두 토큰 다 매 호출 회전 → 새 refresh token 기록 필수)·기존 키 보존(Codex는 account_id 보존·재유도 안 함, `last_refresh` 갱신)·토큰파일 0600 생성(POSIX 권한; Windows는 상위 디렉터리 ACL 상속)·토큰 DB 미저장·self-race `threading.Lock`. **Codex API-key 모드(`auth_mode != chatgpt`)나 refresh_token 부재는 무손상 no-op** → 기존 "Codex CLI 1회 실행" 안내로 폴백.
+- **CSS는 Tailwind(standalone CLI)로 빌드.** `tokenomy/web/static/src/input.css`(토큰+`@layer components`) → `tokenomy/web/static/app.css`(커밋). 런타임/exe는 무빌드 유지.
+- **테스트는 실제 시계·고정 포트를 쓰지 않는다.** 시드·골든 fixture는 전부 2026-06 기준 — 시계 고정·동적 포트 관행 상세는 [tests/CLAUDE.md](tests/CLAUDE.md).
 
 ## 환경변수
 

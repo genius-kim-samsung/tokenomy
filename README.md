@@ -178,16 +178,39 @@ git pull
 
 ## 공식 사용량 자동 취득
 
-`tracked_providers`(활성 AI)에 등록된 provider별로 로컬 OAuth 토큰을 읽기 전용으로 사용해
+`tracked_providers`(활성 AI)에 등록된 provider별로 로컬 OAuth 토큰을 사용해
 공식 API를 단발 호출(≤3s, 백오프 없음)하고, Claude 월 한도·Codex 월 크레딧 한도 등 공식 버킷을 미러링한다.
-토큰은 읽기만 하고 refresh하지 않으며, **사용량 수치만 저장**한다(토큰·계정 식별자 미저장 —
-요청 헤더에만 쓰고 버린다).
+**사용량 수치만 저장**한다(토큰·계정 식별자 미저장 — 요청 헤더에만 쓰고 버린다).
+토큰이 만료 임박이거나 호출이 401을 받으면 **조건부로 능동 갱신**해 크레덴셜 파일에 안전하게(원자적 교체)
+되써 준다 — 해당 CLI를 최근 쓴 기기에서는 충돌을 피해 갱신하지 않는다
+(`auto_refresh_token`: `auto`(기본) / `always` / `off`).
 
 - **갱신은 수집(ingest)과 분리**된다. 수집은 로컬 JSONL 재스캔만 하고, 공식 갱신은 대시보드가
   담당한다 — 페이지를 열면 자동 폴링(`min_interval_minutes` 간격)하고, 카드의 **새로고침 버튼**은
   간격을 무시하고 즉시 갱신한다.
 - 공식 데이터를 한 번도 못 얻은 경우 **사용량 전용 view**로 폴백한다.
 - 환경변수 `TOKENOMY_SKIP_OFFICIAL_FETCH`로 전체 강제 차단 가능(오프라인/CI 용).
+
+## 아키텍처
+
+단방향 데이터 파이프라인 — 로컬 로그와 공식 API가 SQLite에서 만나 집계·화면으로 흐른다:
+
+```mermaid
+flowchart LR
+    CL["~/.claude/projects/**/*.jsonl"] --> PA["parser.py"]
+    CX["~/.codex/sessions/**/rollout-*"] --> CP["codex_parser.py"]
+    CL -.-> AR["archive.py (raw 약 30일 보존)"]
+    CX -.-> AR
+    PA --> UR(["UsageRecord"])
+    CP --> UR
+    UR --> DB[("db.py — SQLite")]
+    API["공식 사용량 API"] --> OF["official_fetch.py (유일한 아웃바운드)"]
+    OF --> OP["official_parser.py"]
+    OP --> DB
+    DB --> AG["aggregate.py"]
+    AG --> CLI["cli.py (report)"]
+    AG --> WEB["web/ (FastAPI + Jinja2)"]
+```
 
 ## 다른 도구용 파서 추가
 
