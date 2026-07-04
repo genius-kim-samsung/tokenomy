@@ -11,11 +11,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 from tokenomy.pricing import find_rate, _is_version_boundary
+from tokenomy.domain import is_pooled_kind
 
 KST = timezone(timedelta(hours=9))
-
-# 합산/탭바가 도는 provider 목록. 3번째 AI 추가 시 여기 + 파서 + 단가만 보강.
-PROVIDERS = ("claude", "codex")
 
 # 효율 코치 휴리스틱 임계값 — 실데이터 캘리브레이션 전 튜닝값(단정 금지, 신호로만 사용)
 INSIGHT_CACHE_READ_MIN = 0.30   # 월 cache_read 비율이 이 미만이면 경고
@@ -582,15 +580,9 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
     )
 
 
-# 큐레이션 없이도 통합 풀에 자동 포함되는 **안정 키** 종류(ADR 0016). 회전 코드네임 달러
-# 크레딧(event_credit)·promo·rate_window는 제외 — 카탈로그/오버라이드 pooled=True로만 옵트인.
-# 풀링 결정의 모양 기본값 단일 진실원(config.resolve_bucket_curation도 이걸 참조).
-POOL_DEFAULT_KINDS = ("monthly_limit", "codex_monthly")
-
-
 def _default_is_pooled(provider: str, raw_key: str, bucket_kind: str) -> bool:
     """큐레이션 미주입 시 풀 멤버십 모양 기본값 — 안정 월 한도 키만 풀(event_credit 제외)."""
-    return bucket_kind in POOL_DEFAULT_KINDS
+    return is_pooled_kind(bucket_kind)
 
 
 def _resolve_is_pooled(is_pooled):
@@ -810,13 +802,13 @@ def this_month_spend(conn, providers: list[str], now_kst: datetime, *,
     "지금 얼마 남았나(위치)"가 아니라 "이번 달에 얼마 흘렀나(흐름)"를 낸다.
     [주기형 버킷]=라이브 used(월 리셋이라 누적이 곧 이번달 — 월초 경계 스냅샷 불필요),
     [만료형 버킷]=월초~now 델타(만료일까지 누적돼 라이브 used엔 지난달분이 섞이므로).
-    판별은 bucket_kind(주기형=POOL_DEFAULT_KINDS). 반환 (usd, expiring_partial):
+    판별은 bucket_kind(주기형=is_pooled_kind). 반환 (usd, expiring_partial):
     expiring_partial=만료형이 풀에 있으나 월초 경계 미관측이라 그 몫이 빠졌는가(카드/공유 캐비엇).
     풀 기여가 전혀 없으면 (None, False).
     """
     ip = _resolve_is_pooled(is_pooled)
-    is_periodic = lambda p, rk, bk: ip(p, rk, bk) and bk in POOL_DEFAULT_KINDS       # noqa: E731
-    is_expiring = lambda p, rk, bk: ip(p, rk, bk) and bk not in POOL_DEFAULT_KINDS   # noqa: E731
+    is_periodic = lambda p, rk, bk: ip(p, rk, bk) and is_pooled_kind(bk)         # noqa: E731
+    is_expiring = lambda p, rk, bk: ip(p, rk, bk) and not is_pooled_kind(bk)     # noqa: E731
     providers = list(providers)
 
     # 주기형 이번달 = 라이브 위치(최신 스냅샷) — 월 리셋이라 누적이 곧 이번달. 위치(pool_used)와 동형.

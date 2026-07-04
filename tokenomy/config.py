@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 
+from tokenomy.domain import PROVIDERS, is_pooled_kind
 from tokenomy.paths import creds_present
 
 
@@ -148,7 +149,6 @@ def tracked_providers(config: dict) -> list[str]:
     키 자체가 없거나 None(미설정)이면 크레덴셜 파일이 있는 provider로 시드한다
     (무설정 첫 실행이 대개 정답). 전부 끄기를 원하면 UI에서 모두 해제하면 된다.
     """
-    from tokenomy.aggregate import PROVIDERS
     raw = config.get("tracked_providers")
     if isinstance(raw, list):                          # 명시 설정(빈 리스트 포함) → 그대로 정규화
         return [p for p in PROVIDERS if p in raw]       # [] → [] 영속(재시드 안 함)
@@ -201,9 +201,8 @@ def resolve_bucket_curation(provider: str, raw_key: str, bucket_kind: str,
     카탈로그 > 모양 기본값. 모양 기본값: hidden=False(표시), pooled=안정 월 한도 키만 True
     (회전 코드네임 달러 크레딧은 제외 — opt-in), label=None(parser 라벨 유지).
     """
-    from tokenomy.aggregate import POOL_DEFAULT_KINDS
     result = {"hidden": False,
-              "pooled": bucket_kind in POOL_DEFAULT_KINDS,
+              "pooled": is_pooled_kind(bucket_kind),
               "label": None}
     key = f"{provider}:{raw_key}"
     for layer in (catalog, overrides):          # 카탈로그 → 오버라이드(나중 레이어가 이김)

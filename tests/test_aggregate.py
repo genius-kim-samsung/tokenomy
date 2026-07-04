@@ -398,11 +398,6 @@ def test_session_context_missing():
     assert session_context(conn, "nope") is None
 
 
-def test_providers_constant():
-    from tokenomy.aggregate import PROVIDERS
-    assert PROVIDERS == ("claude", "codex")
-
-
 def test_by_project_combines_providers_when_none():
     conn = connect(":memory:")
     _insert(conn, "2026-06-05T00:00:00Z", 5.0, project="/p", session="a", provider="claude")

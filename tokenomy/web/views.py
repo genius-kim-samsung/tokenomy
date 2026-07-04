@@ -5,8 +5,9 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
+from tokenomy.domain import PROVIDERS
 from tokenomy.aggregate import (
-    KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup, PeriodSpend,
+    KST, DIM_COLUMNS, DateGroup, DaySessionRow, FolderGroup, PeriodSpend,
     last_message_ts, by_day_session, by_dimension, by_project, by_session,
     forecast_month_line, daily_series, pool_history, pool_daily_history, pool_hourly_history,
     pool_snapshots_by_day,
