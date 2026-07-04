@@ -22,6 +22,10 @@ REPO = Path(__file__).resolve().parent.parent
 ALLOWLIST = {
     "data/runtime.json",            # launcher가 실행 중에만 쓰는 단일 인스턴스 락
     "config/tokenomy.config.json",  # 사용자 로컬 설정 — example만 추적
+    # 에이전트 운영 문서 — docs/는 로컬 전용(gitignore)이라 git 목록엔 없지만 디스크엔 존재.
+    "docs/agents/issue-tracker.md",
+    "docs/agents/triage-labels.md",
+    "docs/agents/domain.md",
 }
 
 # 경로 참조 추출 — 확장자 alternation은 긴 것 우선(.json이 .js로 절단되는 오탐 방지),

@@ -75,3 +75,17 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 - docstring·주석은 한국어. 모든 모듈 상단에 `from __future__ import annotations`.
 - 계층 분리 유지: 라우트(app.py, 얇게) ↔ 화면 조립(views.py) ↔ 집계(aggregate.py) ↔ 적재(db.py).
 - stdlib 우선(sqlite3/json/pathlib/datetime). 런타임 의존성은 requirements.txt에 최소로.
+
+## Agent skills
+
+### Issue tracker
+
+이슈는 GitHub Issues(`genius-kim-samsung/tokenomy`)에 산다 — `gh` CLI 사용. 외부 PR은 triage 표면 아님. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+canonical 5역할을 기본 문자열 그대로 사용(`needs-triage`/`needs-info`/`ready-for-agent`/`ready-for-human`/`wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+single-context — root에 `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
