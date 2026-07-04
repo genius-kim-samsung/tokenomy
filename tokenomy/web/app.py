@@ -10,7 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
-from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts, official_view, combined_forecast
+from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
+from tokenomy.forecast import outlook
 from tokenomy.config import ACCOUNT_MODES, account_mode, credit_to_usd as _credit_to_usd, debug_mode, forecast_settings, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
 from tokenomy.db import connect
@@ -20,7 +21,7 @@ from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.update import check_update
 from tokenomy.web import control
 from tokenomy.web.views import (
-    _curation_for, coverage_card_context, dimension_context, history_context, mini_view_context,
+    coverage_card_context, dimension_context, history_context, mini_view_context,
     official_history_context, official_raw_context, official_section_context,
     overview_context, session_context, settings_provider_toggles, sidebar_freshness,
 )
@@ -30,18 +31,13 @@ _BASE = resource_path("tokenomy/web")
 
 def _nav_context(request: Request) -> dict:
     """모든 템플릿에 내비 플래그 주입(ADR 0010). 사용 이력(공식) 링크는 소진형 풀이
-    있을 때만 — 페이지의 has_pool과 동일 로직(combined_forecast is not None)이라 일관.
+    있을 때만 — 페이지의 has_pool과 동일하게 outlook(전망 조립 정본)으로 판정해 일관.
     실패 시 보수적으로 노출(빈 페이지가 죽은 숨김보다 안전)."""
     try:
         conn = connect()
         config = load_config()
         now = datetime.now(KST)
-        active = tracked_providers(config)
-        ctu = _credit_to_usd(config)
-        weeks = forecast_settings(config)["rate_window_weeks"]
-        _, is_pooled = _curation_for(config)
-        fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled)
-                                        for p in active], now, weeks, is_pooled=is_pooled)
+        fobj = outlook(conn, config, now)
         return {"show_official_history": fobj is not None, "debug_mode": debug_mode(config)}
     except Exception:
         return {"show_official_history": True, "debug_mode": False}
