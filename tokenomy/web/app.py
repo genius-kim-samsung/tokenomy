@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
-from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, parse_ts
+from tokenomy.aggregate import KST, DIM_COLUMNS, PROVIDERS, last_message_ts, parse_ts
 from tokenomy.forecast import outlook
 from tokenomy.config import ACCOUNT_MODES, account_mode, credit_to_usd as _credit_to_usd, debug_mode, forecast_settings, load_config, official_fetch_settings, tracked_providers, save_config
 from tokenomy.cli import cmd_ingest
@@ -365,7 +365,7 @@ def mini_section(request: Request):
 def settings_get(request: Request, saved: int = 0):
     config = load_config()
     conn = connect()
-    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    last = last_message_ts(conn)
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
     ofs = official_fetch_settings(config)
     tracked = tracked_providers(config)
@@ -379,7 +379,7 @@ def settings_get(request: Request, saved: int = 0):
          "provider_toggles": settings_provider_toggles(config),
          "saved": bool(saved),
          "active_nav": "settings", "update_tag": check_update(conn),
-         "last_ts": last["t"] if last and last["t"] else None,
+         "last_ts": last,
          "last_ingest_at": sidebar_freshness(conn),
          **coverage_card_context(conn, pricing)},
     )

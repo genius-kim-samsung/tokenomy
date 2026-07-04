@@ -2232,3 +2232,16 @@ def test_settings_invalid_auto_refresh_token_falls_back_to_auto(tmp_path, monkey
     assert r.status_code == 303
     saved = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert saved["official_fetch"]["auto_refresh_token"] == "auto"
+
+
+def test_web_layer_has_no_raw_max_ts_sql():
+    """계층 가드: 원시 ts 조회는 aggregate.last_message_ts로 봉합 — web엔 raw SQL 금지."""
+    for mod in (views_module, app_module):
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert "SELECT MAX(ts)" not in src, f"{mod.__name__}에 raw MAX(ts) SQL 잔존"
+
+
+def test_views_does_not_import_private_provider_where():
+    """계층 가드: views는 aggregate private 심볼(_provider_where)을 끌어쓰지 않는다."""
+    src = Path(views_module.__file__).read_text(encoding="utf-8")
+    assert "_provider_where" not in src

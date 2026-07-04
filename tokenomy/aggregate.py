@@ -141,6 +141,14 @@ def _provider_where(provider: str | None, providers: list[str] | None) -> tuple[
     return "", []
 
 
+def last_message_ts(conn, provider: str | None = None,
+                    providers: list[str] | None = None) -> str | None:
+    """messages의 최신 ts(ISO 문자열). provider/providers 필터는 집계 규약과 동일. 없으면 None."""
+    where, params = _provider_where(provider, providers)
+    row = conn.execute("SELECT MAX(ts) t FROM messages" + where, params).fetchone()
+    return row["t"] if row and row["t"] else None
+
+
 def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime,
                 *, providers: list[str] | None = None) -> list:
     cols = ("SELECT ts, cost_usd, priced, session_id, project, model, "

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup, PeriodSpend,
-    _provider_where, by_day_session, by_dimension, by_project, by_session,
+    last_message_ts, by_day_session, by_dimension, by_project, by_session,
     forecast_month_line, daily_series, pool_history, pool_daily_history, pool_hourly_history,
     pool_snapshots_by_day,
     official_period_glance,
@@ -46,10 +46,7 @@ def _remediation(provider: str, status: str | None) -> str | None:
 
 
 def _provider_has_data(conn, provider: str) -> bool:
-    row = conn.execute(
-        "SELECT MAX(ts) t FROM messages WHERE provider=?", (provider,)
-    ).fetchone()
-    return row is not None and row["t"] is not None
+    return last_message_ts(conn, provider) is not None
 
 
 def _filter_options(active: list[str]) -> list[dict]:
@@ -711,9 +708,7 @@ def period_card_context(conn, config: dict, now_kst: datetime | None = None) -> 
 
     # 로컬 모드(구독, 또는 엔터지만 공식 풀 없음 → 강등) — 이 기기·공개 단가 환산.
     date_label = f"{now.astimezone(KST):%Y-%m-%d}"
-    where, params = _provider_where(None, active)
-    last = conn.execute("SELECT MAX(ts) t FROM messages" + where, params).fetchone()
-    if last is None or last["t"] is None:
+    if last_message_ts(conn, None, active) is None:
         return {"mode": "local", "source_label": _LOCAL_SOURCE, "disclaimer": _LOCAL_DISCLAIMER,
                 "has_data": False, "periods": [], "partial_warning": False,
                 "share_text": None, "date_label": date_label}
@@ -845,9 +840,8 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     trend_totals = bands[-1]["top"] if bands else [None for _ in daily]
 
     # has_data·last_ts도 활성 기준 — 끈 provider만 데이터 있으면 빈 상태로 안내(일관).
-    where, params = _provider_where(None, active)
-    last = conn.execute("SELECT MAX(ts) t FROM messages" + where, params).fetchone()
-    has_data = last is not None and last["t"] is not None
+    last = last_message_ts(conn, None, active)
+    has_data = last is not None
     token_comp = token_composition(conn, None, *month_bounds(now), providers=active)
 
     # 라벨 적응(ADR 0005): 활성 ≥2면 "통합/전 AI 합산", 1개면 수식어 떼고 provider명.
@@ -883,7 +877,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "daily_labels": [p.day for p in daily],
         "trend_series": trend_series,
         "trend_totals": trend_totals,
-        "last_ts": last["t"] if has_data else None,
+        "last_ts": last,
         "last_ingest_at": sidebar_freshness(conn),
         "token_comp": token_comp,
         "has_data": has_data,
@@ -953,7 +947,7 @@ def dimension_context(conn, anchor_kst: datetime, provider: str, *,
         for r in rows
     ]
     split = sidechain_split(conn, provider or None, s, nxt, providers=pfilter)
-    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    last = last_message_ts(conn)
     return {
         "active_nav": "analysis", "user_label": user_label(config),
         "provider": provider, "dim": dim, "dim_label": DIM_LABELS[dim],
@@ -968,7 +962,7 @@ def dimension_context(conn, anchor_kst: datetime, provider: str, *,
         "next_anchor": nxt.strftime("%Y-%m-%d"),
         "has_next": nxt <= now,
         "month": now.strftime("%Y-%m"),
-        "last_ts": last["t"] if last and last["t"] else None,
+        "last_ts": last,
         "last_ingest_at": sidebar_freshness(conn),
     }
 
@@ -1129,7 +1123,7 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
     config = load_config()
     active = tracked_providers(config)
     provider = _active_provider(provider, active)   # 비활성 provider 요청 → 전체 폴백
-    last = conn.execute("SELECT MAX(ts) t FROM messages").fetchone()
+    last = last_message_ts(conn)
     s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
     # provider 지정 → 단일, "" → 활성 합산(providers=active)
     rows = by_day_session(conn, provider or None, start=s, nxt=nxt,
@@ -1145,7 +1139,7 @@ def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
         "anchor": anchor_kst.strftime("%Y-%m-%d"),
         "start": start or "", "end": end or "",
         "month": now.strftime("%Y-%m"),
-        "last_ts": last["t"] if last and last["t"] else None,
+        "last_ts": last,
         "last_ingest_at": sidebar_freshness(conn),
         "period_label": label,
         "prev_anchor": (s - timedelta(days=1)).strftime("%Y-%m-%d"),

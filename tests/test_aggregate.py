@@ -2766,3 +2766,20 @@ def test_official_span_spend_none_when_end_gap():
     _seed_span_snap(conn, "claude", _Dt(9, 2), 12.0)     # end 10h 전이 마지막
     assert official_span_spend(conn, ["claude"], _Dt(9, 0), _Dt(9, 12),
                                max_gap_minutes=180) is None
+
+
+def test_last_message_ts_filters_by_provider_and_providers():
+    """messages 최신 ts를 provider/providers 집계 규약대로 필터한다."""
+    from tokenomy.aggregate import last_message_ts
+    conn = connect(":memory:")
+    assert last_message_ts(conn) is None                       # 빈 DB → None
+
+    _insert(conn, "2026-06-10T10:00:00Z", 1.0, session="a", provider="claude")
+    _insert(conn, "2026-06-15T10:00:00Z", 1.0, session="b", provider="claude")
+    _insert(conn, "2026-06-20T10:00:00Z", 1.0, session="c", provider="codex")
+
+    assert last_message_ts(conn) == "2026-06-20T10:00:00Z"                        # 무필터 = 전체 최대
+    assert last_message_ts(conn, provider="claude") == "2026-06-15T10:00:00Z"     # 단일 provider
+    assert last_message_ts(conn, providers=["codex"]) == "2026-06-20T10:00:00Z"   # 활성 집합
+    assert last_message_ts(conn, providers=["claude", "codex"]) == "2026-06-20T10:00:00Z"
+    assert last_message_ts(conn, providers=[]) is None                           # 빈 활성 = WHERE 0
