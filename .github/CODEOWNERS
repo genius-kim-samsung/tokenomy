@@ -1,0 +1,30 @@
+# CODEOWNERS — PR 자동 리뷰 요청 대상.
+# 단일 유지보수자 레포이므로 기본 소유자는 전역 1명이다. 아래 경로별 항목은
+# "특히 신중히 리뷰할 구역"을 문서화하는 용도 — 협업자 추가 시에도 그대로 유효.
+# 형식: <path-glob>  <@owner>  (마지막으로 매칭된 규칙이 이긴다)
+
+# 기본 소유자 — 모든 변경
+*                               @genius-kim-samsung
+
+# 컨텍스트 문서 — stale 참조 머지 방지(context-check CI와 연동)
+/CLAUDE.md                      @genius-kim-samsung
+/AGENTS.md                      @genius-kim-samsung
+/README.md                      @genius-kim-samsung
+/tokenomy/CLAUDE.md             @genius-kim-samsung
+/tests/CLAUDE.md                @genius-kim-samsung
+/scripts/CLAUDE.md              @genius-kim-samsung
+
+# 프라이버시 경계 — 파서는 토큰 메타 + 첫 프롬프트 120자 발췌만 저장(본문 미적재)
+/tokenomy/parser.py             @genius-kim-samsung
+/tokenomy/codex_parser.py       @genius-kim-samsung
+/tokenomy/archive.py            @genius-kim-samsung
+
+# 유일한 아웃바운드 + 단가 정본 — 값·엔드포인트 변경 신중
+/tokenomy/official_fetch.py     @genius-kim-samsung
+/tokenomy/pricing.py            @genius-kim-samsung
+/config/                        @genius-kim-samsung
+
+# 릴리스·CI 게이트 — __version__/태그 일치, 경로 검증
+/.github/                       @genius-kim-samsung
+/tokenomy/__init__.py           @genius-kim-samsung
+/tokenomy.spec                  @genius-kim-samsung

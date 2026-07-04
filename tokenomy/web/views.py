@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from tokenomy.aggregate import (
     KST, DIM_COLUMNS, PROVIDERS, DateGroup, DaySessionRow, FolderGroup, PeriodSpend,
     _provider_where, by_day_session, by_dimension, by_project, by_session,
-    combined_forecast, daily_series, pool_history, pool_daily_history, pool_hourly_history,
+    forecast_month_line, daily_series, pool_history, pool_daily_history, pool_hourly_history,
     pool_snapshots_by_day,
     official_period_glance,
     insights, month_bounds, month_spend, official_span_spend, official_view, parse_ts,
@@ -16,12 +16,13 @@ from tokenomy.aggregate import (
     stacked_trend, token_composition,
 )
 from tokenomy.config import (
-    account_mode, bucket_curation_resolver, credit_to_usd, forecast_settings, load_config,
+    account_mode, bucket_curation_resolver, load_config,
     official_fetch_settings, onboarding_pending, tracked_providers, user_label,
 )
 from tokenomy.db import (
     get_fetch_state, get_meta, get_official_raw, list_official_raw, official_buckets_at,
 )
+from tokenomy.forecast import outlook, forecast_params
 from tokenomy.freshness import LAST_INGEST_KEY
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.web import control
@@ -123,16 +124,10 @@ def forecast_chart_data(fc, daily, now_kst: datetime) -> dict:
         return {"limit": None, "line": None}
     if fc.daily_rate_usd is None or fc.is_exhausted:
         return {"limit": fc.limit_usd, "line": None}
-    n = len(daily)
-    line = [None] * n
-    today_idx = now_kst.day - 1
-    if 0 <= today_idx < n:
-        line[today_idx] = fc.used_usd
-        bd = 0
-        for i in range(today_idx + 1, n):
-            if date(now_kst.year, now_kst.month, daily[i].day).weekday() < 5:
-                bd += 1
-            line[i] = round(fc.used_usd + fc.daily_rate_usd * bd, 4)
+    # 투영 라인은 aggregate.forecast_month_line 정본에서 읽어 daily 축(일 번호)에 매핑만 한다(순수 표현).
+    # hero(combined_forecast)와 같은 walk라 라인이 한도선과 만나는 지점이 소진 예상일과 구성상 일치.
+    day_used = forecast_month_line(fc.used_usd, fc.daily_rate_usd, now_kst)
+    line = [day_used.get(d.day) for d in daily]
     return {"limit": fc.limit_usd, "line": line}
 
 
@@ -394,19 +389,17 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[
     순서는 PROVIDERS 고정(claude→codex→…). 새 provider는 PROVIDERS·_PROVIDER_META만 늘리면 된다.
     """
     now = now_kst or datetime.now(KST)
-    ctu = credit_to_usd(config)
-    weeks = forecast_settings(config)["rate_window_weeks"]
-    max_gap = official_fetch_settings(config)["min_interval_minutes"] * 3
-    active = set(tracked_providers(config))
-    curation, is_pooled = _curation_for(config)
+    fp = forecast_params(config)              # config 팬아웃 정본(ctu·weeks·max_gap·is_pooled)
+    curation, _ = _curation_for(config)       # 표시용 hidden/label(숫자 팬아웃은 fp)
+    active = set(fp.active)
     cards: list[dict] = []
     for p in PROVIDERS:
         if p not in active:
             continue
-        view = official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled,
-                             max_gap_minutes=max_gap)
+        view = official_view(conn, p, now, fp.ctu, fp.weeks, is_pooled=fp.is_pooled,
+                             max_gap_minutes=fp.max_gap)
         cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now,
-                                    curation=curation, is_pooled=is_pooled))
+                                    curation=curation, is_pooled=fp.is_pooled))
     return cards
 
 
@@ -587,18 +580,16 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
     게이트는 view.pool_limit_usd(글랜스·전망 히어로와 동일 — 개인 구독제·온보딩은 None).
     """
     now = now_kst or datetime.now(KST)
-    ctu = credit_to_usd(config)
-    weeks = forecast_settings(config)["rate_window_weeks"]
-    interval = official_fetch_settings(config)["min_interval_minutes"]
-    active = set(tracked_providers(config))
-    _, is_pooled = _curation_for(config)
+    fp = forecast_params(config)              # config 팬아웃 정본(ctu·weeks·max_gap·is_pooled)
+    active = set(fp.active)
+    is_pooled = fp.is_pooled
     rows: list[ShareRow] = []
     pool_providers: list[str] = []
     for p in PROVIDERS:
         if p not in active:
             continue
-        view = official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled,
-                             max_gap_minutes=interval * 3)
+        view = official_view(conn, p, now, fp.ctu, fp.weeks, is_pooled=is_pooled,
+                             max_gap_minutes=fp.max_gap)
         if view.pool_limit_usd is None:
             continue
         pool_providers.append(p)
@@ -612,7 +603,7 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
         # 이번달 = 흐름(주기형 라이브 + 만료형 월초 델타) — 라이브 누적을 그대로 쓰면 만료형 크레딧의
         # 지난달분이 이번달로 샌다(ADR 0024). 만료형 경계 미관측 시 그 몫만 미집계(month_partial).
         month, month_partial = this_month_spend(conn, [p], now,
-                                                max_gap_minutes=interval * 3, is_pooled=is_pooled)
+                                                max_gap_minutes=fp.max_gap, is_pooled=is_pooled)
         rows.append(ShareRow(label=meta["label"], today=_round_spend(g.today),
                              week=_round_spend(g.week), month_usd=month,
                              month_partial=month_partial, util_pct=util))
@@ -818,16 +809,10 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     cov = pricing_coverage(conn, pricing, providers=active)
     coach = insights(conn, now, None, cov=cov, providers=active)
     daily = daily_series(conn, None, now, providers=active)
-    # 통합 월말 전망 — 활성(ADR 0005) provider의 공식 뷰로 통합 풀 구성.
-    # 화면의 "전체"가 곧 활성 합산이므로 forecast 풀도 활성만 본다(combined_forecast가 한도 보유분만 필터).
-    ctu = credit_to_usd(config)
-    weeks = forecast_settings(config)["rate_window_weeks"]
-    max_gap = official_fetch_settings(config)["min_interval_minutes"] * 3
-    _, is_pooled = _curation_for(config)
-    forecast_views = [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled,
-                                    max_gap_minutes=max_gap) for p in active]
-    forecast_obj = combined_forecast(conn, forecast_views, now, weeks, is_pooled=is_pooled,
-                                     max_gap_minutes=max_gap)
+    # 통합 월말 전망 — 조립 정본(outlook, forecast.py). 활성 AI 팬아웃·config 해석·투영이 인터페이스 뒤.
+    # 화면의 "전체"=활성 합산이므로 forecast 풀도 활성만 본다(combined_forecast가 한도 보유분만 필터).
+    fp = forecast_params(config)              # 실제선(pool_history)에 is_pooled·max_gap 재사용
+    forecast_obj = outlook(conn, config, now)
     # A군 모드 게이트(ADR 0015): 공식(엔터) vs 로컬(개인구독제). 헤드라인·히어로·추세 오버레이를 가른다.
     a_official = _a_zone_official(config, forecast_obj)
     # 이번 달 총지출 헤드라인 — 엔터=공식 풀 used(계정 전체·실청구), 개인구독제/로컬=이 기기 추정.
@@ -838,7 +823,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         fc_chart = forecast_chart_data(forecast_obj, daily, now)
         # 공식 사용량 스냅샷 이력 → 전망 차트 실제 과거 실선(ADR 0007). 활성 USD 풀만.
         # max_gap = 자동 갱신 간격 ×3(그보다 긴 공백은 수집 단절로 보아 선을 끊는다).
-        pool_hist = pool_history(conn, active, max_gap_minutes=interval * 3, is_pooled=is_pooled)
+        pool_hist = pool_history(conn, active, max_gap_minutes=fp.max_gap, is_pooled=fp.is_pooled)
         forecast_actual = pool_history_to_daily(pool_hist, [p.day for p in daily], now)
     else:
         # 로컬 A군 — 한도·예상선·실제 공식선 없는 순수 로컬 추세(개인구독제엔 한도가 없다).
@@ -1215,15 +1200,10 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
     s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
     is_hourly = (period == "day" and not custom)    # 시간대별 렌더는 일 토글 한정(ADR 0019)
 
-    # 소진형 풀 판정 + 한도선 값 — combined_forecast가 None이면 소진형 풀 없음(빈 상태).
-    ctu = credit_to_usd(config)
-    weeks = forecast_settings(config)["rate_window_weeks"]
-    max_gap = official_fetch_settings(config)["min_interval_minutes"] * 3
-    _, is_pooled = _curation_for(config)
-    fobj = combined_forecast(conn, [official_view(conn, p, now, ctu, weeks, is_pooled=is_pooled,
-                                                  max_gap_minutes=max_gap)
-                                    for p in active], now, weeks, is_pooled=is_pooled,
-                             max_gap_minutes=max_gap)
+    # 소진형 풀 판정 + 한도선 값 — outlook(전망 조립 정본)이 None이면 소진형 풀 없음(빈 상태).
+    fp = forecast_params(config)              # 아래 pool_history 계열에 is_pooled 재사용
+    fobj = outlook(conn, config, now)
+    is_pooled = fp.is_pooled
     has_pool = fobj is not None
     pool_limit = fobj.limit_usd if fobj else None
     pool_providers = fobj.providers if fobj else active

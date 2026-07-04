@@ -485,6 +485,26 @@ def official_daily_rate(conn, providers: list[str], now_kst: datetime, weeks: in
     return _official_mtd_rate(now_kst, flow)
 
 
+def forecast_month_line(used_usd: float, daily_rate_usd: float,
+                        now_kst: datetime) -> dict[int, float]:
+    """오늘~월말 각 달력일의 투영 used(월간 KST) — key=일(1..말일), 값=그 날까지 예상 used.
+
+    투영 규칙의 **정본 1곳**: 오늘=used anchor, 이후 영업일마다 daily_rate 누적(주말 flat).
+    오늘 이전 날은 넣지 않는다(차트가 None으로 끊음). 히어로 월말값(combined_forecast)과
+    차트 라인(forecast_chart_data)이 이 한 walk를 공유해 구성상 일치한다 — 영업일/주말 규칙을
+    바꿔도 한 곳만 고치면 된다. rate None·소진 여부 판단은 호출자 몫(여긴 순수 산술).
+    """
+    _, next_month = month_bounds(now_kst)
+    month_end_day = (next_month - timedelta(days=1)).day
+    out: dict[int, float] = {now_kst.day: round(used_usd, 4)}
+    bd = 0
+    for day in range(now_kst.day + 1, month_end_day + 1):
+        if date(now_kst.year, now_kst.month, day).weekday() < 5:
+            bd += 1
+        out[day] = round(used_usd + daily_rate_usd * bd, 4)
+    return out
+
+
 def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
                       weeks: int = 2, *, is_pooled=None,
                       max_gap_minutes: int | None = None) -> CombinedForecast | None:
@@ -523,7 +543,8 @@ def combined_forecast(conn, views: list[OfficialView], now_kst: datetime,
     projected_used = projected_remaining = None
     exhaust_date = None
     if daily_rate is not None and not is_exhausted:
-        projected_used = round(used + daily_rate * bdays_remaining, 4)
+        # 투영 정본은 forecast_month_line(차트 라인과 동일 walk) — 월말값이 예상 used.
+        projected_used = forecast_month_line(used, daily_rate, now_kst)[month_end.day]
         projected_remaining = round(limit - projected_used, 4)
         if projected_used > limit and daily_rate > 0:
             need = math.ceil((limit - used) / daily_rate)

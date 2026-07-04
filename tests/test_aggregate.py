@@ -11,7 +11,7 @@ from tokenomy.aggregate import (
     OfficialView,
     parse_ts, period_bounds, session_detail, sidechain_split,
     SidechainSplit, stacked_trend, token_composition, pricing_coverage, CoverageReport,
-    combined_forecast, CombinedForecast,
+    combined_forecast, CombinedForecast, forecast_month_line,
     this_month_spend, official_daily_rate,
     _trailing_business_days, trailing_window_spend,
     pool_used_history, _segment_points, pool_history, pool_daily_history,
@@ -1489,6 +1489,22 @@ def test_insights_no_budget_overrun_card():
     # bd 인자 없음 — TypeError 안 나야 함(시그니처 확인)
     texts = " ".join(c.text for c in cards)
     assert "한도 초과" not in texts and "월말" not in texts
+
+
+# --- 투영 프리미티브(forecast_month_line) — hero·chart 투영 규칙의 정본 1곳 ---
+
+
+def test_forecast_month_line_anchors_today_and_accumulates_business_days():
+    # NOW=2026-06-10(수). 오늘=used anchor, 이후 영업일마다 rate 누적, 주말 flat, 월말=used+rate*영업일.
+    line = forecast_month_line(40.0, 10.0, NOW)
+    assert line[10] == 40.0                      # 오늘(6/10) = used anchor
+    assert line[11] == 50.0                      # 6/11(목) +1영업일
+    assert line[12] == 60.0                      # 6/12(금) +2
+    assert line[13] == 60.0                      # 6/13(토) 주말 flat
+    assert line[14] == 60.0                      # 6/14(일) flat
+    assert line[15] == 70.0                      # 6/15(월) +3
+    assert 9 not in line                         # 오늘 이전은 없음(차트가 None 처리)
+    assert line[30] == 180.0                     # 월말(6/30) = 40 + 10*14영업일
 
 
 # --- 통합 월말 전망(combined_forecast) ---

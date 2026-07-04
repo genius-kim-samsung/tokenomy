@@ -448,6 +448,15 @@ def test_forecast_chart_line_anchored_on_official_used():
     assert line[29] == 180.0               # 6/30(인덱스29=월말) = used + rate*14
 
 
+def test_forecast_chart_last_point_equals_hero_projected_used():
+    # 정합 불변식(후보 1의 핵심): 차트 라인의 월말값 == 히어로 projected_used.
+    # 둘 다 aggregate.forecast_month_line 한 walk를 공유하므로 구성상 일치한다.
+    fc = _fc()
+    out = forecast_chart_data(fc, _daily_june(), NOW6)
+    last = next(v for v in reversed(out["line"]) if v is not None)
+    assert last == fc.projected_used_usd
+
+
 # ── 카드 forecast 텍스트: 여유 또는 소진 예상 ──────────────────────────────────
 def test_card_forecast_text_surplus_or_exhaust():
     conn = _conn()
