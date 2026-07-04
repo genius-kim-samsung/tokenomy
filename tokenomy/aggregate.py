@@ -149,19 +149,30 @@ def last_message_ts(conn, provider: str | None = None,
     return row["t"] if row and row["t"] else None
 
 
-def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime,
-                *, providers: list[str] | None = None) -> list:
-    cols = ("SELECT ts, cost_usd, priced, session_id, project, model, "
-            "input_tokens, output_tokens, cache_creation, cache_read, web_search FROM messages")
+def _windowed_rows(conn, cols: str, provider: str | None,
+                   providers: list[str] | None, start: datetime, nxt: datetime):
+    """[start, nxt) KST 창 안 messages 행을 순회한다 — 호출부가 `cols`로 필요 컬럼 지정.
+
+    provider/providers 필터·ts 파싱·경계(시작 포함·`nxt` 배타)·파싱 실패(None) 스킵을
+    이 한 곳에서 소유한다. row-shape는 `cols`가 달라 통일 못 하지만, fetch + 창 게이트는
+    4곳(_range_rows·token_composition·by_dimension·sidechain_split)이 공유한다.
+    """
     where, params = _provider_where(provider, providers)
-    rows = conn.execute(cols + where, params).fetchall()
-    out = []
-    for r in rows:
+    for r in conn.execute(f"SELECT ts, {cols} FROM messages" + where, params):
         dt = parse_ts(r["ts"])
         if dt and start <= dt < nxt:
-            d = dict(r)
-            d["project"] = normalize_project(d["project"])  # 워크트리 → 부모 repo로 합산
-            out.append(d)
+            yield r
+
+
+def _range_rows(conn, provider: str | None, start: datetime, nxt: datetime,
+                *, providers: list[str] | None = None) -> list:
+    cols = ("cost_usd, priced, session_id, project, model, "
+            "input_tokens, output_tokens, cache_creation, cache_read, web_search")
+    out = []
+    for r in _windowed_rows(conn, cols, provider, providers, start, nxt):
+        d = dict(r)
+        d["project"] = normalize_project(d["project"])  # 워크트리 → 부모 repo로 합산
+        out.append(d)
     return out
 
 
@@ -1275,17 +1286,11 @@ def token_composition(conn, provider: str | None, start, nxt,
                       *, providers: list[str] | None = None) -> TokenComposition:
     """기간 [start, nxt) 내 input/output/cache_creation/cache_read 합계와 비중(%)을 반환.
 
-    _range_rows는 output_tokens를 select하지 않아 재사용하지 않고 자체 SELECT한다.
     비중은 0~100 퍼센트값(round(x/total*100,1)) — cache_ratio(0~1)와 단위가 다르다.
     """
-    sql = "SELECT ts, input_tokens, output_tokens, cache_creation, cache_read FROM messages"
-    where, params = _provider_where(provider, providers)
-    rows = conn.execute(sql + where, params).fetchall()
+    cols = "input_tokens, output_tokens, cache_creation, cache_read"
     it = ot = cc = cr = 0
-    for r in rows:
-        dt = parse_ts(r["ts"])
-        if not (dt and start <= dt < nxt):
-            continue
+    for r in _windowed_rows(conn, cols, provider, providers, start, nxt):
         it += r["input_tokens"] or 0
         ot += r["output_tokens"] or 0
         cc += r["cache_creation"] or 0
@@ -1321,15 +1326,10 @@ def by_dimension(conn, provider: str | None, start: datetime, nxt: datetime,
     dim은 DIM_COLUMNS 화이트리스트 키. 빈 문자열/NULL 키는 None 버킷(미귀속)으로 접는다.
     """
     col = DIM_COLUMNS.get(dim, "model")
-    sql = (f"SELECT ts, {col} AS key, cost_usd, session_id, input_tokens, output_tokens, "
-           "cache_creation, cache_read FROM messages")
-    where, params = _provider_where(provider, providers)
-    rows = conn.execute(sql + where, params).fetchall()
+    cols = (f"{col} AS key, cost_usd, session_id, input_tokens, output_tokens, "
+            "cache_creation, cache_read")
     agg: dict = {}
-    for r in rows:
-        dt = parse_ts(r["ts"])
-        if not (dt and start <= dt < nxt):
-            continue
+    for r in _windowed_rows(conn, cols, provider, providers, start, nxt):
         key = r["key"]
         if key == "":
             key = None
@@ -1390,16 +1390,11 @@ class SidechainSplit:
 def sidechain_split(conn, provider: str | None, start: datetime, nxt: datetime,
                     *, providers: list[str] | None = None) -> SidechainSplit:
     """기간 [start, nxt) 내 is_sidechain 기준 부모 vs 서브에이전트 비용·토큰 분리."""
-    sql = ("SELECT ts, is_sidechain, cost_usd, input_tokens, output_tokens, "
-           "cache_creation, cache_read FROM messages")
-    where, params = _provider_where(provider, providers)
-    rows = conn.execute(sql + where, params).fetchall()
+    cols = ("is_sidechain, cost_usd, input_tokens, output_tokens, "
+            "cache_creation, cache_read")
     pc = sc = 0.0
     pt = st = 0
-    for r in rows:
-        dt = parse_ts(r["ts"])
-        if not (dt and start <= dt < nxt):
-            continue
+    for r in _windowed_rows(conn, cols, provider, providers, start, nxt):
         tok = (r["input_tokens"] or 0) + (r["output_tokens"] or 0) \
             + (r["cache_creation"] or 0) + (r["cache_read"] or 0)
         if r["is_sidechain"]:

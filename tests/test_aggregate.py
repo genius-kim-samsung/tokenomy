@@ -14,6 +14,7 @@ from tokenomy.aggregate import (
     combined_forecast, CombinedForecast, forecast_month_line,
     this_month_spend, official_daily_rate,
     _trailing_business_days, trailing_window_spend,
+    _windowed_rows,
     pool_used_history, _segment_points, pool_history, pool_daily_history,
     pool_hourly_history,
     pool_snapshots_by_day,
@@ -870,6 +871,39 @@ def test_sidechain_split_empty_is_zero():
     start, nxt = month_bounds(datetime(2026, 6, 15, tzinfo=KST))
     sp = sidechain_split(conn, "claude", start, nxt)
     assert sp.total_cost == 0.0 and sp.sub_share == 0.0
+
+
+# ─── _windowed_rows: KST 창 필터 primitive ────────────────────────────────────
+
+
+def test_windowed_rows_gates_kst_boundary():
+    """[start, nxt) KST 창: 시작 포함·nxt 배타·깨진 ts 스킵·provider/providers/[] 필터."""
+    conn = connect(":memory:")
+    # 창 [6/10 00:00, 6/11 00:00) KST — parse_ts가 UTC→KST(+9) 변환
+    _msg(conn, dedup_key="at_start", session_id="A", provider="claude",
+         ts="2026-06-09T15:00:00Z", cost_usd=1.0)    # KST 6/10 00:00 정각 → 포함(시작 포함)
+    _msg(conn, dedup_key="inside", session_id="B", provider="claude",
+         ts="2026-06-10T03:00:00Z", cost_usd=2.0)    # KST 6/10 12:00 → 포함
+    _msg(conn, dedup_key="at_nxt", session_id="C", provider="claude",
+         ts="2026-06-10T15:00:00Z", cost_usd=4.0)    # KST 6/11 00:00 정각 → 배타(제외)
+    _msg(conn, dedup_key="before", session_id="D", provider="claude",
+         ts="2026-06-09T14:59:00Z", cost_usd=8.0)    # KST 6/9 23:59 → 제외
+    _msg(conn, dedup_key="broken", session_id="E", provider="claude",
+         ts="not-a-ts", cost_usd=16.0)               # 파싱 실패 → 스킵
+    _msg(conn, dedup_key="codex_in", session_id="F", provider="codex",
+         ts="2026-06-10T03:00:00Z", cost_usd=32.0)   # 창 안이지만 codex
+
+    start = datetime(2026, 6, 10, 0, 0, tzinfo=KST)
+    nxt = datetime(2026, 6, 11, 0, 0, tzinfo=KST)
+
+    def sessions(provider=None, providers=None):
+        return sorted(r["session_id"] for r in
+                      _windowed_rows(conn, "session_id, cost_usd", provider, providers, start, nxt))
+
+    assert sessions(provider="claude") == ["A", "B"]              # 시작 포함·nxt 배타·None 스킵·codex 제외
+    assert sessions(providers=["claude", "codex"]) == ["A", "B", "F"]  # 활성 합산 → codex 창내 F
+    assert sessions(providers=[]) == []                          # 활성 0개 → 빈 결과(WHERE 0)
+    assert sessions() == ["A", "B", "F"]                         # provider=None → DB 전체(활성 필터 없음)
 
 
 # ─── dimension_context ───────────────────────────────────────────────────────
