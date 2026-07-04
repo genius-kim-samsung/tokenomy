@@ -16,6 +16,7 @@
 - **web/control.py** — 창 복원 신호용 in-process 콜백 레지스트리. launcher(메인 스레드 webview)와 라우트(데몬 스레드)의 순환 import를 끊는다 — launcher가 `set_show_callback`, `/app/show` 라우트가 `request_show`(ADR 0006).
 - **paths.py** — 경로 중앙 해석(데이터 위치가 실행 형태로 갈린다 — 루트 게시 참고). `mini_view_available()`(=Windows 전용, ADR 0013)도 여기 — 미니뷰 플랫폼 게이트의 **단일 진실원**(launcher + 웹 사이드바가 공유).
 - **config.py** — 설정 모델(`config/tokenomy.config.json` 로더). `load_config`/`save_config` · `tracked_providers`(=**활성 AI**; 미설정/None이면 크레덴셜 존재로 시드, 명시적 `[]`는 빈 집합 영속 — 재시드 안 함) · `credit_to_usd`(기본 0.04) · `official_fetch_settings`(min_interval_minutes) · `pricing_overrides`. **config 키를 찾으면 여기다**(`TOKENOMY_CONFIG`로 경로 override). (구 `budget.py`에서 리네임 — 예산 로직은 제거됨.)
+- **domain.py** — 버킷 어휘 저층 leaf(의존성 0). `PROVIDERS`(추적 AI 목록) · `POOL_DEFAULT_KINDS`(풀 기본=주기형 월 한도) · `is_pooled_kind(bk)`(풀 멤버십 술어). config·aggregate가 **모두 아래로** import — 옛날 이 상수들이 aggregate에 살아 config가 함수-지역 import로 올려다보던 back-edge를 없앤다. bucket_kind **생산**은 official_parser, 정렬/타이브레이크(`_BUCKET_ORDER`·`tie_order`)는 aggregate가 소유 — domain은 어휘+술어만.
 - **freshness.py** — 수집 신선도. 마지막 ingest 경과 + 디스크상 최고령 raw 파일 나이(vs 30일 cleanup) → ≥25일이면 `warn`. 트리거가 다 실패해도 데이터 유실 위험을 사람에게 노출.
 - **update.py** — 인앱 업데이트 확인(GitHub Releases 최신 태그 vs `__version__`, 1일 1회). 실패/오프라인은 조용히 skip(`TOKENOMY_SKIP_UPDATE_CHECK`로 끔). stdlib(urllib)만.
 
@@ -41,6 +42,7 @@
 ## 모듈 간 의존성 (cross-module dependencies)
 
 - `web/views.py` → `aggregate.py` → `db.py` 단방향. 역방향 import 금지.
+- `domain.py`(버킷 어휘 leaf, 의존성 0)는 config·aggregate가 **모두 아래로** import — config→aggregate back-edge를 없앤 저층. 공유 도메인 상수/술어를 aggregate에 두지 말 것(config가 올려다보게 됨).
 - `launcher.py` ↔ 라우트의 순환 import는 `web/control.py` 콜백 레지스트리로 끊는다(ADR 0006).
 - `paths.py`가 데이터/설정 경로와 `mini_view_available()`의 단일 진실원 — launcher와 웹 사이드바가 공유.
 - 테스트는 [tests/](../tests/CLAUDE.md)에 모듈별 1:1 대응(`tests/test_db.py` ↔ `db.py` 식).
