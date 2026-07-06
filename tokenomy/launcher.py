@@ -79,7 +79,7 @@ def _maybe_first_time_notice() -> None:
     icon = _tray_state["icon"]
     if icon is not None:
         try:
-            icon.notify("종료: 트레이 우클릭 → 종료. 사용량을 작게 흘끗 보려면 우클릭 → 미니 뷰.",
+            icon.notify("종료: 트레이 우클릭 → 종료. 사용량을 작게 흘끗 보려면 우클릭 → 미니뷰로 열기.",
                         "Tokenomy는 트레이에서 계속 실행됩니다")
         except Exception:
             pass
@@ -153,8 +153,19 @@ def _init_db() -> None:
 
 
 def _on_open(icon=None, item=None) -> None:
-    """트레이 '열기' / 기본 클릭 — 마지막 본 뷰(일반/미니) 복원."""
+    """트레이 좌클릭(숨김 default '열기') — 마지막 본 뷰(일반/미니) 복원."""
     _restore_last_view()
+
+
+def _on_open_main(icon=None, item=None) -> None:
+    """트레이 '일반뷰로 열기' — 일반뷰로 배타 전환(last_view=main 영속, ADR 0008 개정)."""
+    _to_main()
+
+
+def _on_open_mini(icon=None, item=None) -> None:
+    """트레이 '미니뷰로 열기' — 미니뷰로 배타 전환(last_view=mini 영속, ADR 0008 개정).
+    비가용 플랫폼(Linux)에선 메뉴에서 숨겨지고 _to_mini도 no-op(ADR 0013)."""
+    _to_mini()
 
 
 def _start_background_poll() -> None:
@@ -369,11 +380,19 @@ def _tray_image():
 
 
 def _build_tray():
-    """pystray 트레이 아이콘 생성 — '열기'(좌클릭 기본, 마지막 본 뷰 복원) + '종료'.
-    배타 전환이라 미니 토글은 없다(미니↔일반 전환은 각 창의 버튼이 담당)."""
+    """pystray 트레이 아이콘 생성 — 좌클릭=숨김 default '열기'(마지막 본 뷰 복원),
+    우클릭='일반뷰로 열기'/'미니뷰로 열기'(뷰별 명시 진입) + 구분선 + '종료'(ADR 0008 개정).
+
+    '열기'는 좌클릭 활성화 전용이라 `visible=False` — pystray는 default 항목을 visible과
+    무관하게 좌클릭에 매핑하고(Menu.__call__), 우클릭 팝업엔 visible 항목만 띄운다. 미니 토글
+    (체크형 스위치) 재도입이 아니라 '열기' 어포던스의 뷰별 확장 — 배타 전환·창 버튼은 불변.
+    '미니뷰로 열기'는 비가용 플랫폼(Linux, ADR 0013)에서 숨긴다(안 되는 항목 미노출)."""
     import pystray
     menu = pystray.Menu(
-        pystray.MenuItem("열기", _on_open, default=True),
+        pystray.MenuItem("열기", _on_open, default=True, visible=False),
+        pystray.MenuItem("일반뷰로 열기", _on_open_main),
+        pystray.MenuItem("미니뷰로 열기", _on_open_mini, visible=mini_view_available()),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem("종료", _on_quit),
     )
     return pystray.Icon("tokenomy", _tray_image(), "Tokenomy", menu=menu)

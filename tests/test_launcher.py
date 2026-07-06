@@ -334,58 +334,113 @@ def test_first_time_notice_fires_once_and_persists(monkeypatch, tmp_path):
 
 
 def test_first_time_notice_mentions_mini_view(monkeypatch, tmp_path):
-    """첫 안내가 미니 뷰 발견성을 위해 '미니 뷰'를 한 줄 언급해야 한다(ADR 0008 발견성)."""
+    """첫 안내가 미니 뷰 발견성을 위해 트레이 항목명 '미니뷰로 열기'를 언급해야 한다(ADR 0008 개정).
+    이제 트레이에 실제 '미니뷰로 열기' 항목이 있으므로 안내도 항목명으로 정확히 유도한다."""
     cfg = tmp_path / "tokenomy.config.json"
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
     icon = _FakeIcon()
     _reset_tray_state(monkeypatch, icon=icon)
     launcher._maybe_first_time_notice()
     title, message = icon.notes[0]
-    assert "미니 뷰" in (message + (title or ""))
+    assert "미니뷰로 열기" in (message + (title or ""))
 
 
 def test_build_tray_uses_default_open_and_quit_items(monkeypatch):
+    """좌클릭 default는 숨김 '열기'(마지막 뷰 복원), 우클릭엔 뷰별 열기 + 종료(ADR 0008 개정)."""
     items = []
     class FakeMenuItem:
-        def __init__(self, text, action, checked=None, default=False, **kw):
-            items.append((text, action, checked, default))
+        def __init__(self, text, action, checked=None, default=False, visible=True, **kw):
+            items.append({"text": text, "action": action,
+                          "default": default, "visible": visible})
     class FakeMenu:
+        SEPARATOR = "SEP"
         def __init__(self, *menuitems): self.menuitems = menuitems
     class FakeIconCls:
         def __init__(self, name, image, title, menu=None):
             self.name, self.image, self.title, self.menu = name, image, title, menu
     fake_pystray = type("M", (), {"Menu": FakeMenu, "MenuItem": FakeMenuItem, "Icon": FakeIconCls})
-    monkeypatch.setitem(__import__("sys").modules, "pystray", fake_pystray)
+    monkeypatch.setitem(sys.modules, "pystray", fake_pystray)
     monkeypatch.setattr(launcher, "_tray_image", lambda: "IMG")
+    monkeypatch.setattr(launcher, "mini_view_available", lambda: True)
     icon = launcher._build_tray()
-    by_text = {t: (a, c, d) for (t, a, c, d) in items}
-    assert by_text["열기"][0] is launcher._on_open and by_text["열기"][2] is True   # default
-    assert by_text["종료"][0] is launcher._on_quit
+    by_text = {i["text"]: i for i in items}
+    # 좌클릭 default = 숨김 '열기' → 마지막 본 뷰 복원(우클릭 메뉴엔 안 보임)
+    assert by_text["열기"]["action"] is launcher._on_open
+    assert by_text["열기"]["default"] is True
+    assert by_text["열기"]["visible"] is False
+    # 우클릭 뷰별 열기(명시) — default 아님
+    assert by_text["일반뷰로 열기"]["action"] is launcher._on_open_main
+    assert by_text["일반뷰로 열기"]["default"] is False
+    assert by_text["미니뷰로 열기"]["action"] is launcher._on_open_mini
+    assert by_text["종료"]["action"] is launcher._on_quit
     assert icon.title == "Tokenomy"
 
 
-def test_build_tray_has_no_mini_toggle(monkeypatch):
-    """배타 전환 — 트레이엔 '미니 뷰' 토글이 없다('열기'=마지막 뷰, 전환은 창 버튼)."""
-    items = []
+def test_build_tray_has_per_view_open_items(monkeypatch):
+    """트레이 우클릭 = 일반뷰/미니뷰 뷰별 열기 + 종료(ADR 0008 개정 — '열기'는 좌클릭 전용 숨김).
+    '미니뷰 토글' 재도입이 아니라 '열기' 어포던스의 뷰별 확장(배타 전환·창 버튼 불변)."""
+    visible_texts = []
     class FakeMenuItem:
-        def __init__(self, text, action, checked=None, default=False, **kw):
-            items.append(text)
+        def __init__(self, text, action, checked=None, default=False, visible=True, **kw):
+            if visible:
+                visible_texts.append(text)
     class FakeMenu:
+        SEPARATOR = "SEP"
         def __init__(self, *menuitems): pass
     class FakeIconCls:
         def __init__(self, name, image, title, menu=None): self.title = title
     fake_pystray = type("M", (), {"Menu": FakeMenu, "MenuItem": FakeMenuItem, "Icon": FakeIconCls})
-    monkeypatch.setitem(__import__("sys").modules, "pystray", fake_pystray)
+    monkeypatch.setitem(sys.modules, "pystray", fake_pystray)
     monkeypatch.setattr(launcher, "_tray_image", lambda: "IMG")
+    monkeypatch.setattr(launcher, "mini_view_available", lambda: True)
     launcher._build_tray()
-    assert items == ["열기", "종료"]
+    assert visible_texts == ["일반뷰로 열기", "미니뷰로 열기", "종료"]
+
+
+def test_build_tray_hides_mini_open_when_unavailable(monkeypatch):
+    """미니뷰 비가용 플랫폼(Linux) — 트레이 '미니뷰로 열기'는 비가시(ADR 0013 게이트).
+    웹 사이드바 미니 버튼 숨김과 동일 패턴 — 안 되는 항목을 노출하지 않는다."""
+    items = []
+    class FakeMenuItem:
+        def __init__(self, text, action, checked=None, default=False, visible=True, **kw):
+            items.append({"text": text, "visible": visible})
+    class FakeMenu:
+        SEPARATOR = "SEP"
+        def __init__(self, *menuitems): pass
+    class FakeIconCls:
+        def __init__(self, name, image, title, menu=None): pass
+    fake_pystray = type("M", (), {"Menu": FakeMenu, "MenuItem": FakeMenuItem, "Icon": FakeIconCls})
+    monkeypatch.setitem(sys.modules, "pystray", fake_pystray)
+    monkeypatch.setattr(launcher, "_tray_image", lambda: "IMG")
+    monkeypatch.setattr(launcher, "mini_view_available", lambda: False)
+    launcher._build_tray()
+    by_text = {i["text"]: i for i in items}
+    assert by_text["미니뷰로 열기"]["visible"] is False    # 비가용 → 숨김
+    assert by_text["일반뷰로 열기"]["visible"] is True      # 일반뷰는 그대로
+    assert by_text["열기"]["visible"] is False              # 좌클릭 default는 항상 숨김
 
 
 def test_on_open_restores_last_view(monkeypatch):
-    """트레이 '열기'/기본 클릭 → 마지막 본 뷰 복원(_restore_last_view)."""
+    """트레이 좌클릭(숨김 default '열기') → 마지막 본 뷰 복원(_restore_last_view)."""
     called = []
     monkeypatch.setattr(launcher, "_restore_last_view", lambda: called.append(True))
     launcher._on_open()
+    assert called == [True]
+
+
+def test_on_open_main_delegates(monkeypatch):
+    """트레이 '일반뷰로 열기' → _to_main(일반뷰 배타 전환·last_view=main 영속, ADR 0008 개정)."""
+    called = []
+    monkeypatch.setattr(launcher, "_to_main", lambda: called.append(True))
+    launcher._on_open_main()
+    assert called == [True]
+
+
+def test_on_open_mini_delegates(monkeypatch):
+    """트레이 '미니뷰로 열기' → _to_mini(미니뷰 배타 전환·last_view=mini 영속, ADR 0008 개정)."""
+    called = []
+    monkeypatch.setattr(launcher, "_to_mini", lambda: called.append(True))
+    launcher._on_open_mini()
     assert called == [True]
 
 
