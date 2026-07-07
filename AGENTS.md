@@ -38,13 +38,16 @@ Windows 배치 파일:
 ~/.claude/projects/**/*.jsonl      -> parser.py       -> UsageRecord
 ~/.codex/sessions/**/rollout-*     -> codex_parser.py -> UsageRecord
 UsageRecord -> db.py(SQLite) -> aggregate.py -> cli.py / web/
+공식 사용량 API -> official_fetch.py -> official_parser.py -> db.py(official_buckets) -> official_aggregate.py -> cli.py / web/
 ```
 
 주요 모듈:
 
 - `tokenomy/parser.py`, `tokenomy/codex_parser.py`: 도구별 로그를 공통 `UsageRecord`로 정규화한다.
 - `tokenomy/db.py`: SQLite 적재, 중복 제거, 스키마 마이그레이션을 담당한다. 스키마 변경은 `_MIGRATE_COLS`에 추가한다.
-- `tokenomy/aggregate.py`: 공식 사용량 기반 예측(`official_view`+`lens`), 프로젝트/세션/차원(모델·스킬·브랜치)별 집계, 토큰 구성비를 담당한다. 월 경계는 KST 기준이다. 공식 데이터 없으면 사용량 전용 view로 폴백.
+- `tokenomy/aggregate.py`: 로컬 롤업(messages/sessions) — 프로젝트/세션/차원(모델·스킬·브랜치)별 집계, 토큰 구성비를 담당한다. 월 경계는 KST 기준이다.
+- `tokenomy/official_aggregate.py`: 공식 사용량 집계 — 공식 스냅샷(official_buckets) 기반 예측(`official_view`+`lens`), 풀 이력, 통합 전망(`combined_forecast`). aggregate.py와 상호 호출 없음.
+- `tokenomy/clock.py`: 시간·달력 어휘 leaf(의존성 0) — `KST`·`parse_ts`·월/기간 경계·영업일 산술. 두 집계 모듈이 모두 아래로 import한다.
 - `tokenomy/pricing.py`, `config/pricing.json`: 모델명 매칭으로 토큰을 USD로 환산한다. `cost_usd`는 캐시값이라 단가가 바뀌면 `ingest`가 핑거프린트로 감지해 기존 행을 자동 재계산한다(`db.maybe_reprice`).
 - `tokenomy/web/app.py`: FastAPI 라우트. 얇게 유지하고 입력 검증과 라우팅만 둔다.
 - `tokenomy/web/views.py`: 화면 데이터 조립 로직을 둔다.
@@ -95,7 +98,7 @@ UsageRecord -> db.py(SQLite) -> aggregate.py -> cli.py / web/
 
 ## 코드 스타일
 
-- 기존 계층 분리를 유지한다: route(`app.py`) -> view assembly(`views.py`) -> aggregate(`aggregate.py`) -> persistence(`db.py`).
+- 기존 계층 분리를 유지한다: route(`app.py`) -> view assembly(`views.py`) -> aggregate(`aggregate.py`·`official_aggregate.py`) -> persistence(`db.py`).
 - 모든 모듈 상단의 `from __future__ import annotations` 관례를 유지한다.
 - 주석과 docstring은 한국어 톤을 따른다.
 - 표준 라이브러리를 우선 사용하고 런타임 의존성은 `requirements.txt`에 최소로 추가한다.
