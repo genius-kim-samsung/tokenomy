@@ -363,16 +363,17 @@ class FetchResult:
 class ProviderSpec:
     """provider별 취득 지식을 한 곳에 모은 명세(레지스트리 값).
 
-    provider 분기(엔드포인트·크레덴셜 경로·인증 안내·헤더 조립·토큰 refresh·파서)를 fetch_provider
+    provider 분기(엔드포인트·인증 안내·헤더 조립·토큰 refresh·파서)를 fetch_provider
     밖으로 밀어낸다 — fetch_provider는 provider를 몰라도 spec에 위임만 한다. headers는 ensure_fresh_*
     호출 + 토큰 읽기 + 헤더 조립을 전부 은닉해 토큰 묶음 모양(claude=str, codex=(token, account_id))이
-    spec 밖으로 새지 않게 한다. refresh는 늦은 바인딩 lambda라 테스트가 모듈 attr을 갈아끼워도 통한다.
+    spec 밖으로 새지 않게 한다. refresh는 함수명과 크레덴셜 경로(CLAUDE_CREDS/CODEX_AUTH) 모두
+    호출 시점에 모듈 전역을 읽는 늦은 바인딩 lambda — 테스트가 어느 쪽을 갈아끼워도 반영된다
+    (headers 콜백의 전역 참조와 대칭).
     """
     usage_url: str
-    creds_path: Path
     auth_note: str                 # 인증 오류 안내(옛 _auth_note)
     headers: Callable              # (config, conn, *, now, urlopen) -> dict
-    refresh: Callable              # (path, *, now_ms, urlopen) -> str | None
+    refresh: Callable              # (*, now_ms, urlopen) -> str | None
     parse: Callable                # (raw, *, credit_to_usd) -> buckets
 
 
@@ -394,17 +395,17 @@ def _codex_headers(config, conn, *, now, urlopen) -> dict:
 # lambda라 테스트의 monkeypatch(of.refresh_claude_token 등)가 반영된다(늦은 바인딩).
 PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "claude": ProviderSpec(
-        usage_url=CLAUDE_USAGE_URL, creds_path=CLAUDE_CREDS,
+        usage_url=CLAUDE_USAGE_URL,
         auth_note="재로그인이 필요합니다", headers=_claude_headers,
-        refresh=lambda path, *, now_ms, urlopen: refresh_claude_token(
-            path, now_ms=now_ms, urlopen=urlopen),
+        refresh=lambda *, now_ms, urlopen: refresh_claude_token(
+            CLAUDE_CREDS, now_ms=now_ms, urlopen=urlopen),
         parse=lambda raw, *, credit_to_usd: parse_claude(raw, credit_to_usd=credit_to_usd),
     ),
     "codex": ProviderSpec(
-        usage_url=CODEX_USAGE_URL, creds_path=CODEX_AUTH,
+        usage_url=CODEX_USAGE_URL,
         auth_note="Codex CLI를 1회 실행해 토큰을 갱신하세요", headers=_codex_headers,
-        refresh=lambda path, *, now_ms, urlopen: refresh_codex_token(
-            path, now_ms=now_ms, urlopen=urlopen),
+        refresh=lambda *, now_ms, urlopen: refresh_codex_token(
+            CODEX_AUTH, now_ms=now_ms, urlopen=urlopen),
         parse=lambda raw, *, credit_to_usd: parse_codex(raw, credit_to_usd=credit_to_usd),
     ),
 }
@@ -528,7 +529,7 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
                                               settings["auto_refresh_token"], provider)):
                 now_ms = int(now_kst.timestamp() * 1000)
                 with _token_lock:                         # spec.refresh로 디스패치(ADR 0021/0022)
-                    new = spec.refresh(spec.creds_path, now_ms=now_ms, urlopen=urlopen)
+                    new = spec.refresh(now_ms=now_ms, urlopen=urlopen)
                 if new:                                   # 갱신 성공 → 딱 1회 재시도
                     return fetch_provider(provider, now_kst=now_kst, config=config,
                                           conn=conn, urlopen=urlopen, manual=manual,
