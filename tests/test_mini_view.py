@@ -119,3 +119,23 @@ def test_mini_card_carries_period_glance_with_partial_marker():
     assert card["glance"].today.state == "partial"
     assert card["glance"].today.usd == 30.0           # 50-20
     assert card["glance"].today.observed_from is not None
+
+
+def test_mini_view_fans_out_official_view_once_per_provider(monkeypatch):
+    """미니 조립(카드+공유문구)도 outlook 팬아웃 1회를 공유한다 — provider당 official_view 1회(후보 4)."""
+    import tokenomy.forecast as forecast_module
+    import tokenomy.web.views as views_module
+    calls: list[str] = []
+    real = forecast_module.official_view
+
+    def counting(conn, provider, *a, **kw):
+        calls.append(provider)
+        return real(conn, provider, *a, **kw)
+
+    monkeypatch.setattr(forecast_module, "official_view", counting)
+    if hasattr(views_module, "official_view"):      # 리팩터 전 직접 팬아웃 경로도 계수
+        monkeypatch.setattr(views_module, "official_view", counting)
+
+    conn = _conn()
+    mini_view_context(conn, {"tracked_providers": ["claude", "codex"]}, NOW)
+    assert sorted(calls) == ["claude", "codex"]

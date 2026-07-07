@@ -2245,3 +2245,41 @@ def test_views_does_not_import_private_provider_where():
     """계층 가드: views는 aggregate private 심볼(_provider_where)을 끌어쓰지 않는다."""
     src = Path(views_module.__file__).read_text(encoding="utf-8")
     assert "_provider_where" not in src
+
+
+# ── outlook 팬아웃 공유(후보 4) — 렌더 1회당 official_view는 provider당 1회 ──────
+
+def _count_official_view(monkeypatch):
+    """official_view 호출 provider를 계수하는 대역 — outlook 경유·views 직접 팬아웃 모두 계수."""
+    import tokenomy.forecast as forecast_module
+    calls: list[str] = []
+    real = forecast_module.official_view
+
+    def counting(conn, provider, *a, **kw):
+        calls.append(provider)
+        return real(conn, provider, *a, **kw)
+
+    monkeypatch.setattr(forecast_module, "official_view", counting)
+    if hasattr(views_module, "official_view"):      # 리팩터 전 직접 팬아웃 경로도 계수
+        monkeypatch.setattr(views_module, "official_view", counting)
+    return calls
+
+
+def test_official_section_fans_out_official_view_once_per_provider(monkeypatch):
+    """섹션 조립(카드+기간 카드·공유문구)은 outlook 팬아웃 1회를 공유한다 — 재계산 금지."""
+    calls = _count_official_view(monkeypatch)
+    conn = connect(":memory:")
+    config = {"tracked_providers": ["claude", "codex"]}
+    views_module.official_section_context(conn, config, _FROZEN_NOW)
+    assert sorted(calls) == ["claude", "codex"]
+
+
+def test_overview_fans_out_official_view_once_per_provider(tmp_path, monkeypatch):
+    """대시보드 조립(전망 히어로+카드+기간 카드)도 outlook 팬아웃 1회 공유."""
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))    # overview_context는 내부 load_config
+    calls = _count_official_view(monkeypatch)
+    conn = connect(":memory:")
+    views_module.overview_context(conn, "cost", _FROZEN_NOW)
+    assert sorted(calls) == ["claude", "codex"]

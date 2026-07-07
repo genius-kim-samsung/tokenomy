@@ -15,7 +15,7 @@ from tokenomy.aggregate import (
 )
 from tokenomy.official_aggregate import (
     PeriodSpend, forecast_month_line, pool_history, pool_daily_history, pool_hourly_history,
-    pool_snapshots_by_day, official_period_glance, official_span_spend, official_view,
+    pool_snapshots_by_day, official_period_glance, official_span_spend,
     this_month_spend,
 )
 from tokenomy.config import (
@@ -25,7 +25,7 @@ from tokenomy.config import (
 from tokenomy.db import (
     get_fetch_state, get_meta, get_official_raw, list_official_raw, official_buckets_at,
 )
-from tokenomy.forecast import outlook, forecast_params
+from tokenomy.forecast import Outlook, outlook
 from tokenomy.freshness import LAST_INGEST_KEY
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.web import control
@@ -382,25 +382,26 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime,
     }
 
 
-def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[dict]:
+def official_cards(conn, config: dict, now_kst: datetime | None = None, *,
+                   ol: Outlook | None = None) -> list[dict]:
     """대시보드 공식 사용량 그리드용 provider 카드 리스트.
 
     표시 대상 = **활성 AI**(tracked_providers)뿐. 끈 provider는 공식 스냅샷·로컬 데이터가
     있어도 카드를 띄우지 않는다(데이터는 보존, 표시만 숨김 — ADR 0005). 활성 0개면 빈 리스트.
     순서는 PROVIDERS 고정(claude→codex→…). 새 provider는 PROVIDERS·_PROVIDER_STYLE만 늘리면 된다.
+    공식 뷰 팬아웃은 outlook(전망 조립 정본)의 중간 산물(views) 재사용 — 조립부가 이미 계산한
+    Outlook을 ol로 주입하면 렌더 1회당 팬아웃 1회를 공유한다(미주입 시 자체 계산).
     """
     now = now_kst or datetime.now(KST)
-    fp = forecast_params(config)              # config 팬아웃 정본(ctu·weeks·max_gap·is_pooled)
-    curation, _ = _curation_for(config)       # 표시용 hidden/label(숫자 팬아웃은 fp)
-    active = set(fp.active)
+    ol = ol or outlook(conn, config, now)
+    curation, _ = _curation_for(config)       # 표시용 hidden/label(숫자 팬아웃은 ol.params)
     cards: list[dict] = []
     for p in PROVIDERS:
-        if p not in active:
+        view = ol.views.get(p)
+        if view is None:                      # 비활성 provider — 카드 없음(ADR 0005)
             continue
-        view = official_view(conn, p, now, fp.ctu, fp.weeks, is_pooled=fp.is_pooled,
-                             max_gap_minutes=fp.max_gap)
         cards.append(_provider_card(conn, p, view, get_fetch_state(conn, p), now,
-                                    curation=curation, is_pooled=fp.is_pooled))
+                                    curation=curation, is_pooled=ol.params.is_pooled))
     return cards
 
 
@@ -573,25 +574,24 @@ def build_share_text(rows: list[ShareRow], date_label: str, *, note: str | None 
     return "\n".join(lines)
 
 
-def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict | None:
+def share_context(conn, config: dict, now_kst: datetime | None = None, *,
+                  ol: Outlook | None = None) -> dict | None:
     """사용량 공유 문구 카드 컨텍스트 — USD 풀 provider만. 풀 없으면 None(카드 숨김).
 
     각 활성 provider의 공식 기간 소비(오늘·이번주, official_period_glance) + 이번달(월간 버킷
     used)·한도%(월간 버킷 util)로 ShareRow를 만들고, 풀 합산 글랜스 + 복사 문구를 함께 돌려준다.
     게이트는 view.pool_limit_usd(글랜스·전망 히어로와 동일 — 개인 구독제·온보딩은 None).
+    공식 뷰 팬아웃은 outlook 중간 산물(views) 재사용 — ol 주입 시 재계산 없음(카드와 동일 규약).
     """
     now = now_kst or datetime.now(KST)
-    fp = forecast_params(config)              # config 팬아웃 정본(ctu·weeks·max_gap·is_pooled)
-    active = set(fp.active)
+    ol = ol or outlook(conn, config, now)
+    fp = ol.params
     is_pooled = fp.is_pooled
     rows: list[ShareRow] = []
     pool_providers: list[str] = []
     for p in PROVIDERS:
-        if p not in active:
-            continue
-        view = official_view(conn, p, now, fp.ctu, fp.weeks, is_pooled=is_pooled,
-                             max_gap_minutes=fp.max_gap)
-        if view.pool_limit_usd is None:
+        view = ol.views.get(p)
+        if view is None or view.pool_limit_usd is None:
             continue
         pool_providers.append(p)
         meta = _PROVIDER_STYLE.get(p, {"label": p.title()})
@@ -661,7 +661,8 @@ _LOCAL_SOURCE = "이 기기 · 추정"
 _LOCAL_DISCLAIMER = "공개 API 단가 기준 추정 · 이 기기의 Claude Code와 Codex만 · 수집 시 갱신"
 
 
-def period_card_context(conn, config: dict, now_kst: datetime | None = None) -> dict | None:
+def period_card_context(conn, config: dict, now_kst: datetime | None = None, *,
+                        ol: Outlook | None = None) -> dict | None:
     """기간별 사용량 카드(ADR 0017·0018) — 오늘·이번주·이번달 동등 3칸 + 이전 기간 전체 페이스·기준값.
 
     A군 모드 게이트(ADR 0015): 엔터=공식 통합 풀(오늘/이번주=스냅샷 이력 델타, 이번달=라이브
@@ -678,7 +679,7 @@ def period_card_context(conn, config: dict, now_kst: datetime | None = None) -> 
     interval = official_fetch_settings(config)["min_interval_minutes"]
     _, is_pooled = _curation_for(config)
     windows = _period_windows(now)
-    share = share_context(conn, config, now)
+    share = share_context(conn, config, now, ol=ol)
     # 공식 모드 = 공식 USD 풀 있음(share not None) + 개인구독제 아님(ADR 0015 _a_zone_official 동치).
     official = account_mode(config) != "subscription" and share is not None
 
@@ -742,12 +743,13 @@ def official_section_context(conn, config: dict, now_kst: datetime | None = None
     수동 HX 갱신(POST /official/refresh)과 자동 폴링(GET /official/section)이 공유한다.
     """
     now = now_kst or datetime.now(KST)
+    ol = outlook(conn, config, now)           # 팬아웃 1회 — 카드·기간 카드(공유문구)가 공유
     return {
-        "official_cards": official_cards(conn, config, now),
+        "official_cards": official_cards(conn, config, now, ol=ol),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
         # 기간별 사용량 카드(ADR 0017) — 총지출+share 통합. 모드별 출처. 섹션 partial에 실어
         # 글랜스와 같은 주기로 갱신(엔터=라이브, 구독=수집 시만 — 카드 디스클레이머가 안내).
-        "period_card": period_card_context(conn, config, now),
+        "period_card": period_card_context(conn, config, now, ol=ol),
         # 개인구독제(ADR 0015 D4): rate-window 게이지를 '이용 한도(스로틀)'로 프레이밍하는 분기 신호.
         "account_mode": account_mode(config),
     }
@@ -762,8 +764,9 @@ def mini_view_context(conn, config: dict, now_kst: datetime | None = None) -> di
     provider당 모든 게이지를 그대로 노출한다(Codex 월간(+개인 구독제 rate-window), Claude 5h+7d 등).
     """
     now = now_kst or datetime.now(KST)
+    ol = outlook(conn, config, now)           # 팬아웃 1회 — 카드·공유문구가 공유
     cards = []
-    for c in official_cards(conn, config, now):
+    for c in official_cards(conn, config, now, ol=ol):
         no_official = c["status"] == "no_data"
         cards.append({
             "provider": c["provider"], "label": c["label"], "accent": c["accent"],
@@ -776,7 +779,7 @@ def mini_view_context(conn, config: dict, now_kst: datetime | None = None) -> di
         "cards": cards,
         "interval": official_fetch_settings(config)["min_interval_minutes"],
         # 사용량 공유 문구(큰 창과 동일 산출물) — 미니 헤더 📋가 #mini-section의 .share-src를 읽는다.
-        "share": share_context(conn, config, now),
+        "share": share_context(conn, config, now, ol=ol),
     }
 
 
@@ -810,8 +813,9 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
     daily = daily_series(conn, None, now, providers=active)
     # 통합 월말 전망 — 조립 정본(outlook, forecast.py). 활성 AI 팬아웃·config 해석·투영이 인터페이스 뒤.
     # 화면의 "전체"=활성 합산이므로 forecast 풀도 활성만 본다(combined_forecast가 한도 보유분만 필터).
-    fp = forecast_params(config)              # 실제선(pool_history)에 is_pooled·max_gap 재사용
-    forecast_obj = outlook(conn, config, now)
+    ol = outlook(conn, config, now)           # 팬아웃 1회 — 히어로·카드·기간 카드가 공유
+    fp = ol.params                            # 실제선(pool_history)에 is_pooled·max_gap 재사용
+    forecast_obj = ol.combined
     # A군 모드 게이트(ADR 0015): 공식(엔터) vs 로컬(개인구독제). 헤드라인·히어로·추세 오버레이를 가른다.
     a_official = _a_zone_official(config, forecast_obj)
     # 이번 달 총지출 헤드라인 — 엔터=공식 풀 used(계정 전체·실청구), 개인구독제/로컬=이 기기 추정.
@@ -873,10 +877,10 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "forecast_limit": fc_chart["limit"],
         "forecast_line": fc_chart["line"],
         "forecast_actual": forecast_actual,
-        "official_cards": official_cards(conn, config, now),
+        "official_cards": official_cards(conn, config, now, ol=ol),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
         # 기간별 사용량 카드(ADR 0017) — 초기 로드 시 즉시 표시(이후 섹션 폴링이 갱신).
-        "period_card": period_card_context(conn, config, now),
+        "period_card": period_card_context(conn, config, now, ol=ol),
         "projects": projects, "sessions": sessions, "insights": coach,
         "daily_labels": [p.day for p in daily],
         "trend_series": trend_series,
@@ -1198,10 +1202,10 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
     s, nxt, label, period, custom = _resolve_range(anchor_kst, period, start, end)
     is_hourly = (period == "day" and not custom)    # 시간대별 렌더는 일 토글 한정(ADR 0019)
 
-    # 소진형 풀 판정 + 한도선 값 — outlook(전망 조립 정본)이 None이면 소진형 풀 없음(빈 상태).
-    fp = forecast_params(config)              # 아래 pool_history 계열에 is_pooled 재사용
-    fobj = outlook(conn, config, now)
-    is_pooled = fp.is_pooled
+    # 소진형 풀 판정 + 한도선 값 — outlook(전망 조립 정본) combined가 None이면 소진형 풀 없음(빈 상태).
+    ol = outlook(conn, config, now)
+    fobj = ol.combined
+    is_pooled = ol.params.is_pooled           # 아래 pool_history 계열에 재사용
     has_pool = fobj is not None
     pool_limit = fobj.limit_usd if fobj else None
     pool_providers = fobj.providers if fobj else active

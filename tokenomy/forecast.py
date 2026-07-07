@@ -3,7 +3,9 @@
 official_aggregate(순수 계산)·config(설정) 위에 앉는 무순환 조립층이다(둘 다 단방향 import, 역방향 0).
 전망 레시피(`[official_view(...) for p in 활성AI] → combined_forecast`)와 그 config 팬아웃이
 호출부마다 복붙되던 걸 여기 정본화한다 — 대시보드·전망 페이지·내비·미니가 `outlook(conn, config, now)`
-하나만 부른다. 투영 규칙 자체는 official_aggregate.forecast_month_line(정본 1곳)에 산다.
+하나만 부른다. 반환(Outlook)은 중간 산물을 버리지 않는다: params(config 해석)·views(공식 뷰
+팬아웃)·combined(통합 전망)를 함께 실어, 조립부가 렌더 1회당 팬아웃 1회를 공유한다.
+투영 규칙 자체는 official_aggregate.forecast_month_line(정본 1곳)에 산다.
 """
 from __future__ import annotations
 
@@ -11,7 +13,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
-from tokenomy.official_aggregate import CombinedForecast, combined_forecast, official_view
+from tokenomy.official_aggregate import (
+    CombinedForecast, OfficialView, combined_forecast, official_view,
+)
 from tokenomy.config import (
     bucket_curation_resolver, credit_to_usd, forecast_settings,
     official_fetch_settings, tracked_providers,
@@ -52,15 +56,28 @@ def forecast_params(config: dict) -> FParams:
     )
 
 
-def outlook(conn, config: dict, now: datetime) -> CombinedForecast | None:
+@dataclass
+class Outlook:
+    """전망 조립 결과 한 묶음 — config 해석(params)·공식 뷰 팬아웃(views)·통합 전망(combined).
+
+    views는 활성 AI별 OfficialView(provider→뷰, 활성 순서) — 카드·공유문구가 재사용하는
+    중간 산물이라 버리지 않는다. combined는 한도 있는 provider가 하나도 없으면 None(히어로 숨김).
+    """
+    params: FParams
+    views: dict[str, OfficialView]
+    combined: CombinedForecast | None
+
+
+def outlook(conn, config: dict, now: datetime) -> Outlook:
     """통합 풀 월말 전망을 조립한다 — 활성 AI 공식 뷰 팬아웃 → combined_forecast.
 
-    한도 있는 provider가 하나도 없으면 None(히어로 숨김). 위치도 기울기도 공식 계정 전체
-    (ADR 0015). 팬아웃·config 해석이 이 인터페이스 뒤로 숨어 호출부는 결과만 읽는다.
+    위치도 기울기도 공식 계정 전체(ADR 0015). 팬아웃·config 해석이 이 인터페이스 뒤로 숨고,
+    호출부(조립부)는 Outlook 하나로 카드·공유문구·히어로를 재계산 없이 조립한다.
     """
     p = forecast_params(config)
-    views = [official_view(conn, pr, now, p.ctu, p.weeks,
-                           is_pooled=p.is_pooled, max_gap_minutes=p.max_gap)
-             for pr in p.active]
-    return combined_forecast(conn, views, now, p.weeks,
-                             is_pooled=p.is_pooled, max_gap_minutes=p.max_gap)
+    views = {pr: official_view(conn, pr, now, p.ctu, p.weeks,
+                               is_pooled=p.is_pooled, max_gap_minutes=p.max_gap)
+             for pr in p.active}
+    combined = combined_forecast(conn, list(views.values()), now, p.weeks,
+                                 is_pooled=p.is_pooled, max_gap_minutes=p.max_gap)
+    return Outlook(params=p, views=views, combined=combined)

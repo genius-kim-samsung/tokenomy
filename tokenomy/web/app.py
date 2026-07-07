@@ -39,7 +39,7 @@ def _nav_context(request: Request) -> dict:
         conn = connect()
         config = load_config()
         now = datetime.now(KST)
-        fobj = outlook(conn, config, now)
+        fobj = outlook(conn, config, now).combined
         return {"show_official_history": fobj is not None, "debug_mode": debug_mode(config)}
     except Exception:
         return {"show_official_history": True, "debug_mode": False}

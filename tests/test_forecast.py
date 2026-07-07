@@ -5,7 +5,7 @@ from tokenomy.clock import KST
 from tokenomy.official_aggregate import CombinedForecast, combined_forecast, official_view
 from tokenomy.db import connect, insert_official_buckets
 from tokenomy.official_parser import OfficialBucket
-from tokenomy.forecast import forecast_params, outlook, FParams
+from tokenomy.forecast import forecast_params, outlook, FParams, Outlook
 
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
 
@@ -45,11 +45,14 @@ def test_forecast_params_resolves_config_fanout():
 
 
 # ── outlook — 전망 조립을 한 문(conn, config, now)으로 ──────────────────────
-def test_outlook_none_when_no_official_limits():
-    # 한도 있는 provider 전무 → None(히어로 숨김).
+def test_outlook_combined_none_when_no_official_limits():
+    # 한도 있는 provider 전무 → combined None(히어로 숨김). 팬아웃 산물(views)은 활성 전부 보존.
     conn = connect(":memory:")
     config = {"tracked_providers": ["claude", "codex"], "credit_to_usd": 0.04}
-    assert outlook(conn, config, NOW) is None
+    ol = outlook(conn, config, NOW)
+    assert ol.combined is None
+    assert list(ol.views) == ["claude", "codex"]
+    assert ol.views["claude"].status == "no_data"
 
 
 def test_outlook_assembles_pool_forecast_from_config():
@@ -57,9 +60,21 @@ def test_outlook_assembles_pool_forecast_from_config():
     conn = connect(":memory:")
     _seed(conn, "claude", "monthly_limit", 40.0, 200.0)     # 공식 월초누적 40/8영업일=5/일
     config = {"tracked_providers": ["claude", "codex"], "credit_to_usd": 0.04}
-    fc = outlook(conn, config, NOW)
+    fc = outlook(conn, config, NOW).combined
     assert isinstance(fc, CombinedForecast)
     assert fc.providers == ["claude"]
     assert fc.used_usd == 40.0 and fc.limit_usd == 200.0
     assert fc.daily_rate_usd == 5.0
     assert fc.projected_used_usd == 110.0                   # 40 + 5*14영업일
+
+
+def test_outlook_keeps_intermediate_views_and_params():
+    # 깊은 반환(Outlook) — 카드·공유문구가 팬아웃을 복붙하지 않고 views·params를 재사용(후보 4).
+    conn = connect(":memory:")
+    _seed(conn, "claude", "monthly_limit", 40.0, 200.0)
+    config = {"tracked_providers": ["claude"], "credit_to_usd": 0.04}
+    ol = outlook(conn, config, NOW)
+    assert isinstance(ol, Outlook)
+    v = ol.views["claude"]
+    assert v.provider == "claude" and v.pool_limit_usd == 200.0
+    assert isinstance(ol.params, FParams) and ol.params.active == ["claude"]
