@@ -47,6 +47,7 @@ UsageRecord -> db.py(SQLite) -> aggregate.py -> cli.py / web/
 - `tokenomy/db.py`: SQLite 적재, 중복 제거, 스키마 마이그레이션을 담당한다. 스키마 변경은 `_MIGRATE_COLS`에 추가한다.
 - `tokenomy/aggregate.py`: 로컬 롤업(messages/sessions) — 프로젝트/세션/차원(모델·스킬·브랜치)별 집계, 토큰 구성비를 담당한다. 월 경계는 KST 기준이다.
 - `tokenomy/official_aggregate.py`: 공식 사용량 집계 — 공식 스냅샷(official_buckets) 기반 예측(`official_view`+`lens`), 풀 이력, 통합 전망(`combined_forecast`). aggregate.py와 상호 호출 없음.
+- `tokenomy/forecast.py`: 전망 조립층 — `outlook(conn, config, now)`이 활성 AI 공식 뷰 팬아웃+통합 전망을 `Outlook(params·views·combined)` 하나로 돌려준다. 조립부(대시보드·섹션·미니)가 중간 산물(views)을 공유해 렌더당 팬아웃 1회를 지킨다.
 - `tokenomy/clock.py`: 시간·달력 어휘 leaf(의존성 0) — `KST`·`parse_ts`·월/기간 경계·영업일 산술. 두 집계 모듈이 모두 아래로 import한다.
 - `tokenomy/pricing.py`, `config/pricing.json`: 모델명 매칭으로 토큰을 USD로 환산한다. `cost_usd`는 캐시값이라 단가가 바뀌면 `ingest`가 핑거프린트로 감지해 기존 행을 자동 재계산한다(`db.maybe_reprice`).
 - `tokenomy/web/app.py`: FastAPI 라우트. 얇게 유지하고 입력 검증과 라우팅만 둔다.
