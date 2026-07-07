@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from tokenomy.clock import _trailing_window_bounds, business_days_between, month_bounds, parse_ts
+from tokenomy.clock import month_bounds, parse_ts
 from tokenomy.pricing import find_rate, _is_version_boundary
 
 # 효율 코치 휴리스틱 임계값 — 실데이터 캘리브레이션 전 튜닝값(단정 금지, 신호로만 사용)
@@ -117,38 +117,6 @@ def range_spend(conn, provider: str | None, start: datetime, nxt: datetime,
 
     기간별 사용량 카드(ADR 0017) 로컬 모드의 오늘/이번주/이번달·페이스 이전 구간 합에 쓴다.
     """
-    return round(sum((r["cost_usd"] or 0) for r in _range_rows(conn, provider, start, nxt, providers=providers)), 4)
-
-
-def _earliest_message_date(conn, provider: str | None, providers: list[str] | None):
-    """모집단(provider/providers)의 최초 메시지 KST 날짜. 없으면 None."""
-    where, params = _provider_where(provider, providers)
-    dts = [parse_ts(r["ts"]) for r in conn.execute("SELECT ts FROM messages" + where, params).fetchall()]
-    dts = [d for d in dts if d is not None]
-    return min(dts).date() if dts else None
-
-
-def _trailing_business_days(conn, now_kst: datetime, weeks: int, *,
-                            provider: str | None = None,
-                            providers: list[str] | None = None) -> int:
-    """트레일링 창의 영업일 수(적응형 분모).
-
-    분모 = business_days_between(max(창시작, 모집단 최초메시지일), 오늘+1). 기성 사용자
-    (최초메시지 ≤ 창시작)는 풀 창(=5×weeks, 유휴 영업일 포함해 정상 희석), 신규/복귀는
-    존재 이전 일수를 제외해 과소추정(거짓 "여유")을 막는다. 모집단에 메시지가 전혀 없으면 0.
-    earliest-msg는 spend와 같은 provider 모집단으로 조회(분자/분모 모집단 일치).
-    """
-    start, _ = _trailing_window_bounds(now_kst, weeks)
-    earliest = _earliest_message_date(conn, provider, providers)
-    if earliest is None:
-        return 0
-    return business_days_between(max(start.date(), earliest), now_kst.date() + timedelta(days=1))
-
-
-def trailing_window_spend(conn, provider: str | None, now_kst: datetime, weeks: int,
-                          *, providers: list[str] | None = None) -> float:
-    """트레일링 창(오늘 포함 weeks×7일)의 로컬 cost_usd 합. 번다운 없이 총소비."""
-    start, nxt = _trailing_window_bounds(now_kst, weeks)
     return round(sum((r["cost_usd"] or 0) for r in _range_rows(conn, provider, start, nxt, providers=providers)), 4)
 
 

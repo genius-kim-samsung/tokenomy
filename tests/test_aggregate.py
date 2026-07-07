@@ -6,16 +6,13 @@ import pytest
 import tokenomy.aggregate
 from tokenomy.aggregate import (
     DayPoint, DaySessionRow,
-    _trailing_business_days, _windowed_rows,
+    _windowed_rows,
     by_day_session, by_dimension, by_model, by_project, by_session,
     daily_series, insights, month_spend, normalize_project, pricing_coverage,
     session_detail, sidechain_split, stacked_trend, token_composition,
-    trailing_window_spend,
 )
 from tokenomy.clock import KST, month_bounds, period_bounds
-from tokenomy.db import connect, insert_official_buckets, ingest_records
-from tokenomy.official_aggregate import combined_forecast, official_view
-from tokenomy.official_parser import OfficialBucket
+from tokenomy.db import connect, ingest_records
 from tokenomy.parser import UsageRecord
 from tokenomy.web.views import build_date_tree, history_context, dimension_context, overview_context, session_context
 
@@ -1272,127 +1269,6 @@ def test_insights_no_budget_overrun_card():
     # bd 인자 없음 — TypeError 안 나야 함(시그니처 확인)
     texts = " ".join(c.text for c in cards)
     assert "한도 초과" not in texts and "월말" not in texts
-
-
-def _ob(key, kind, used_usd, limit_usd, raw="r", unit="usd", util=0.0, resets=None):
-    return OfficialBucket(
-        bucket_key=key, raw_key=raw, bucket_kind=kind, label=key, native_unit=unit,
-        used_native=used_usd, limit_native=limit_usd,
-        remaining_native=(limit_usd - used_usd) if limit_usd else None,
-        used_usd=used_usd, limit_usd=limit_usd,
-        remaining_usd=(limit_usd - used_usd) if limit_usd else None,
-        utilization=util, resets_at=resets,
-    )
-
-
-def _fc_views(conn, now):
-    return [official_view(conn, "claude", now, 0.04),
-            official_view(conn, "codex", now, 0.04)]
-
-
-# ─── 트레일링 소비속도(행동 속성): _trailing_business_days / trailing_window_spend ───
-# 기울기 창을 월초 누적 → 오늘 포함 최근 weeks×7일로. 분모는 적응형(earliest-msg clamp).
-
-
-def test_trailing_business_days_full_window_established():
-    # 기성 사용자(창 시작 이전에도 데이터) → 창 전체 영업일 = 5×weeks = 10(기본 2주).
-    # NOW=6/10, 2주 창 = [5/28, 6/10] 14일 → 영업일 정확히 10.
-    conn = connect(":memory:")
-    _insert(conn, "2026-05-01T00:00:00Z", 1.0)   # 창 이전 앵커 → earliest_msg 고정(풀 창)
-    assert _trailing_business_days(conn, NOW, 2) == 10
-
-
-def test_trailing_business_days_warmup_clamps_to_earliest():
-    # 신규/복귀: 창 시작 이전 데이터 없음 → 분모를 최초메시지일로 clamp(존재 이전 일수 제외).
-    # 6/5 첫 사용 → business_days(6/5, 6/11) = 4(금·월·화·수).
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-05T01:00:00Z", 10.0)
-    assert _trailing_business_days(conn, NOW, 2) == 4
-
-
-def test_trailing_business_days_empty_db_zero():
-    # 모집단에 메시지 전무 → 0(→ rate None).
-    conn = connect(":memory:")
-    assert _trailing_business_days(conn, NOW, 2) == 0
-
-
-def test_trailing_business_days_population_per_provider():
-    # 분모 모집단 = spend와 동일 필터. codex 신규(6/8)면 codex 분모는 6/8로 clamp,
-    # claude 오래됨(5/1)이면 풀 창. (분자/분모 모집단 일치)
-    conn = connect(":memory:")
-    _insert(conn, "2026-05-01T00:00:00Z", 1.0, provider="claude")
-    _insert(conn, "2026-06-08T01:00:00Z", 5.0, provider="codex")
-    assert _trailing_business_days(conn, NOW, 2, provider="codex") == 3    # 6/8,9,10
-    assert _trailing_business_days(conn, NOW, 2, provider="claude") == 10  # 풀 창
-
-
-def test_trailing_business_days_weeks_param_widens():
-    # weeks=1 → 오늘 포함 7일 [6/4, 6/10] → 영업일 5.
-    conn = connect(":memory:")
-    _insert(conn, "2026-05-01T00:00:00Z", 1.0)
-    assert _trailing_business_days(conn, NOW, 1) == 5
-
-
-def test_trailing_window_spend_sums_in_window():
-    # 창 안만 합산, 이전·미래는 제외. 2주 창 = [5/28, 6/10].
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-05T01:00:00Z", 30.0)   # 창 안
-    _insert(conn, "2026-05-20T01:00:00Z", 99.0)   # 창 밖(이전) 제외
-    _insert(conn, "2026-06-15T01:00:00Z", 99.0)   # 창 밖(미래) 제외
-    assert trailing_window_spend(conn, "claude", NOW, 2) == 30.0
-
-
-def test_trailing_window_spend_boundary_inclusive():
-    # 창 시작일(5/28 KST) 포함, 직전(5/27 KST) 제외.
-    conn = connect(":memory:")
-    _insert(conn, "2026-05-28T01:00:00Z", 5.0)
-    _insert(conn, "2026-05-27T01:00:00Z", 7.0)
-    assert trailing_window_spend(conn, "claude", NOW, 2) == 5.0
-
-
-def test_trailing_window_spend_weeks_widens():
-    # 1주 창 [6/4,6/10]은 6/3 제외, 2주 창 [5/28,6/10]은 포함.
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-03T01:00:00Z", 8.0)
-    assert trailing_window_spend(conn, "claude", NOW, 1) == 0.0
-    assert trailing_window_spend(conn, "claude", NOW, 2) == 8.0
-
-
-def test_trailing_window_spend_providers_filter():
-    # provider=None + providers로 활성 합산. 빈 집합은 0.
-    conn = connect(":memory:")
-    _insert(conn, "2026-06-05T01:00:00Z", 5.0, provider="claude")
-    _insert(conn, "2026-06-06T01:00:00Z", 7.0, provider="codex")
-    assert trailing_window_spend(conn, None, NOW, 2, providers=["claude"]) == 5.0
-    assert trailing_window_spend(conn, None, NOW, 2, providers=["claude", "codex"]) == 12.0
-    assert trailing_window_spend(conn, None, NOW, 2, providers=[]) == 0.0
-
-
-def test_combined_forecast_official_slope_ignores_local_spend():
-    # 엔터 기울기는 로컬 소비를 보지 않는다(로컬 기울기 폐기, ADR 0015 D3). 공식 월초누적만.
-    conn = connect(":memory:")
-    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
-                            buckets=[_ob("monthly", "monthly_limit", 40.0, 200.0, raw="spend")],
-                            created_at="x")
-    _insert(conn, "2026-06-05T01:00:00Z", 999.0, provider="claude")  # 로컬 거액 — 기울기에 영향 없어야
-    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
-    # 공식 월초누적 40/8=5. 로컬 999가 섞이면 깨진다.
-    assert fc.daily_rate_usd == 5.0
-
-
-def test_lens_uses_official_trailing_delta():
-    # 카드 고스트도 (a)공식 트레일링 우선: 윈도우 전 베이스(5/20 used50)+윈도우 내(6/10 used150)
-    # → 100/10영업일=10. 로컬 거액은 무시(공식만, ADR 0015 D3).
-    conn = connect(":memory:")
-    insert_official_buckets(conn, provider="claude", fetched_at="2026-05-20T09:00:00+09:00",
-                            buckets=[_ob("monthly", "monthly_limit", 50.0, 500.0, raw="spend")],
-                            created_at="x")
-    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
-                            buckets=[_ob("monthly", "monthly_limit", 150.0, 500.0, raw="spend")],
-                            created_at="x")
-    _insert(conn, "2026-06-05T01:00:00Z", 999.0, provider="claude")  # 로컬 — 무시
-    v = official_view(conn, "claude", NOW, 0.04)
-    assert v.lens.daily_rate_usd == 10.0   # 공식 트레일링 100/10, 로컬 무시
 
 
 # ─── Commit 2(활성 AI): providers 필터(WHERE provider IN) ─────────────────────

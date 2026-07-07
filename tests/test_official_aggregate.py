@@ -266,6 +266,33 @@ def test_combined_forecast_official_slope_prefers_trailing_delta():
     assert fc.daily_rate_usd == 10.0                # 트레일링 100/10, 월초누적(150/8) 아님
 
 
+def test_combined_forecast_official_slope_ignores_local_spend():
+    # 엔터 기울기는 로컬 소비를 보지 않는다(로컬 기울기 폐기, ADR 0015 D3). 공식 월초누적만.
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 40.0, 200.0, raw="spend")],
+                            created_at="x")
+    _insert(conn, "2026-06-05T01:00:00Z", 999.0, provider="claude")  # 로컬 거액 — 기울기에 영향 없어야
+    fc = combined_forecast(conn, _fc_views(conn, NOW), NOW)
+    # 공식 월초누적 40/8=5. 로컬 999가 섞이면 깨진다.
+    assert fc.daily_rate_usd == 5.0
+
+
+def test_lens_uses_official_trailing_delta():
+    # 카드 고스트도 (a)공식 트레일링 우선: 윈도우 전 베이스(5/20 used50)+윈도우 내(6/10 used150)
+    # → 100/10영업일=10. 로컬 거액은 무시(공식만, ADR 0015 D3).
+    conn = connect(":memory:")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-05-20T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 50.0, 500.0, raw="spend")],
+                            created_at="x")
+    insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
+                            buckets=[_ob("monthly", "monthly_limit", 150.0, 500.0, raw="spend")],
+                            created_at="x")
+    _insert(conn, "2026-06-05T01:00:00Z", 999.0, provider="claude")  # 로컬 — 무시
+    v = official_view(conn, "claude", NOW, 0.04)
+    assert v.lens.daily_rate_usd == 10.0   # 공식 트레일링 100/10, 로컬 무시
+
+
 def test_combined_forecast_already_exhausted():
     conn = connect(":memory:")
     insert_official_buckets(conn, provider="claude", fetched_at="2026-06-10T09:00:00+09:00",
