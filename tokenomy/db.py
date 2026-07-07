@@ -560,3 +560,44 @@ def last_provider_activity_ts(conn: sqlite3.Connection, provider: str) -> str | 
     ).fetchone()
     return row[0] if row and row[0] else None
 
+
+# ---------------------------------------------------------------------------
+# 로컬 롤업 read facade — 세션 메타/최초 등장/일별 턴 조회(aggregate가 위임)
+# official facade(latest_official_snapshot 등)와 대칭. 순수 lookup, 도메인 로직 0.
+# ---------------------------------------------------------------------------
+
+def session_meta(conn: sqlite3.Connection) -> dict:
+    """세션별 메타 행 맵 `{session_id: Row}`. Row는 label/summary/provider/user_turns superset.
+
+    호출부가 필요한 컬럼만 투영한다(맵 컴프리헨션 중복 제거가 목적).
+    """
+    return {
+        r["session_id"]: r
+        for r in conn.execute(
+            "SELECT session_id, label, summary, provider, user_turns FROM sessions"
+        ).fetchall()
+    }
+
+
+def session_first_appearance(conn: sqlite3.Connection) -> dict:
+    """세션별 최초 등장 ts `{session_id: MIN(ts) 문자열}`(전체 messages 기준, raw ISO).
+
+    KST 날짜 변환(도메인)은 호출부(aggregate)에 잔류.
+    """
+    return {
+        r["session_id"]: r["m"]
+        for r in conn.execute(
+            "SELECT session_id, MIN(ts) m FROM messages GROUP BY session_id"
+        ).fetchall()
+    }
+
+
+def session_day_turns_map(conn: sqlite3.Connection) -> dict:
+    """(세션, KST날짜)별 사용자 턴 수 `{(session_id, day): turns}`."""
+    return {
+        (r["session_id"], r["day"]): r["turns"]
+        for r in conn.execute(
+            "SELECT session_id, day, turns FROM session_day_turns"
+        ).fetchall()
+    }
+

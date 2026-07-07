@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from tokenomy import db
 from tokenomy.clock import month_bounds, parse_ts
 from tokenomy.pricing import find_rate, _is_version_boundary
 
@@ -241,12 +242,7 @@ def by_session(
     assert (start is None) == (nxt is None), "start/nxt는 함께 지정해야 한다"
     rows = (_range_rows(conn, provider, start, nxt, providers=providers) if (start and nxt)
             else _month_rows(conn, provider, now_kst, providers=providers))
-    meta = {
-        r["session_id"]: (r["label"], r["summary"], r["provider"], r["user_turns"])
-        for r in conn.execute(
-            "SELECT session_id, label, summary, provider, user_turns FROM sessions"
-        ).fetchall()
-    }
+    meta = db.session_meta(conn)
     agg: dict = {}
     for r in rows:
         if project is not None and (r["project"] or "(unknown)") != project:
@@ -275,15 +271,15 @@ def by_session(
 
     out = []
     for sid, a in agg.items():
-        m = meta.get(sid, (None, None, None, None))
+        m = meta.get(sid)
         top_model, top_share = _top_model(a["models"], a["tokens"])
         out.append(SessionRow(
             session_id=sid, project=a["project"],
-            provider=m[2],
-            label=m[0],
-            summary=m[1],
+            provider=m["provider"] if m else None,
+            label=m["label"] if m else None,
+            summary=m["summary"] if m else None,
             cost=round(a["cost"], 4), first_ts=a["first"], last_ts=a["last"],
-            msgs=(m[3] or 0),
+            msgs=((m["user_turns"] if m else None) or 0),
             cache_ratio=round(a["cr"] / a["den"], 4) if a["den"] else 0.0,
             tokens=a["tokens"],
             top_model=top_model,
@@ -309,20 +305,13 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
     # 세션별 최초 등장일(전체 기준, KST 날짜 문자열)
     first_day: dict[str, str] = {}
     # provider 필터 없음 — 세션 전체의 최초 등장일 기준이어야 월 경계 이어짐을 오판하지 않음
-    for r in conn.execute("SELECT session_id, MIN(ts) m FROM messages GROUP BY session_id").fetchall():
-        dt = parse_ts(r["m"])
+    for sid, min_ts in db.session_first_appearance(conn).items():
+        dt = parse_ts(min_ts)
         if dt:
-            first_day[r["session_id"]] = dt.date().isoformat()
+            first_day[sid] = dt.date().isoformat()
 
-    meta = {
-        r["session_id"]: (r["label"], r["summary"], r["provider"])
-        for r in conn.execute("SELECT session_id, label, summary, provider FROM sessions").fetchall()
-    }
-
-    day_turns = {
-        (r["session_id"], r["day"]): r["turns"]
-        for r in conn.execute("SELECT session_id, day, turns FROM session_day_turns").fetchall()
-    }
+    meta = db.session_meta(conn)   # by_session과 동일 facade(user_turns는 여기서 미사용)
+    day_turns = db.session_day_turns_map(conn)
 
     agg: dict = {}
     for r in rows:
@@ -344,7 +333,10 @@ def by_day_session(conn, provider: str | None, *, start: datetime, nxt: datetime
         cache_ratio = (a["cr"] / a["den"]) if a["den"] else 0.0
         is_continued = first_day.get(sid, date) < date
         cache_miss = is_continued and cache_ratio < INSIGHT_CACHE_READ_MIN
-        label, summary, sprov = meta.get(sid, (None, None, None))
+        m = meta.get(sid)
+        label = m["label"] if m else None
+        summary = m["summary"] if m else None
+        sprov = m["provider"] if m else None
         # msgs = 그 날짜의 사용자 턴 수(session_day_turns). 멀티데이 세션도 날짜별 정확 카운트.
         out.append(DaySessionRow(
             date=date, session_id=sid, provider=sprov,

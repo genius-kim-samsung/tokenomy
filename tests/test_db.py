@@ -579,3 +579,53 @@ def test_last_provider_activity_ts_returns_max():
          ("c", "codex",  "2026-06-27T00:00:00+00:00")])
     conn.commit()
     assert last_provider_activity_ts(conn, "claude") == "2026-06-26T09:00:00+00:00"
+
+
+# --- 로컬 롤업 read facade (aggregate 재배선 대상) ---------------------------
+
+def test_session_meta_returns_row_map():
+    from tokenomy.db import session_meta
+    conn = connect(":memory:")
+    conn.executemany(
+        "INSERT INTO sessions (session_id, project, provider, label, summary, user_turns) "
+        "VALUES (?,?,?,?,?,?)",
+        [("s1", "/p", "claude", "work", "첫 프롬프트", 5),
+         ("s2", "/q", "codex", None, None, None)])
+    conn.commit()
+    m = session_meta(conn)
+    assert set(m) == {"s1", "s2"}
+    assert m["s1"]["label"] == "work"
+    assert m["s1"]["summary"] == "첫 프롬프트"
+    assert m["s1"]["provider"] == "claude"
+    assert m["s1"]["user_turns"] == 5
+    assert m["s2"]["label"] is None
+
+
+def test_session_meta_empty_db():
+    from tokenomy.db import session_meta
+    assert session_meta(connect(":memory:")) == {}
+
+
+def test_session_first_appearance_min_ts_per_session():
+    from tokenomy.db import session_first_appearance
+    conn = connect(":memory:")
+    conn.executemany(
+        "INSERT INTO messages (dedup_key, provider, session_id, ts) VALUES (?,?,?,?)",
+        [("a", "claude", "s1", "2026-06-25T10:00:00+00:00"),
+         ("b", "claude", "s1", "2026-06-20T09:00:00+00:00"),   # 더 이른 것이 MIN
+         ("c", "claude", "s2", "2026-06-27T00:00:00+00:00")])
+    conn.commit()
+    fa = session_first_appearance(conn)
+    assert fa == {"s1": "2026-06-20T09:00:00+00:00",
+                  "s2": "2026-06-27T00:00:00+00:00"}
+
+
+def test_session_day_turns_map_keyed_by_sid_and_day():
+    from tokenomy.db import session_day_turns_map
+    conn = connect(":memory:")
+    conn.executemany(
+        "INSERT INTO session_day_turns (session_id, day, turns) VALUES (?,?,?)",
+        [("s1", "2026-06-11", 2), ("s1", "2026-06-12", 1), ("s2", "2026-06-11", 4)])
+    conn.commit()
+    dt = session_day_turns_map(conn)
+    assert dt == {("s1", "2026-06-11"): 2, ("s1", "2026-06-12"): 1, ("s2", "2026-06-11"): 4}
