@@ -940,7 +940,7 @@ def pool_snapshots_by_day(conn, providers: list[str], *,
                                         "delta": round(delta, 4), "reset": reset})
                 pd["total_delta"] = round(pd["total_delta"] + delta, 6)
             prev_dt, prev_v = dt, v
-    # provider 순서는 인자 순서 보존(뷰가 _TREND_STYLE 순으로 정렬해 전달)
+    # provider 순서는 인자 순서 보존(뷰가 _PROVIDER_STYLE 순으로 정렬해 전달)
     return {d: [entry[p] for p in providers if p in entry] for d, entry in by_day.items()}
 
 

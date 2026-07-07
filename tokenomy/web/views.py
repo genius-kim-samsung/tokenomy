@@ -27,20 +27,26 @@ from tokenomy.forecast import outlook, forecast_params
 from tokenomy.freshness import LAST_INGEST_KEY
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.web import control
+from tokenomy import official_fetch
 
-# 통합 추세 스택 영역 — provider별 (라벨, 선 색, 채움 색[반투명]).
-# 스택 순서 = 등록 순서(아래→위). 신규 provider는 여기 한 줄만 추가하면 밴드가 자동 생성된다.
-_TREND_STYLE: dict[str, tuple[str, str, str]] = {
-    "claude": ("Claude", "#cc785c", "rgba(204,120,92,0.5)"),   # 코랄(기존 누적선 색 유지)
-    "codex": ("Codex", "#5db8a6", "rgba(93,184,166,0.5)"),     # teal(DESIGN.md accent-teal)
+# provider 표시 스타일 — label·accent(추세 선 색=카드 액센트)·fill(추세 밴드 채움[반투명]).
+# 카드 크롬·추세 밴드에 쓰고 게이지 fill엔 절대 쓰지 않는다(fill 색은 임계 전용).
+# 스택/필터 순서 = 등록 순서(claude→codex). 신규 provider는 여기 한 줄만 추가하면 밴드가 자동 생성된다.
+_PROVIDER_STYLE: dict[str, dict] = {
+    "claude": {"label": "Claude", "accent": "#cc785c", "fill": "rgba(204,120,92,0.5)"},  # 코랄(brand)
+    "codex": {"label": "Codex", "accent": "#5db8a6", "fill": "rgba(93,184,166,0.5)"},    # teal(accent-teal)
 }
 
 
 def _remediation(provider: str, status: str | None) -> str | None:
-    """fetch 상태 코드에 따른 사용자 안내 문자열을 반환한다. 정상/없음이면 None."""
+    """fetch 상태 코드에 따른 사용자 안내 문자열을 반환한다. 정상/없음이면 None.
+
+    auth_error 문구는 official_fetch.PROVIDER_SPECS의 provider별 auth_note가 정본(중복 제거).
+    미등록 provider는 기존 폴백 문구를 쓴다.
+    """
     if status == "auth_error":
-        return ("Codex CLI를 1회 실행해 토큰을 갱신하세요"
-                if provider == "codex" else "재로그인이 필요합니다")
+        spec = official_fetch.PROVIDER_SPECS.get(provider)
+        return spec.auth_note if spec else "재로그인이 필요합니다"
     if status == "http_error":
         return "취득 실패 — 잠시 후 다시 시도하세요"
     return None
@@ -52,7 +58,7 @@ def _provider_has_data(conn, provider: str) -> bool:
 
 def _filter_options(active: list[str]) -> list[dict]:
     """화면별 provider 필터(전체/<AI>) 항목. 활성 집합에서 파생 — claude/codex 하드코딩 없음."""
-    return [{"key": p, "label": _PROVIDER_META.get(p, {}).get("label", p.title())} for p in active]
+    return [{"key": p, "label": _PROVIDER_STYLE.get(p, {}).get("label", p.title())} for p in active]
 
 
 def _active_provider(provider: str, active: list[str]) -> str:
@@ -70,12 +76,7 @@ def sidebar_freshness(conn) -> str | None:
 
 
 # ── 공식 사용량 provider 카드 조립(ADR 0002) ───────────────────────────────────
-# provider 액센트 색은 _TREND_STYLE과 동일 팔레트(추세 범례와 일관). 카드 크롬에만 쓰고
-# 게이지 fill엔 절대 쓰지 않는다 — fill 색은 임계(utilization) 전용.
-_PROVIDER_META = {
-    "claude": {"label": "Claude", "accent": "#cc785c"},   # 코랄(brand)
-    "codex": {"label": "Codex", "accent": "#5db8a6"},      # teal(상태색 회피)
-}
+# provider 라벨·액센트는 _PROVIDER_STYLE(상단) 정본을 공유한다.
 
 
 def _forecast_hero(fc) -> dict | None:
@@ -86,7 +87,7 @@ def _forecast_hero(fc) -> dict | None:
     if fc is None:
         return None
     labels = " + ".join(
-        _PROVIDER_META.get(p, {"label": p.title()})["label"] for p in fc.providers
+        _PROVIDER_STYLE.get(p, {"label": p.title()})["label"] for p in fc.providers
     )
     base = {
         "providers_label": labels,
@@ -341,7 +342,7 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime,
     템플릿이 '공식 사용량 미취득' 빈 상태를 띄우고 헤더 ↻로 갱신을 유도한다. curation(ADR 0016)이
     hidden인 버킷(유령 천장 등)은 게이지에서 제외하고, 라벨은 _bucket_gauge가 큐레이션으로 교체한다.
     """
-    meta = _PROVIDER_META.get(provider, {"label": provider.title(), "accent": "#6c6a64"})
+    meta = _PROVIDER_STYLE.get(provider, {"label": provider.title(), "accent": "#6c6a64"})
     fs_status = fetch_state["last_status"] if fetch_state else None
     note = _remediation(provider, fs_status)
     has_official = view.status == "ok" and bool(view.buckets)
@@ -384,7 +385,7 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None) -> list[
 
     표시 대상 = **활성 AI**(tracked_providers)뿐. 끈 provider는 공식 스냅샷·로컬 데이터가
     있어도 카드를 띄우지 않는다(데이터는 보존, 표시만 숨김 — ADR 0005). 활성 0개면 빈 리스트.
-    순서는 PROVIDERS 고정(claude→codex→…). 새 provider는 PROVIDERS·_PROVIDER_META만 늘리면 된다.
+    순서는 PROVIDERS 고정(claude→codex→…). 새 provider는 PROVIDERS·_PROVIDER_STYLE만 늘리면 된다.
     """
     now = now_kst or datetime.now(KST)
     fp = forecast_params(config)              # config 팬아웃 정본(ctu·weeks·max_gap·is_pooled)
@@ -591,7 +592,7 @@ def share_context(conn, config: dict, now_kst: datetime | None = None) -> dict |
         if view.pool_limit_usd is None:
             continue
         pool_providers.append(p)
-        meta = _PROVIDER_META.get(p, {"label": p.title()})
+        meta = _PROVIDER_STYLE.get(p, {"label": p.title()})
         g = official_period_glance(conn, p, now, is_pooled=is_pooled)
         # 한도%(util) = 위치(라이브 누적 pool_used/pool_limit) — 만료형 크레딧이 있어도 "지금 한도의
         # 몇 % 소진"이라 누적이 맞다(크레딧 만료 임박을 계속 알린다). ADR 0024.
@@ -645,7 +646,7 @@ def _local_share_rows(conn, active: list[str], now: datetime, windows: list[tupl
     for p in PROVIDERS:
         if p not in active:
             continue
-        meta = _PROVIDER_META.get(p, {"label": p.title()})
+        meta = _PROVIDER_STYLE.get(p, {"label": p.title()})
         rows.append(ShareRow(
             label=meta["label"],
             today=PeriodSpend(usd=range_spend(conn, p, today_start, now), state="complete"),
@@ -827,14 +828,14 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         forecast_actual = None
 
     # 추세 밴드 = 활성 ∩ 데이터 있는 provider. stacked_trend·차트 JS는 무변경(N밴드 generic).
-    trend_providers = [p for p in _TREND_STYLE if p in active and _provider_has_data(conn, p)]
+    trend_providers = [p for p in _PROVIDER_STYLE if p in active and _provider_has_data(conn, p)]
     bands = stacked_trend(
         [(p, daily_series(conn, p, now)) for p in trend_providers]
     )
     trend_series = [
-        {"label": _TREND_STYLE[b["provider"]][0],
-         "color": _TREND_STYLE[b["provider"]][1],
-         "fill": _TREND_STYLE[b["provider"]][2],
+        {"label": _PROVIDER_STYLE[b["provider"]]["label"],
+         "color": _PROVIDER_STYLE[b["provider"]]["accent"],
+         "fill": _PROVIDER_STYLE[b["provider"]]["fill"],
          "top": b["top"], "cum": b["cum"]}
         for b in bands
     ]
@@ -847,7 +848,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
 
     # 라벨 적응(ADR 0005): 활성 ≥2면 "통합/전 AI 합산", 1개면 수식어 떼고 provider명.
     combined = len(active) >= 2
-    solo_label = (_PROVIDER_META.get(active[0], {}).get("label", active[0].title())
+    solo_label = (_PROVIDER_STYLE.get(active[0], {}).get("label", active[0].title())
                   if len(active) == 1 else None)
 
     return {
@@ -1057,7 +1058,7 @@ def settings_provider_toggles(config: dict) -> list[dict]:
     PROVIDERS 순회 — claude/codex 하드코딩 없음(3번째 AI 확장 대비).
     """
     active = set(tracked_providers(config))
-    return [{"key": p, "label": _PROVIDER_META.get(p, {}).get("label", p.title()),
+    return [{"key": p, "label": _PROVIDER_STYLE.get(p, {}).get("label", p.title()),
              "on": p in active} for p in PROVIDERS]
 
 
@@ -1205,17 +1206,17 @@ def official_history_context(conn, anchor_kst: datetime, provider: str = "", *,
     view_providers = [provider] if provider else pool_providers
 
     interval = official_fetch_settings(config)["min_interval_minutes"]
-    # provider 순서 = _TREND_STYLE(스택/막대/드릴다운 일관) 우선, 나머지는 뒤로.
-    prov_list = ([p for p in _TREND_STYLE if p in view_providers]
-                 + [p for p in view_providers if p not in _TREND_STYLE])
-    prov_label = {p: (_TREND_STYLE[p][0] if p in _TREND_STYLE else p.title()) for p in prov_list}
+    # provider 순서 = _PROVIDER_STYLE(스택/막대/드릴다운 일관) 우선, 나머지는 뒤로.
+    prov_list = ([p for p in _PROVIDER_STYLE if p in view_providers]
+                 + [p for p in view_providers if p not in _PROVIDER_STYLE])
+    prov_label = {p: (_PROVIDER_STYLE[p]["label"] if p in _PROVIDER_STYLE else p.title()) for p in prov_list}
     # 누적선용 리셋-세그먼트 — 갭은 forward-fill(점선 브리지), 리셋만 분할(하드 끊김).
     reset_segments = pool_history(conn, view_providers, max_gap_minutes=None, is_pooled=is_pooled)
 
     def _bar_series(rows):
         return [{
-            "key": p, "label": _TREND_STYLE[p][0] if p in _TREND_STYLE else p.title(),
-            "color": _TREND_STYLE[p][1] if p in _TREND_STYLE else "#8a8a8a",
+            "key": p, "label": _PROVIDER_STYLE[p]["label"] if p in _PROVIDER_STYLE else p.title(),
+            "color": _PROVIDER_STYLE[p]["accent"] if p in _PROVIDER_STYLE else "#8a8a8a",
             "data": [r["per_provider"].get(p) for r in rows],   # provider별 소비(미커버 None)
         } for p in prov_list]
 
