@@ -1,6 +1,7 @@
 from tokenomy.parser import UsageRecord
 from tokenomy.pricing import (
     CostResult,
+    _effective_rate,
     _is_version_boundary,
     apply_pricing_overrides,
     compute_cost,
@@ -22,7 +23,7 @@ def _rec(model, **kw):
         provider="claude",
         session_id="s",
         cwd="/p",
-        ts="t",
+        ts=kw.get("ts", "t"),
         model=model,
         input_tokens=kw.get("input_tokens", 0),
         output_tokens=kw.get("output_tokens", 0),
@@ -226,3 +227,117 @@ def test_fingerprint_reflects_applied_overrides():
     a = pricing_fingerprint(base)
     out = apply_pricing_overrides(copy.deepcopy(PRICING), {"opus": {"input": 5.0}})
     assert pricing_fingerprint(out) != a
+
+
+# --- 날짜유효 단가(dated rates) — Sonnet 5 프로모($2/$10)→표준($3/$15) 전환 ---
+
+DATED = {
+    "match": [
+        {"contains": "sonnet-5", "provider": "claude", "rates": [
+            {"until": "2026-09-01T00:00:00Z", "input": 2.0, "output": 10.0, "cache_write": 2.5, "cache_read": 0.2},
+            {"input": 3.0, "output": 15.0, "cache_write": 3.75, "cache_read": 0.3},
+        ]},
+        {"contains": "sonnet", "provider": "claude", "input": 3.0, "output": 15.0,
+         "cache_write": 3.75, "cache_read": 0.30},
+    ]
+}
+
+
+def test_effective_rate_flat_entry_returned_asis():
+    # 날짜구간이 없는 flat 엔트리는 ts와 무관하게 그대로 반환
+    flat = DATED["match"][1]
+    assert _effective_rate(flat, "2026-08-15T00:00:00Z") is flat
+    assert _effective_rate(flat, None) is flat
+
+
+def test_effective_rate_picks_promo_before_cutover():
+    entry = DATED["match"][0]
+    r = _effective_rate(entry, "2026-08-15T12:00:00Z")
+    assert (r["input"], r["output"]) == (2.0, 10.0)
+
+
+def test_effective_rate_picks_standard_after_cutover():
+    entry = DATED["match"][0]
+    r = _effective_rate(entry, "2026-09-15T12:00:00Z")
+    assert (r["input"], r["output"]) == (3.0, 15.0)
+
+
+def test_effective_rate_boundary_is_exclusive():
+    # until은 상한 배타(exclusive) — 정각 2026-09-01T00:00Z는 표준
+    entry = DATED["match"][0]
+    assert _effective_rate(entry, "2026-09-01T00:00:00Z")["input"] == 3.0
+    # 1초 전은 프로모
+    assert _effective_rate(entry, "2026-08-31T23:59:59Z")["input"] == 2.0
+
+
+def test_effective_rate_none_ts_defaults_standard():
+    # ts 미상 → 개방구간(표준)으로 폴백
+    entry = DATED["match"][0]
+    assert _effective_rate(entry, None)["input"] == 3.0
+    assert _effective_rate(entry, "unparseable")["input"] == 3.0
+
+
+def test_compute_cost_sonnet5_promo_before_cutover():
+    r = compute_cost(_rec("claude-sonnet-5", output_tokens=1_000_000, ts="2026-08-15T12:00:00Z"), DATED)
+    assert r.priced is True
+    assert r.cost_usd == 10.0   # 프로모 출력 $10/MTok
+
+
+def test_compute_cost_sonnet5_standard_after_cutover():
+    r = compute_cost(_rec("claude-sonnet-5", output_tokens=1_000_000, ts="2026-09-15T12:00:00Z"), DATED)
+    assert r.cost_usd == 15.0   # 표준 출력 $15/MTok
+
+
+def test_compute_cost_sonnet5_promo_1h_cache_tracks_input():
+    # 1h 캐시 = 유효 input×2. 프로모 input $2 → 1h 1M = $4
+    r = compute_cost(
+        _rec("claude-sonnet-5", cache_creation=1_000_000, cache_creation_1h=1_000_000,
+             ts="2026-08-15T00:00:00Z"), DATED)
+    assert r.cost_usd == 4.0
+
+
+def test_compute_cost_sonnet4_uses_flat_sonnet_entry():
+    # sonnet-4-6은 dated sonnet-5가 아니라 flat 'sonnet' catch-all로 매겨진다(ts 무관)
+    r = compute_cost(_rec("claude-sonnet-4-6", output_tokens=1_000_000, ts="2026-08-15T00:00:00Z"), DATED)
+    assert r.cost_usd == 15.0
+
+
+def test_find_rate_prefers_sonnet5_over_generic_sonnet():
+    assert find_rate("claude-sonnet-5", DATED)["contains"] == "sonnet-5"
+    assert find_rate("claude-sonnet-4-6", DATED)["contains"] == "sonnet"
+
+
+def test_fingerprint_changes_when_dated_entry_added():
+    import copy
+    base = {"match": [DATED["match"][1]]}   # flat sonnet만
+    a = pricing_fingerprint(base)
+    assert pricing_fingerprint(DATED) != a   # dated 엔트리 추가 → 재계산 신호
+
+
+def test_fingerprint_changes_when_a_dated_rate_changes():
+    import copy
+    p2 = copy.deepcopy(DATED)
+    p2["match"][0]["rates"][0]["input"] = 2.5   # 프로모 단가 변경
+    assert pricing_fingerprint(p2) != pricing_fingerprint(DATED)
+
+
+def test_full_flat_override_replaces_dated_entry():
+    # dated 엔트리에 full flat override → escape hatch가 우선(ts 무관 flat)
+    import copy
+    out = apply_pricing_overrides(copy.deepcopy(DATED), {
+        "sonnet-5": {"input": 1.0, "output": 5.0, "cache_write": 1.25, "cache_read": 0.1},
+    })
+    entry = find_rate("claude-sonnet-5", out)
+    assert _effective_rate(entry, "2026-08-15T00:00:00Z")["input"] == 1.0
+    r = compute_cost(_rec("claude-sonnet-5", output_tokens=1_000_000, ts="2026-08-15T00:00:00Z"), out)
+    assert r.cost_usd == 5.0
+
+
+def test_shipped_config_sonnet5_promo_and_standard():
+    p = load_pricing("config/pricing.json")
+    entry = find_rate("claude-sonnet-5", p)
+    assert entry is not None and entry.get("contains") == "sonnet-5"
+    promo = compute_cost(_rec("claude-sonnet-5", input_tokens=1_000_000, ts="2026-08-15T00:00:00Z"), p)
+    assert promo.cost_usd == 2.0
+    std = compute_cost(_rec("claude-sonnet-5", input_tokens=1_000_000, ts="2026-09-15T00:00:00Z"), p)
+    assert std.cost_usd == 3.0

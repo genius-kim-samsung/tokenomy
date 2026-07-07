@@ -5,12 +5,18 @@ contains가 부분일치하는 첫 단가를 쓴다. 미일치 모델은 비용 
 
 단가는 공개 API 기준 기본값이다. 청구 단가가 다르면 tokenomy.config.json의
 pricing_overrides로 모델별 단가를 덮어쓸 수 있다(코드 변경 불필요).
+
+**날짜유효 단가(dated rates).** match 엔트리는 flat 단가 대신 `rates`([구간])를
+가질 수 있다 — 공식 단가가 시점에 따라 바뀌는 모델(예: Sonnet 5 출시 프로모
+~2026-08-31 후 표준)을 record.ts로 정확히 매긴다. 각 행은 자기 ts의 유효 단가로
+한 번 계산돼 캐시되므로(단가표 변화 시에만 reprice), 경계 양쪽이 영구 정확하다.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from tokenomy.parser import UsageRecord
@@ -41,7 +47,7 @@ def pricing_fingerprint(pricing: dict) -> str:
     각 항목은 단가 필드만 정규화해 무관한 키(주석 등) 변화엔 둔감하게 만든다.
     """
     norm = [
-        {k: entry.get(k) for k in _FINGERPRINT_FIELDS}
+        {**{k: entry.get(k) for k in _FINGERPRINT_FIELDS}, "rates": entry.get("rates")}
         for entry in pricing.get("match", [])
     ]
     blob = json.dumps(norm, sort_keys=True, ensure_ascii=False)
@@ -77,22 +83,64 @@ def _is_version_boundary(model: str, contains: str) -> bool:
 CACHE_CREATE_1H_INPUT_MULTIPLIER = 2.0
 
 
+def _parse_ts(ts: str | None) -> datetime | None:
+    """ISO 타임스탬프(UTC 가정) → aware datetime. 실패/None은 None.
+
+    parser.kst_day와 동형 규칙 — aggregate.parse_ts를 import하면 pricing→aggregate
+    역방향 의존이 생기므로 여기 최소 심으로 둔다.
+    """
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _effective_rate(entry: dict, ts: str | None) -> dict:
+    """match 엔트리의 유효 단가를 고른다.
+
+    - flat 필드(`input` 존재)면 그 엔트리를 그대로(원본 flat이거나 override로 flat 주입).
+      pricing_overrides가 dated 모델에 full flat 단가를 주면 escape hatch로 우선한다.
+    - 아니면 `rates`([구간])에서 record.ts로 선택 — 이른 구간부터, `until`(상한 배타)이
+      없는 마지막이 개방구간. ts 미상/파싱실패는 개방구간(표준)으로 폴백.
+    """
+    if "input" in entry:
+        return entry
+    rates = entry.get("rates")
+    if not rates:
+        return entry
+    t = _parse_ts(ts)
+    for r in rates:
+        until = r.get("until")
+        if until is None:
+            return r
+        u = _parse_ts(until)
+        if t is not None and u is not None and t < u:
+            return r
+    return rates[-1]
+
+
 def compute_cost(record: UsageRecord, pricing: dict) -> CostResult:
     """UsageRecord의 비용을 계산. 캐시 단가를 5m/1h로 분리 반영."""
     rate = find_rate(record.model, pricing)
     if rate is None:
         return CostResult(cost_usd=0.0, priced=False, provider=None)
 
+    # dated 엔트리는 record.ts로 유효 구간을 해석(flat은 그대로).
+    eff = _effective_rate(rate, record.ts)
+
     # cache_creation 총량에서 1h 분량을 떼어, 1h는 input×2, 나머지(5m)는 cache_write 단가로.
     cache_1h = record.cache_creation_1h
     cache_5m = max(record.cache_creation - cache_1h, 0)
 
     cost = (
-        record.input_tokens * rate["input"]
-        + record.output_tokens * rate["output"]
-        + cache_5m * rate["cache_write"]
-        + cache_1h * rate["input"] * CACHE_CREATE_1H_INPUT_MULTIPLIER
-        + record.cache_read * rate["cache_read"]
+        record.input_tokens * eff["input"]
+        + record.output_tokens * eff["output"]
+        + cache_5m * eff["cache_write"]
+        + cache_1h * eff["input"] * CACHE_CREATE_1H_INPUT_MULTIPLIER
+        + record.cache_read * eff["cache_read"]
     ) / 1_000_000
 
     return CostResult(

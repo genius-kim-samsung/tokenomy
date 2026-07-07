@@ -31,6 +31,7 @@
 ## 비자명 게시 (gotchas)
 
 - 주의: `cost_usd`는 (토큰×단가)의 **캐시값** — 단가(pricing.json/overrides)가 바뀌면 `ingest`가 단가 핑거프린트로 감지해 기존 행을 **자동 재계산**(`db.maybe_reprice`), 직접 UPDATE 금지. 1h 캐시 분리는 `cache_creation_1h` 컬럼에 저장해 재계산도 정확. 증분 적재 + dedup 가드는 옛 행을 다시 안 건드리므로 이 경로가 필수.
+- **날짜유효 단가(dated rates, ADR 0025).** match 엔트리는 flat 단가 대신 `rates`([구간], 각 구간에 `until`=ISO8601 UTC 상한 배타)를 가질 수 있다 — `compute_cost`가 `_effective_rate(rate, record.ts)`로 **행별 ts의 유효 구간**을 골라 계산한다(예: `sonnet-5` 출시 프로모 $2/$10 ~2026-08-31, 이후 표준 $3/$15; `"sonnet"` catch-all **위**에 둬 first-match). 단가 필드를 실제로 읽는 곳은 `compute_cost` 하나 — `pricing_coverage`는 `rate.get("contains")`만 봐 무영향. `pricing_fingerprint`가 `rates`를 포함하므로 벽시계가 아니라 **단가표 변화 때만** reprice. flat 엔트리는 `"input" in entry` 단락으로 동작 불변, `pricing_overrides` full flat은 dated를 escape hatch로 우선.
 - 주의: 증분 파싱은 `scan_offsets`의 byte-offset 기반 — 파일은 append되므로 mtime 비교 로직을 넣지 말 것. 단, ai-title은 세션 종료 시 갱신되어 `parse_titles`가 매번 전체 스캔한다.
 - **dedup은 ccusage와 동형.** `(provider, message_id, request_id)` 키 — 리트라이는 별개 과금으로 보존, 비sidechain(부모)이 sidechain replay를 이긴다.
 - 주의: 월/일 경계는 **KST** 기준(저장 ts는 UTC) — 집계에서 변환한다.

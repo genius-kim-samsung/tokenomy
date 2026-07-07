@@ -4,11 +4,16 @@
     "basis": "Public API list prices (defaults). Override per-model via pricing_overrides in tokenomy.config.json if your billing differs.",
     "fields": "input=input_tokens, output=output_tokens, cache_write=cache_creation_input_tokens, cache_read=cache_read_input_tokens",
     "matching": "First match[] entry whose 'contains' is a substring of the model id. No match -> cost not computed + warning.",
+    "dated_rates": "An entry may carry 'rates' (list) instead of flat fields for models whose list price changes over time. Each rate has an optional 'until' (ISO8601 UTC, exclusive upper bound); the open-ended rate (no 'until') is last. compute_cost picks the rate matching record.ts, so each row is priced by its own timestamp.",
     "note": "Update list prices from official Anthropic/OpenAI pricing pages as they change."
   },
   "match": [
     { "contains": "opus-4-1",  "provider": "claude", "input": 15.0, "output": 75.0, "cache_write": 18.75, "cache_read": 1.50 },
     { "contains": "opus",      "provider": "claude", "input": 5.0,  "output": 25.0, "cache_write": 6.25,  "cache_read": 0.50 },
+    { "contains": "sonnet-5",  "provider": "claude", "rates": [
+      { "until": "2026-09-01T00:00:00Z", "input": 2.0, "output": 10.0, "cache_write": 2.50, "cache_read": 0.20 },
+      {                                  "input": 3.0, "output": 15.0, "cache_write": 3.75, "cache_read": 0.30 }
+    ] },
     { "contains": "sonnet",    "provider": "claude", "input": 3.0,  "output": 15.0, "cache_write": 3.75,  "cache_read": 0.30 },
     { "contains": "haiku",     "provider": "claude", "input": 1.0,  "output": 5.0,  "cache_write": 1.25,  "cache_read": 0.10 },
     { "contains": "fable",     "provider": "claude", "input": 10.0, "output": 50.0, "cache_write": 12.50, "cache_read": 1.0 },
