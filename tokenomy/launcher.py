@@ -176,7 +176,7 @@ def _start_background_poll() -> None:
     stop_event는 종료(_on_quit) 시 set되어 sleep(stop_event.wait)을 깨운다.
     """
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.config import load_config
     from tokenomy.db import connect
     from tokenomy.official_fetch import background_poll_loop

@@ -246,9 +246,12 @@ flowchart LR
     API["official usage API"] --> OF["official_fetch.py (sole outbound call)"]
     OF --> OP["official_parser.py"]
     OP --> DB
-    DB --> AG["aggregate.py"]
+    DB --> AG["aggregate.py (local rollups)"]
+    DB --> OA["official_aggregate.py (official aggregation)"]
     AG --> CLI["cli.py (report)"]
     AG --> WEB["web/ (FastAPI + Jinja2)"]
+    OA --> CLI
+    OA --> WEB
 ```
 
 ## Adding a parser for another tool

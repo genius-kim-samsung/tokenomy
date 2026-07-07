@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from tokenomy.aggregate import KST
+from tokenomy.clock import KST
 from tokenomy.db import connect, insert_official_buckets
 from tokenomy.official_parser import OfficialBucket
 
@@ -17,7 +17,7 @@ NOW = datetime(2026, 6, 10, 15, 0, tzinfo=KST)   # 수 15:00 — 주 시작=월 
 
 
 def _ps(usd, state="complete"):
-    from tokenomy.aggregate import PeriodSpend
+    from tokenomy.official_aggregate import PeriodSpend
     return PeriodSpend(usd=usd, state=state)
 
 

@@ -9,14 +9,16 @@
 - **official_fetch.py** — 공식 사용량 라이브 취득(유일한 아웃바운드). **tracked_providers**(=활성 AI; 앱 전반 표시 게이트, ADR 0005)만 호출. 각 CLI의 로컬 OAuth 토큰으로 단발 GET(≤3s/provider, 백오프 없음 — 실패 즉시 포기). 엔드포인트: Claude `https://api.anthropic.com/api/oauth/usage`, Codex `https://chatgpt.com/backend-api/wham/usage`. 401→auth_error, 그 외 실패→http_error, **마지막 스냅샷·last_success_at 보존**. PII(토큰/account_id) 미저장 — 헤더에 쓰고 버린다. `refresh_tracked(config, providers=None, manual=False)`가 tracked(또는 지정 providers) 전체를 1회 갱신(예외 삼킴). 트리거(ADR 0003): **수동** `POST /official/refresh`(manual=True, throttle bypass) + **자동** `GET /official/section`(대시보드 `hx-trigger="load, every Nm"` — load가 起動 갱신 겸용). `cmd_ingest`는 갱신을 트리거하지 않는다. 엔드포인트 quota는 CLI와 공유 — 충돌 못 막음. 표준 라이브러리만. provider별 지식(엔드포인트·크레덴셜 경로·auth 안내·헤더 조립·토큰 refresh·파서)은 `PROVIDER_SPECS`(frozen `ProviderSpec`) 레지스트리로 수렴 — `fetch_provider`는 provider 분기 없이 `spec.headers/refresh/parse`에 위임하고 미등록 provider는 `unknown provider`로 fail-loud. 새 AI = spec 1개 추가(+파서·단가). refresh/ensure_fresh 쌍둥이는 `_refresh_oauth`/`_ensure_fresh` 엔진 + provider 콜백으로 접혀 있다(public 4함수는 셸).
 - **official_parser.py** — 공식 raw JSON → `OfficialBucket`(+`credit_to_usd` 환산) → `official_buckets`.
 - **db.py** — SQLite 적재. `messages`(메시지별 토큰/비용, `dedup_key` UNIQUE로 중복 제거), `sessions`(메타+요약+턴수), `session_day_turns`(세션×날짜 턴 수), `scan_offsets`(증분 스캔용 byte-offset), `official_buckets`(공식 멀티버킷 USD 스냅샷), `official_fetch_state`(자동 취득 상태), `meta`(key-value — 단가 reprice 핑거프린트 등). 스키마 변경은 `_MIGRATE_COLS`에 ALTER 추가.
-- **aggregate.py** — 공식 사용량 기반 예측(`official_view`+`lens`) · 프로젝트별/세션별 집계 · 사용량 전용 폴백. 공식 데이터가 없으면 로컬 JSONL 기반 사용량 전용 view로 자동 폴백. 집계 함수는 `provider:str|None`(None=DB전체) 외에 키워드 `providers:list[str]|None`(=**활성 AI** 집합)을 받는다 — `provider=None and providers!=None`이면 `WHERE provider IN (...)`로 합산, 빈 집합 `[]`은 `WHERE 0`(빈 결과). 뷰 경계가 활성 집합을 주입하므로 화면의 "전체"는 **DB 전체가 아니라 활성 AI 합산**이다(ADR 0005).
+- **aggregate.py** — 로컬 롤업(messages/sessions) 집계: 프로젝트/세션/일×세션/차원(모델·스킬·브랜치)별 비용·토큰 구성·사이드체인 분리·효율 신호(insights)·단가 커버리지·트레일링 소비. 집계 함수는 `provider:str|None`(None=DB전체) 외에 키워드 `providers:list[str]|None`(=**활성 AI** 집합)을 받는다 — `provider=None and providers!=None`이면 `WHERE provider IN (...)`로 합산, 빈 집합 `[]`은 `WHERE 0`(빈 결과). 뷰 경계가 활성 집합을 주입하므로 화면의 "전체"는 **DB 전체가 아니라 활성 AI 합산**이다(ADR 0005).
+- **official_aggregate.py** — 공식 사용량 집계(공식 스냅샷 `official_buckets` 기반): `official_view`+`lens` · 통합 전망(`combined_forecast`/`forecast_month_line`) · 풀 이력(`pool_*`) · 기간 소비 글랜스(`official_period_glance`). 로컬 롤업(aggregate.py)과 **상호 호출 없는** 별개 깊은 모듈(정적 가드 테스트로 강제).
+- **clock.py** — 시간·달력 어휘 저층 leaf(의존성 0, domain.py 옆). `KST` · `parse_ts` · `month_bounds` · 영업일 산술 · `period_bounds`. aggregate(로컬)·official_aggregate(공식)·web이 모두 아래로 import.
 - **pricing.py + `config/pricing.json`** — 모델명 매칭으로 토큰→USD. `pricing_overrides`로 사용자 단가 override.
 - **web/app.py · web/views.py** — FastAPI 라우트(얇게: 라우팅+입력검증만) / 화면 데이터 조립. 사용 이력(로컬)·기준별은 주/월 토글 + 사용자 지정 날짜 구간(`start`/`end`) 조회(`views._resolve_range`). htmx는 `web/static/vendor/`에 vendored(오프라인), Alpine은 실수요 시 추가(현재 미사용).
 - **launcher.py** — exe(Windows)·소스(Linux `start_tokenomy.sh`) 공통 진입점. ingest 1회 → 빈 포트 탐색 → uvicorn(127.0.0.1) → pywebview 창 + 트레이 상주(없으면 브라우저 fallback). 미니 전환·`current_view` 시드는 `mini_view_available()`(Windows 전용)로 게이트.
 - **web/control.py** — 창 복원 신호용 in-process 콜백 레지스트리. launcher(메인 스레드 webview)와 라우트(데몬 스레드)의 순환 import를 끊는다 — launcher가 `set_show_callback`, `/app/show` 라우트가 `request_show`(ADR 0006).
 - **paths.py** — 경로 중앙 해석(데이터 위치가 실행 형태로 갈린다 — 루트 게시 참고). `mini_view_available()`(=Windows 전용, ADR 0013)도 여기 — 미니뷰 플랫폼 게이트의 **단일 진실원**(launcher + 웹 사이드바가 공유).
 - **config.py** — 설정 모델(`config/tokenomy.config.json` 로더). `load_config`/`save_config` · `tracked_providers`(=**활성 AI**; 미설정/None이면 크레덴셜 존재로 시드, 명시적 `[]`는 빈 집합 영속 — 재시드 안 함) · `credit_to_usd`(기본 0.04) · `official_fetch_settings`(min_interval_minutes) · `pricing_overrides`. **config 키를 찾으면 여기다**(`TOKENOMY_CONFIG`로 경로 override). (구 `budget.py`에서 리네임 — 예산 로직은 제거됨.)
-- **domain.py** — 버킷 어휘 저층 leaf(의존성 0). `PROVIDERS`(추적 AI 목록) · `POOL_DEFAULT_KINDS`(풀 기본=주기형 월 한도) · `is_pooled_kind(bk)`(풀 멤버십 술어). config·aggregate가 **모두 아래로** import — 옛날 이 상수들이 aggregate에 살아 config가 함수-지역 import로 올려다보던 back-edge를 없앤다. bucket_kind **생산**은 official_parser, 정렬/타이브레이크(`_BUCKET_ORDER`·`tie_order`)는 aggregate가 소유 — domain은 어휘+술어만.
+- **domain.py** — 버킷 어휘 저층 leaf(의존성 0). `PROVIDERS`(추적 AI 목록) · `POOL_DEFAULT_KINDS`(풀 기본=주기형 월 한도) · `is_pooled_kind(bk)`(풀 멤버십 술어). config·official_aggregate가 **모두 아래로** import — 옛날 이 상수들이 aggregate에 살아 config가 함수-지역 import로 올려다보던 back-edge를 없앤다. bucket_kind **생산**은 official_parser, 정렬/타이브레이크(`_BUCKET_ORDER`·`tie_order`)는 official_aggregate가 소유 — domain은 어휘+술어만.
 - **freshness.py** — 수집 신선도. 마지막 ingest 경과 + 디스크상 최고령 raw 파일 나이(vs 30일 cleanup) → ≥25일이면 `warn`. 트리거가 다 실패해도 데이터 유실 위험을 사람에게 노출.
 - **update.py** — 인앱 업데이트 확인(GitHub Releases 최신 태그 vs `__version__`, 1일 1회). 실패/오프라인은 조용히 skip(`TOKENOMY_SKIP_UPDATE_CHECK`로 끔). stdlib(urllib)만.
 
@@ -42,8 +44,9 @@
 
 ## 모듈 간 의존성 (cross-module dependencies)
 
-- `web/views.py` → `aggregate.py` → `db.py` 단방향. 역방향 import 금지.
-- `domain.py`(버킷 어휘 leaf, 의존성 0)는 config·aggregate가 **모두 아래로** import — config→aggregate back-edge를 없앤 저층. 공유 도메인 상수/술어를 aggregate에 두지 말 것(config가 올려다보게 됨).
+- `web/views.py` → `aggregate.py`·`official_aggregate.py` → `db.py` 단방향. 역방향 import 금지. aggregate(로컬) ↔ official_aggregate(공식)도 **상호 무호출**(양쪽 정적 가드 테스트로 강제).
+- `clock.py`(시간·달력 어휘 leaf, 의존성 0)는 aggregate·official_aggregate·web·cli가 모두 아래로 import — 공유 시간 어휘를 aggregate에 두지 말 것(domain.py와 같은 원칙).
+- `domain.py`(버킷 어휘 leaf, 의존성 0)는 config·official_aggregate가 **모두 아래로** import — config→aggregate back-edge를 없앤 저층. 공유 도메인 상수/술어를 aggregate에 두지 말 것(config가 올려다보게 됨).
 - `launcher.py` ↔ 라우트의 순환 import는 `web/control.py` 콜백 레지스트리로 끊는다(ADR 0006).
 - `paths.py`가 데이터/설정 경로와 `mini_view_available()`의 단일 진실원 — launcher와 웹 사이드바가 공유.
 - 테스트는 [tests/](../tests/CLAUDE.md)에 모듈별 1:1 대응(`tests/test_db.py` ↔ `db.py` 식).

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from tokenomy.aggregate import KST
+from tokenomy.clock import KST
 from tokenomy.db import connect, insert_official_buckets, insert_official_raw
 from tokenomy.web import app as app_module
 from tokenomy.web import views as views_module
@@ -261,7 +261,7 @@ def test_session_usage_card_renders_tokens_model_duration(tmp_path, monkeypatch)
 def _seed_glance_history(conn, provider, day_used):
     """USD 버킷 표본을 2026-06-<day> 12:00 KST 스냅샷으로 적재(글랜스 렌더 스모크용)."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.official_parser import OfficialBucket
     for day, used in day_used:
         dt = datetime(2026, 6, day, 12, 0, tzinfo=KST)
@@ -279,7 +279,7 @@ def _seed_glance_history(conn, provider, day_used):
 def test_official_section_renders_period_glance(tmp_path, monkeypatch):
     """_official_section.html이 공식 기간 소비 글랜스 줄을 Jinja 오류 없이 렌더한다(ADR 0011)."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.official_parser import OfficialBucket
     from tokenomy.web.views import official_section_context
 
@@ -297,7 +297,7 @@ def test_official_section_renders_period_glance(tmp_path, monkeypatch):
 def test_official_section_renders_period_card(tmp_path, monkeypatch):
     """_official_section.html이 기간별 사용량 카드(오늘/이번주/이번달 + 복사 + 숨김 문구)를 렌더한다(ADR 0017)."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import official_section_context
 
     _, conn_factory = _client(tmp_path, monkeypatch)
@@ -337,7 +337,7 @@ def test_period_card_template_shows_baseline_and_omits_when_none():
 def test_official_section_no_share_card_without_pool(tmp_path, monkeypatch):
     """rate-window-only(개인 구독제)면 공유 카드 없음(share None)."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.official_parser import OfficialBucket
     from tokenomy.web.views import official_section_context
 
@@ -360,7 +360,7 @@ def test_official_section_no_share_card_without_pool(tmp_path, monkeypatch):
 def test_mini_section_renders_share_source(tmp_path, monkeypatch):
     """_mini_section.html이 숨김 공유 소스(.share-src)를 렌더한다 — 헤더 📋가 읽는다."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import mini_view_context
 
     _, conn_factory = _client(tmp_path, monkeypatch)
@@ -376,7 +376,7 @@ def test_mini_section_renders_share_source(tmp_path, monkeypatch):
 def test_mini_section_renders_period_glance(tmp_path, monkeypatch):
     """_mini_section.html이 글랜스 강조 줄을 Jinja 오류 없이 렌더한다(ADR 0011)."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.official_parser import OfficialBucket
     from tokenomy.web.views import mini_view_context
 
@@ -396,7 +396,7 @@ def test_mini_gauge_caption_moves_to_bar_tooltip(tmp_path, monkeypatch):
     한 줄 인라인 압축의 핵심 — 캡션 줄을 빼고 hover로 절대액을 확인한다.
     """
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import mini_view_context
 
     _, conn_factory = _client(tmp_path, monkeypatch)
@@ -412,7 +412,7 @@ def test_mini_gauge_caption_moves_to_bar_tooltip(tmp_path, monkeypatch):
 def test_mini_gauge_shows_reset_countdown(tmp_path, monkeypatch):
     """미니 rate_window 게이지는 % 뒤에 거친 리셋 카운트다운(· N단위, muted)을 인라인으로 보여준다."""
     from datetime import datetime, timedelta
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.db import insert_official_buckets
     from tokenomy.official_parser import OfficialBucket
     from tokenomy.web.views import mini_view_context
@@ -443,7 +443,7 @@ def test_mini_freshness_uses_updated_variant(tmp_path, monkeypatch):
     'N분전 갱신됨'을 쓴다 — 공유 rel-time.js를 data 속성으로 분기(사이드바·큰 창 불변).
     """
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import mini_view_context
 
     _, conn_factory = _client(tmp_path, monkeypatch)
@@ -486,7 +486,7 @@ def test_trend_data_embedded(tmp_path, monkeypatch):
 
 def test_overview_context_includes_forecast(tmp_path, monkeypatch):
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.db import connect, insert_official_buckets
     from tokenomy.official_parser import OfficialBucket
     from tokenomy.web.views import overview_context
@@ -537,7 +537,7 @@ def _ovw_cfg(tmp_path, monkeypatch, mode=None):
 def test_overview_enterprise_headline_official(tmp_path, monkeypatch):
     # 엔터프라이즈 + USD 풀 → 헤드라인=공식 pool used·히어로 표시·추세 오버레이 존재.
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import overview_context
     _ovw_cfg(tmp_path, monkeypatch, "enterprise")
     conn = connect(":memory:")
@@ -552,7 +552,7 @@ def test_overview_enterprise_headline_official(tmp_path, monkeypatch):
 def test_overview_subscription_suppresses_hero_uses_local_headline(tmp_path, monkeypatch):
     # 개인구독제: USD 버킷이 있어도(혼합 엣지) A군은 로컬 — 히어로 숨김·헤드라인 로컬·추세 오버레이 없음.
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import overview_context
     _ovw_cfg(tmp_path, monkeypatch, "subscription")
     conn = connect(":memory:")
@@ -572,7 +572,7 @@ def test_overview_subscription_suppresses_hero_uses_local_headline(tmp_path, mon
 def test_overview_unset_mode_with_pool_treated_official(tmp_path, monkeypatch):
     # 미설정(시드 전)이라도 USD 풀이 있으면 A군은 공식으로 — 곧 enterprise로 시드될 상태.
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import overview_context
     _ovw_cfg(tmp_path, monkeypatch, None)
     conn = connect(":memory:")
@@ -615,7 +615,7 @@ def test_dashboard_local_headline_renders_zone_chip(tmp_path, monkeypatch):
 def test_official_section_subscription_throttle_framing(tmp_path, monkeypatch):
     # 개인구독제: rate-window 게이지를 '이용 한도(스로틀)'로 프레이밍(D4·유일 공식 신호).
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.official_parser import OfficialBucket
     from tokenomy.web.views import official_section_context
     _, conn_factory = _client(tmp_path, monkeypatch)
@@ -815,7 +815,7 @@ def test_history_partial_returns_fragment_only(tmp_path, monkeypatch):
 
 def test_history_shows_data_freshness(tmp_path, monkeypatch):
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.freshness import record_ingest
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
@@ -1293,7 +1293,7 @@ def test_official_history_drilldown_multi_provider_labels(tmp_path, monkeypatch)
 def test_official_history_context_hourly_shape_and_gap(tmp_path, monkeypatch):
     """period=day → 시간대별(24행) + 갭 시각 covered=False + 누적선 리셋-세그먼트(갭=null)·한도선 제거(ADR 0019)."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.official_parser import OfficialBucket
     from tokenomy.web.views import official_history_context
     cfg = tmp_path / "c.json"
@@ -1348,7 +1348,7 @@ def test_official_history_month_table_hides_future_days(tmp_path, monkeypatch):
     차트 x축은 월 전체를 유지한다(축은 라벨이지 관측 주장이 아님 — CONTEXT.md).
     """
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import official_history_context
     conn = _oh_ctx_conn(tmp_path, monkeypatch)
     _seed_oh_snap(conn, "claude", "2026-06-10T09:00:00+09:00", 100.0)
@@ -1367,7 +1367,7 @@ def test_official_history_day_table_hides_future_hours_today(tmp_path, monkeypat
     차트는 24칸 유지. 과거 날짜의 일 뷰는 24행 전부(기존 테스트가 커버).
     """
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import official_history_context
     conn = _oh_ctx_conn(tmp_path, monkeypatch)
     _seed_oh_snap(conn, "claude", "2026-06-15T09:00:00+09:00", 100.0)
@@ -1382,7 +1382,7 @@ def test_official_history_day_table_hides_future_hours_today(tmp_path, monkeypat
 def test_official_history_custom_range_hides_future_days(tmp_path, monkeypatch):
     """사용자 지정 구간이 미래를 포함해도 같은 규칙 — 표는 오늘까지, 차트 축은 구간 전체."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import official_history_context
     conn = _oh_ctx_conn(tmp_path, monkeypatch)
     _seed_oh_snap(conn, "claude", "2026-06-10T09:00:00+09:00", 100.0)
@@ -1495,7 +1495,7 @@ def test_official_section_legend_official_account_wide(tmp_path, monkeypatch):
 def test_official_section_source_chip_zone_level_once(tmp_path, monkeypatch):
     """출처 칩 '공식 · 계정 전체'는 존(섹션) 1회 — provider 카드마다 반복 안 함(ADR 0015 D7)."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import official_section_context
     _, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
@@ -1512,7 +1512,7 @@ def test_official_section_source_chip_zone_level_once(tmp_path, monkeypatch):
 def test_official_section_no_official_clean_state_no_estimate(tmp_path, monkeypatch):
     """공식 미취득 카드는 로컬 추정$·스파크 없이 '공식 미취득' 깨끗한 상태(ADR 0015 D8)."""
     from datetime import datetime
-    from tokenomy.aggregate import KST
+    from tokenomy.clock import KST
     from tokenomy.web.views import official_section_context
     _, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()

@@ -1,7 +1,7 @@
 """수집 신선도 — 트리거가 다 실패해도 유실 위험을 사람에게 노출(설계 §5).
 
 마지막 ingest 경과 + 디스크상 가장 오래된 raw 파일 나이(vs 30일 cleanup).
-now는 주입받는다(테스트 가능 — aggregate.parse_ts와 동일 원칙).
+now는 주입받는다(테스트 가능 — clock.parse_ts와 동일 원칙).
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from tokenomy.aggregate import parse_ts
+from tokenomy.clock import parse_ts
 from tokenomy.db import get_meta, set_meta
 from tokenomy.parser import discover_session_files
 

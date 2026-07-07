@@ -38,7 +38,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 ~/.codex/sessions/**/rollout-*     ─ codex_parser.py ─┤→ UsageRecord → db.py(SQLite) → aggregate.py ─┬→ cli.py (report)
                                                       │                                              └→ web/ (FastAPI+Jinja2)
                                                  archive.py (raw 30일 휘발 전 원문 보존)
-공식 사용량 API ── official_fetch.py(유일한 아웃바운드, ≤3s, 백오프 없음, tracked providers만) ─ raw JSON ─ official_parser.py ─→ db.py(official_buckets)
+공식 사용량 API ── official_fetch.py(유일한 아웃바운드, ≤3s, 백오프 없음, tracked providers만) ─ raw JSON ─ official_parser.py ─→ db.py(official_buckets) → official_aggregate.py ─→ cli.py·web/
 ```
 
 모듈별 소유("어느 파일이 뭘 하나")와 상세 게시의 정본은 [tokenomy/CLAUDE.md](tokenomy/CLAUDE.md). 테스트 관행은 [tests/CLAUDE.md](tests/CLAUDE.md), dev 스크립트는 [scripts/CLAUDE.md](scripts/CLAUDE.md).
@@ -73,7 +73,7 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 ## 코드 스타일
 
 - docstring·주석은 한국어. 모든 모듈 상단에 `from __future__ import annotations`.
-- 계층 분리 유지: 라우트(app.py, 얇게) ↔ 화면 조립(views.py) ↔ 집계(aggregate.py) ↔ 적재(db.py).
+- 계층 분리 유지: 라우트(app.py, 얇게) ↔ 화면 조립(views.py) ↔ 집계(aggregate.py·official_aggregate.py) ↔ 적재(db.py).
 - stdlib 우선(sqlite3/json/pathlib/datetime). 런타임 의존성은 requirements.txt에 최소로.
 
 ## Agent skills

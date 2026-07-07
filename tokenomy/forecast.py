@@ -1,9 +1,9 @@
 """전망(outlook) 조립 — 공식 뷰 팬아웃 + 통합 풀 전망을 좁은 인터페이스 뒤로 접는 모듈.
 
-aggregate(순수 계산)·config(설정) 위에 앉는 무순환 조립층이다(둘 다 단방향 import, 역방향 0).
+official_aggregate(순수 계산)·config(설정) 위에 앉는 무순환 조립층이다(둘 다 단방향 import, 역방향 0).
 전망 레시피(`[official_view(...) for p in 활성AI] → combined_forecast`)와 그 config 팬아웃이
 호출부마다 복붙되던 걸 여기 정본화한다 — 대시보드·전망 페이지·내비·미니가 `outlook(conn, config, now)`
-하나만 부른다. 투영 규칙 자체는 aggregate.forecast_month_line(정본 1곳)에 산다.
+하나만 부른다. 투영 규칙 자체는 official_aggregate.forecast_month_line(정본 1곳)에 산다.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
-from tokenomy.aggregate import CombinedForecast, combined_forecast, official_view
+from tokenomy.official_aggregate import CombinedForecast, combined_forecast, official_view
 from tokenomy.config import (
     bucket_curation_resolver, credit_to_usd, forecast_settings,
     official_fetch_settings, tracked_providers,

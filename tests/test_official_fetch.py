@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tokenomy.aggregate import KST
+from tokenomy.clock import KST
 from tokenomy.db import (
     connect, get_fetch_state, latest_official_snapshot,
     get_official_raw, list_official_raw,

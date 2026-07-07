@@ -1,13 +1,14 @@
 """공식 사용량 provider 카드 조립(views.official_cards) 단위 테스트 — ADR 0002."""
 from datetime import datetime, timedelta
 
-from tokenomy.aggregate import KST, DayPoint
+from tokenomy.aggregate import DayPoint
+from tokenomy.clock import KST
 from tokenomy.db import connect, insert_official_buckets, upsert_fetch_state
 from tokenomy.official_parser import OfficialBucket
 from tokenomy.web.views import (
     _fresh_label, _gauge_level, _sparkline_points, official_cards,
 )
-from tokenomy.aggregate import CombinedForecast
+from tokenomy.official_aggregate import CombinedForecast
 from tokenomy.web.views import _forecast_hero, forecast_chart_data
 from datetime import date as _date
 

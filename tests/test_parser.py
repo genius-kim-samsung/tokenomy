@@ -305,7 +305,7 @@ def test_count_user_turns_multiple_sessions(tmp_path):
 
 
 def test_kst_day_matches_parse_ts():
-    from tokenomy.aggregate import parse_ts
+    from tokenomy.clock import parse_ts
     from tokenomy.parser import kst_day
     for ts in ["2026-06-11T10:00:00Z", "2026-06-11T15:30:00Z", "2026-06-11T14:59:00+00:00"]:
         assert kst_day(ts) == parse_ts(ts).date().isoformat()

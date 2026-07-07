@@ -1,7 +1,8 @@
 """전망(outlook) 조립 모듈 — config 팬아웃 정본 + official_view 팬아웃+combined_forecast 접기."""
 from datetime import datetime
 
-from tokenomy.aggregate import KST, CombinedForecast, combined_forecast, official_view
+from tokenomy.clock import KST
+from tokenomy.official_aggregate import CombinedForecast, combined_forecast, official_view
 from tokenomy.db import connect, insert_official_buckets
 from tokenomy.official_parser import OfficialBucket
 from tokenomy.forecast import forecast_params, outlook, FParams

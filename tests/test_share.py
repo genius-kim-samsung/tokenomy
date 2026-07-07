@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from tokenomy.aggregate import KST, PeriodSpend
+from tokenomy.clock import KST
+from tokenomy.official_aggregate import PeriodSpend
 from tokenomy.db import connect, insert_official_buckets
 from tokenomy.official_parser import OfficialBucket
 from tokenomy.web.views import (

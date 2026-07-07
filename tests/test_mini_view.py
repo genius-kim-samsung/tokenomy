@@ -6,7 +6,7 @@
 """
 from datetime import datetime
 
-from tokenomy.aggregate import KST
+from tokenomy.clock import KST
 from tokenomy.db import connect, insert_official_buckets
 from tokenomy.official_parser import OfficialBucket
 from tokenomy.web.views import mini_view_context

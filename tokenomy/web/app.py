@@ -10,7 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from tokenomy import __version__
-from tokenomy.aggregate import KST, DIM_COLUMNS, last_message_ts, parse_ts
+from tokenomy.aggregate import DIM_COLUMNS, last_message_ts
+from tokenomy.clock import KST, parse_ts
 from tokenomy.domain import PROVIDERS
 from tokenomy.forecast import outlook
 from tokenomy.config import ACCOUNT_MODES, account_mode, credit_to_usd as _credit_to_usd, debug_mode, forecast_settings, load_config, official_fetch_settings, tracked_providers, save_config

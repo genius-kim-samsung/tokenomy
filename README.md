@@ -207,9 +207,12 @@ flowchart LR
     API["공식 사용량 API"] --> OF["official_fetch.py (유일한 아웃바운드)"]
     OF --> OP["official_parser.py"]
     OP --> DB
-    DB --> AG["aggregate.py"]
+    DB --> AG["aggregate.py (로컬 롤업)"]
+    DB --> OA["official_aggregate.py (공식 집계)"]
     AG --> CLI["cli.py (report)"]
     AG --> WEB["web/ (FastAPI + Jinja2)"]
+    OA --> CLI
+    OA --> WEB
 ```
 
 ## 다른 도구용 파서 추가

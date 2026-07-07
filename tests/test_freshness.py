@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timedelta
 
-from tokenomy.aggregate import KST
+from tokenomy.clock import KST
 from tokenomy.db import connect
 from tokenomy.freshness import freshness, record_ingest, WARN_AGE_DAYS
 

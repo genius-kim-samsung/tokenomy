@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from tokenomy.aggregate import KST
+from tokenomy.clock import KST
 from tokenomy.cli import cmd_official_import, cmd_report
 from tokenomy.db import connect, latest_official_snapshot
 
