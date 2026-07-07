@@ -101,12 +101,14 @@ def _parse_ts(ts: str | None) -> datetime | None:
 def _effective_rate(entry: dict, ts: str | None) -> dict:
     """match 엔트리의 유효 단가를 고른다.
 
-    - flat 필드(`input` 존재)면 그 엔트리를 그대로(원본 flat이거나 override로 flat 주입).
-      pricing_overrides가 dated 모델에 full flat 단가를 주면 escape hatch로 우선한다.
+    - 단가 4필드가 **전부** 있으면 그 엔트리를 그대로(원본 flat이거나 override로 주입한
+      full flat). pricing_overrides가 dated 모델에 full flat 단가를 주면 escape hatch로
+      우선한다. **부분** override(일부 필드만)는 dated를 대체하지 않는다 — 4필드가 다
+      차야 flat 전환이라, 부분 필드만 얹힌 상태로 rates를 무시해 KeyError를 내지 않는다.
     - 아니면 `rates`([구간])에서 record.ts로 선택 — 이른 구간부터, `until`(상한 배타)이
       없는 마지막이 개방구간. ts 미상/파싱실패는 개방구간(표준)으로 폴백.
     """
-    if "input" in entry:
+    if all(k in entry for k in _OVERRIDABLE):
         return entry
     rates = entry.get("rates")
     if not rates:

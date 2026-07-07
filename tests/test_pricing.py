@@ -333,6 +333,16 @@ def test_full_flat_override_replaces_dated_entry():
     assert r.cost_usd == 5.0
 
 
+def test_partial_override_on_dated_entry_ignored_not_crash():
+    # 부분 override(일부 필드만)는 dated를 대체하지 않는다 — 4필드 다 차야 flat 전환.
+    # 옛 '"input" in entry' 가드면 KeyError(output 부재)였다.
+    import copy
+    out = apply_pricing_overrides(copy.deepcopy(DATED), {"sonnet-5": {"input": 1.0}})
+    entry = find_rate("claude-sonnet-5", out)
+    r = compute_cost(_rec("claude-sonnet-5", output_tokens=1_000_000, ts="2026-08-15T00:00:00Z"), out)
+    assert r.cost_usd == 10.0   # 프로모 구간 단가 유지(부분 override 무시)
+
+
 def test_shipped_config_sonnet5_promo_and_standard():
     p = load_pricing("config/pricing.json")
     entry = find_rate("claude-sonnet-5", p)

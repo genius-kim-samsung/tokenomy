@@ -288,13 +288,15 @@ def reprice_all(conn: sqlite3.Connection, pricing: dict) -> int:
     덕에 5m/1h 분리도 정확). 비용·priced가 실제로 바뀐 행 수를 반환한다.
     """
     rows = conn.execute(
-        "SELECT id, provider, model, input_tokens, output_tokens, "
+        "SELECT id, provider, model, ts, input_tokens, output_tokens, "
         "cache_creation, cache_creation_1h, cache_read, cost_usd, priced FROM messages"
     ).fetchall()
     changed = 0
     for r in rows:
         rec = UsageRecord(
-            provider=r["provider"], session_id="", cwd="", ts="", model=r["model"],
+            # ts는 날짜유효 단가(dated rates)가 행별 유효 구간을 고르는 근거 —
+            # 재계산에서도 반드시 실제 ts를 넘긴다(빈 값이면 dated 행이 표준가로 덮인다).
+            provider=r["provider"], session_id="", cwd="", ts=r["ts"], model=r["model"],
             input_tokens=r["input_tokens"] or 0, output_tokens=r["output_tokens"] or 0,
             cache_creation=r["cache_creation"] or 0, cache_read=r["cache_read"] or 0,
             cache_creation_1h=r["cache_creation_1h"] or 0,

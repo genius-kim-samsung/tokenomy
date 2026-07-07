@@ -59,6 +59,29 @@ def test_roundtrip_and_cost():
     assert row["priced"] == 1
 
 
+def test_reprice_preserves_ts_for_dated_rates():
+    # dated rates는 행별 ts로 유효 구간을 고른다 — reprice가 ts를 잃으면(옛 ts="")
+    # 프로모기 행이 표준가로 덮인다(codex P1). ts 보존 회귀 가드.
+    from tokenomy.db import reprice_all
+    DATED = {"match": [
+        {"contains": "sonnet-5", "provider": "claude", "rates": [
+            {"until": "2026-09-01T00:00:00Z", "input": 2.0, "output": 10.0, "cache_write": 2.5, "cache_read": 0.2},
+            {"input": 3.0, "output": 15.0, "cache_write": 3.75, "cache_read": 0.3},
+        ]},
+    ]}
+    conn = connect(":memory:")
+    rec = UsageRecord(
+        provider="claude", session_id="s1", cwd="/p", ts="2026-08-15T00:00:00Z",
+        model="claude-sonnet-5", input_tokens=0, output_tokens=1_000_000,
+        cache_creation=0, cache_read=0, message_id="m1",
+    )
+    ingest_records(conn, [rec], DATED)
+    assert conn.execute("SELECT cost_usd FROM messages").fetchone()["cost_usd"] == 10.0
+    # 재계산해도 프로모 구간 단가 유지(ts 보존). ts를 잃으면 표준 $15로 덮인다.
+    reprice_all(conn, DATED)
+    assert conn.execute("SELECT cost_usd FROM messages").fetchone()["cost_usd"] == 10.0
+
+
 def test_dedup_by_message_id():
     conn = connect(":memory:")
     # same message_id three times (streaming duplicate) → 1 row, not 3
