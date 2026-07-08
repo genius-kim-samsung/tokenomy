@@ -1,0 +1,55 @@
+{
+  "_meta": {
+    "what": "토큰 절약 카탈로그 — 절약 수단의 큐레이션 목록(ADR 0026). 배포에 포함(=신뢰 경계).",
+    "keys": "id 유일. type=installable|advisory. providers=활성 AI 게이트 축. install=provider별 설치 스텝(설치형만).",
+    "trust": "사용자가 복사·실행할 설치 명령을 담으므로 원격 취득 없이 메인테이너 검토분만 릴리스로 배포한다(bucket_catalog.json·pricing.json과 같은 결).",
+    "note": "새 절약 수단 추가 = 엔트리 한 줄 + (설치형이면) savers.py 감지 함수 → release-exe로 전원 배포. 사용자 제안은 GitHub Issues prefill 링크로 받는다."
+  },
+  "savers": [
+    {
+      "id": "cavemankorean",
+      "type": "installable",
+      "name": "Caveman 모드",
+      "summary": "에이전트 출력을 원시인 말투로 압축해 출력 토큰을 줄이는 Claude Code 플러그인. 기술 내용·코드·에러 문자열은 그대로 두고 관사·군더더기만 덜어낸다.",
+      "claimed_saving": "출력 토큰 65~75% 절감",
+      "providers": ["claude"],
+      "repo_url": "https://github.com/blacknabis/cavemankorean",
+      "install": {
+        "claude": {
+          "steps": [
+            "claude plugin marketplace add blacknabis/cavemankorean",
+            "claude plugin install caveman@cavemankorean"
+          ],
+          "note": "정확한 마켓플레이스·플러그인 이름은 repo README에서 확인하세요. 설치 후 /caveman 으로 강도를 조절합니다."
+        }
+      }
+    },
+    {
+      "id": "subagent-delegation",
+      "type": "advisory",
+      "name": "서브에이전트 위임",
+      "summary": "탐색·검색·리뷰 같은 넓게 읽는 작업을 서브에이전트에 맡기면, 읽은 파일 전체가 메인 컨텍스트로 돌아오지 않고 결론만 돌아온다. 긴 세션의 컨텍스트 수명을 늘려 재요약·재적재 비용을 줄인다.",
+      "claimed_saving": null,
+      "providers": ["claude"],
+      "link_url": "https://docs.claude.com/en/docs/claude-code/sub-agents"
+    },
+    {
+      "id": "claude-md-diet",
+      "type": "advisory",
+      "name": "CLAUDE.md 다이어트",
+      "summary": "CLAUDE.md·규칙 파일은 매 요청 입력 토큰으로 실린다. 안 지켜지는 규칙·중복 서술·장식을 덜어내면 매 턴 입력 비용이 줄어든다. 모듈별로 쪼개 필요한 것만 로드하는 것도 방법이다.",
+      "claimed_saving": null,
+      "providers": ["claude", "codex"],
+      "link_url": "https://docs.claude.com/en/docs/claude-code/memory"
+    },
+    {
+      "id": "compact-habit",
+      "type": "advisory",
+      "name": "/compact · 세션 분할 습관",
+      "summary": "한 세션이 길어지면 누적 컨텍스트가 매 턴 입력으로 재청구된다. 논리적 단위가 끝날 때 /compact 로 요약하거나 세션을 새로 시작하면 재청구되는 히스토리가 줄어든다.",
+      "claimed_saving": null,
+      "providers": ["claude"],
+      "link_url": "https://docs.claude.com/en/docs/claude-code/costs"
+    }
+  ]
+}

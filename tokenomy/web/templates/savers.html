@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block body %}
+<h1 class="page-title">토큰 절약</h1>
+<p class="set-sub">토큰 지출을 줄이는 수단의 목록입니다. 설치형은 이 기기에 적용돼 있는지 함께 보여줍니다
+  (로컬 설정 파일을 <strong>읽기만</strong> 하고, 설치를 대신 실행하지는 않습니다 — 안내·복사까지).</p>
+
+{% if not entries %}
+<section class="card">
+  <p class="muted">표시할 절약 수단이 없습니다. 설정에서 <a href="/settings">활성 AI</a>를 켜면 해당 AI의 수단이 나타납니다.</p>
+</section>
+{% endif %}
+
+<div class="saver-grid">
+  {% for e in entries %}
+  <section class="card saver-card">
+    <div class="saver-head">
+      <h2 class="saver-name">{{ e.name }}</h2>
+      {% if e.type == 'installable' %}
+        {% if e.state == 'applied' %}<span class="chip chip-ok" title="이 기기에 적용됨">✓ 적용됨</span>
+        {% elif e.state == 'not_applied' %}<span class="chip chip-off" title="이 기기에 미적용">미적용</span>
+        {% else %}<span class="chip chip-wait" title="적용 여부를 판정할 근거가 없음">감지 불가</span>{% endif %}
+      {% else %}
+        <span class="chip chip-wait">방법</span>
+      {% endif %}
+    </div>
+
+    <p class="saver-summary">{{ e.summary }}</p>
+
+    {% if e.claimed_saving %}
+    <p class="saver-claim">{{ e.claimed_saving }}
+      <span class="muted" title="제작자·커뮤니티 주장 그대로 — Tokenomy가 검증하지 않았습니다">(제작자 주장)</span></p>
+    {% endif %}
+
+    <div class="saver-meta">
+      {% for p in e.providers %}<span class="chip chip-off">{{ p }}</span>{% endfor %}
+    </div>
+
+    {% if e.install %}
+    <details class="more saver-install">
+      <summary>설치 방법</summary>
+      {% for step in e.install %}
+      <div class="install-block">
+        {% if e.install|length > 1 %}<div class="muted install-prov">{{ step.provider_label }}</div>{% endif %}
+        <pre class="install-cmd"><code>{% for line in step.steps %}{{ line }}
+{% endfor %}</code></pre>
+        <div id="src-{{ e.id }}-{{ step.provider }}" class="install-src share-src" hidden>{% for line in step.steps %}{{ line }}
+{% endfor %}</div>
+        <button class="btn install-copy" type="button" data-copy-target="#src-{{ e.id }}-{{ step.provider }}"
+                data-share-label="📋 명령 복사" onclick="tkCopyShare(this)">📋 명령 복사</button>
+        {% if step.note %}<p class="muted install-note">{{ step.note }}</p>{% endif %}
+      </div>
+      {% endfor %}
+    </details>
+    {% endif %}
+
+    <div class="saver-links">
+      {% if e.repo_url %}<a href="{{ e.repo_url }}" target="_blank" rel="noopener">저장소 ↗</a>{% endif %}
+      {% if e.link_url %}<a href="{{ e.link_url }}" target="_blank" rel="noopener">자세히 ↗</a>{% endif %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+
+<section class="card info-card saver-foot">
+  <p class="muted">빠진 절약 수단이 있나요?
+    <a href="{{ suggest_url }}" target="_blank" rel="noopener">절약 수단 제안 ↗</a> — 검토 후 카탈로그에 편입합니다.</p>
+  <p class="disclaimer">적용 상태는 로컬 설정 파일을 읽어 판정하며, 읽은 내용은 저장하지 않고 상태가 바뀐 시각만 기록합니다.
+    설치 명령은 이 목록에서 복사해 직접 실행하세요(Tokenomy가 대신 실행하지 않습니다).</p>
+</section>
+{% endblock %}

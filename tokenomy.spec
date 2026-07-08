@@ -12,6 +12,7 @@ a = Analysis(
     datas=[
         ('config/pricing.json', 'config'),
         ('config/bucket_catalog.json', 'config'),   # 코드네임 버킷 큐레이션(ADR 0016) — 번들 누락 시 큐레이션 미적용
+        ('config/saver_catalog.json', 'config'),    # 토큰 절약 카탈로그(ADR 0026) — 번들 누락 시 절약 화면 빈 목록
         ('assets/tokenomy.ico', 'assets'),
         ('tokenomy/web/templates', 'tokenomy/web/templates'),
         ('tokenomy/web/static', 'tokenomy/web/static'),

@@ -1122,6 +1122,82 @@ def coverage_card_context(conn, pricing: dict) -> dict:
     }
 
 
+# ─── 토큰 절약 카탈로그 화면(ADR 0026) ────────────────────────────────────────
+
+# 사용자 제안 = GitHub Issues prefill 링크(앱 내 제출 백엔드 없음). 메인테이너 검토 후 편입.
+_SAVER_SUGGEST_URL = (
+    "https://github.com/genius-kim-samsung/tokenomy/issues/new"
+    "?title=" + "%5B%EC%A0%88%EC%95%BD%20%EC%88%98%EB%8B%A8%20%EC%A0%9C%EC%95%88%5D%20"
+    "&labels=needs-triage"
+    "&body=" + "%EC%88%98%EB%8B%A8%20%EC%9D%B4%EB%A6%84%3A%0A%EB%A7%81%ED%81%AC%3A%0A"
+    "%EC%84%A4%EB%AA%85%3A%0A%EC%A3%BC%EC%9E%A5%20%EC%A0%88%EA%B0%90%EB%A5%A0%3A"
+)
+
+_SAVER_STATE_LABELS = {
+    "applied": "적용됨",
+    "not_applied": "미적용",
+    "unknown": "감지 불가",
+}
+
+
+def _saver_row(entry: dict, gated: list[str], detected: dict) -> dict:
+    """카탈로그 엔트리 하나를 화면용 행으로. gated=이 엔트리의 활성 provider들."""
+    from tokenomy import savers as _savers
+    installable = entry["type"] == "installable"
+    # 적용 상태: 설치형은 감지 함수 결과(활성 provider 중 감지된 첫 값), 없으면 감지 불가.
+    # 조언형은 적용 상태 자체가 없다(설명·링크만).
+    state = None
+    if installable:
+        state = next((detected[(entry["id"], p)] for p in gated
+                      if (entry["id"], p) in detected), _savers.UNKNOWN)
+    # 설치 스텝 — 활성 provider별(설치형만).
+    install = []
+    for p in gated:
+        step = (entry.get("install") or {}).get(p)
+        if step and step.get("steps"):
+            install.append({
+                "provider": p,
+                "provider_label": _PROVIDER_STYLE.get(p, {}).get("label", p),
+                "steps": step["steps"],
+                "note": step.get("note"),
+            })
+    return {
+        "id": entry["id"],
+        "type": entry["type"],
+        "name": entry["name"],
+        "summary": entry["summary"],
+        "claimed_saving": entry.get("claimed_saving"),
+        "providers": [_PROVIDER_STYLE.get(p, {}).get("label", p) for p in gated],
+        "state": state,
+        "state_label": _SAVER_STATE_LABELS.get(state) if state else None,
+        "repo_url": entry.get("repo_url"),
+        "link_url": entry.get("link_url"),
+        "install": install,
+    }
+
+
+def savers_context(conn, config: dict, now_kst: datetime | None = None, *, home=None) -> dict:
+    """토큰 절약 화면 — 카탈로그 + 적용 상태(활성 AI 게이트). 감지는 여기서 돌리고
+    상태 전이만 DB에 기록한다(ADR 0026). home은 테스트 주입용(기본 Path.home())."""
+    from tokenomy import savers
+    now = now_kst or datetime.now(KST)
+    active = set(tracked_providers(config))
+    triples = savers.refresh_saver_states(conn, now.isoformat(), home=home)
+    detected = {(sid, prov): st for sid, prov, st in triples}
+    entries = []
+    for e in savers.load_saver_catalog():
+        gated = [p for p in e["providers"] if p in active]   # 활성 AI 게이트
+        if not gated:
+            continue
+        entries.append(_saver_row(e, gated, detected))
+    return {
+        "active_nav": "savers",
+        "entries": entries,
+        "any_active": bool(active),
+        "suggest_url": _SAVER_SUGGEST_URL,
+    }
+
+
 def history_context(conn, anchor_kst: datetime, provider: str, sort: str,
                     now_kst: datetime | None = None, *,
                     period: str = "month", start: str | None = None,

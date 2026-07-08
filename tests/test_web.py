@@ -2283,3 +2283,18 @@ def test_overview_fans_out_official_view_once_per_provider(tmp_path, monkeypatch
     conn = connect(":memory:")
     views_module.overview_context(conn, "cost", _FROZEN_NOW)
     assert sorted(calls) == ["claude", "codex"]
+
+
+# ─── 토큰 절약 화면(ADR 0026) ─────────────────────────────────────────────────
+
+def test_savers_page_renders(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/savers")
+    assert r.status_code == 200
+    assert "토큰 절약" in r.text
+
+
+def test_sidebar_has_savers_nav(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path, monkeypatch)
+    r = client.get("/")
+    assert 'href="/savers"' in r.text

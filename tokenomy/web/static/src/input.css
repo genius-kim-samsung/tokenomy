@@ -449,3 +449,22 @@
   .gtable.sess th:nth-child(9), .gtable.sess td:nth-child(9):not([colspan]) { display: none; }
   .gtable.sess td.col-sum  { max-width: 130px; }
 }
+
+/* ── 토큰 절약 카탈로그(ADR 0026) ── */
+.saver-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-top: 8px; }
+.saver-card { margin: 0; display: flex; flex-direction: column; }
+.saver-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.saver-name { margin: 0; flex: 1; min-width: 0; }
+.saver-summary { color: var(--color-body); font-size: 13px; line-height: 1.55; margin: 0 0 10px; }
+.saver-claim { font-size: 13px; font-weight: 600; color: var(--color-fg); margin: 0 0 10px; }
+.saver-claim .muted { font-weight: 400; }
+.saver-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.saver-install { margin-top: auto; }
+.install-block { margin-top: 8px; }
+.install-prov { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+.install-cmd { background: var(--color-dark); color: var(--color-on-dark); border-radius: 8px; padding: 10px 12px; margin: 0 0 6px; font: 12px/1.6 "Cascadia Code", Consolas, "Courier New", monospace; overflow-x: auto; white-space: pre; }
+.install-cmd code { color: inherit; background: none; }
+.install-note { margin: 4px 0 0; }
+.saver-links { display: flex; gap: 14px; margin-top: 10px; font-size: 13px; }
+.saver-foot { margin-top: 18px; }
+.saver-foot .muted { margin: 0; }

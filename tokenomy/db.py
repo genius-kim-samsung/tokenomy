@@ -108,6 +108,19 @@ CREATE TABLE IF NOT EXISTS official_fetch_state (
     last_error TEXT
 );
 
+-- 절약 수단(설치형)의 적용 상태 전이 이력(ADR 0026). 감지 함수가 로컬 설정을 읽어 3상태
+-- (applied/not_applied/unknown)로 판정하고, 상태가 바뀐 시각만 append한다(읽은 내용 미적재
+-- — 발췌선). "언제부터 적용했나"의 근거 + 후속 전/후 비교의 경계 시각으로 쌓는다.
+CREATE TABLE IF NOT EXISTS saver_state_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    saver_id TEXT,
+    provider TEXT,
+    state TEXT,             -- 'applied'|'not_applied'|'unknown'
+    changed_at TEXT         -- 전이 감지 시각(KST ISO)
+);
+CREATE INDEX IF NOT EXISTS idx_saver_transitions_lookup
+    ON saver_state_transitions(saver_id, provider, id);
+
 -- 공식 API raw 응답 디버그 포착(ADR 0014). PII 스크럽된 원문을 fetch마다 보관(7일 롤링).
 -- official_buckets와 (provider, fetched_at)로 1:1 정렬. 디버그 보조라 버킷 영구이력과 분리.
 CREATE TABLE IF NOT EXISTS official_raw (
@@ -600,4 +613,49 @@ def session_day_turns_map(conn: sqlite3.Connection) -> dict:
             "SELECT session_id, day, turns FROM session_day_turns"
         ).fetchall()
     }
+
+
+# ---------------------------------------------------------------------------
+# 절약 수단 적용 상태 read/write facade(savers.py가 전이 판정에 사용, ADR 0026)
+# 순수 lookup/append, 전이 판정(변화 감지) 도메인 로직은 savers.py에 잔류.
+# ---------------------------------------------------------------------------
+
+def latest_saver_states(conn: sqlite3.Connection) -> dict:
+    """절약 수단별 최신 적용 상태 `{(saver_id, provider): (state, changed_at)}`.
+
+    같은 (saver_id, provider)의 마지막(=최대 id) 전이 행을 투영한다.
+    """
+    rows = conn.execute(
+        "SELECT saver_id, provider, state, changed_at, id FROM saver_state_transitions"
+    ).fetchall()
+    latest: dict = {}
+    for r in rows:
+        key = (r["saver_id"], r["provider"])
+        prev = latest.get(key)
+        if prev is None or r["id"] > prev[2]:
+            latest[key] = (r["state"], r["changed_at"], r["id"])
+    return {k: (v[0], v[1]) for k, v in latest.items()}
+
+
+def record_saver_transition(conn: sqlite3.Connection, saver_id: str, provider: str,
+                            state: str, changed_at: str) -> None:
+    """적용 상태 전이를 조건부 append — **현재 최신 상태와 다를 때만** 삽입한다.
+
+    변화 판정을 SQL 한 문에 담아, 동시 로드(`/`·`/savers`)가 같은 전이를 각각 읽고
+    중복 행을 쓰는 레이스를 막는다(SQLite writer 직렬화 + busy_timeout으로 원자적).
+    최신 행이 이미 같은 state면 no-op. 최초 관측(행 없음)은 삽입된다.
+    """
+    conn.execute(
+        """INSERT INTO saver_state_transitions (saver_id, provider, state, changed_at)
+           SELECT ?, ?, ?, ?
+           WHERE NOT EXISTS (
+               SELECT 1 FROM saver_state_transitions t
+               WHERE t.saver_id = ? AND t.provider = ?
+                 AND t.id = (SELECT MAX(id) FROM saver_state_transitions
+                             WHERE saver_id = ? AND provider = ?)
+                 AND t.state = ?
+           )""",
+        (saver_id, provider, state, changed_at,
+         saver_id, provider, saver_id, provider, state),
+    )
 

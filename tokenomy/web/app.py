@@ -20,12 +20,14 @@ from tokenomy.db import connect
 from tokenomy.official_fetch import refresh_tracked
 from tokenomy.paths import mini_view_available, resource_path
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
+from tokenomy.savers import refresh_saver_states
 from tokenomy.update import check_update
 from tokenomy.web import control
 from tokenomy.web.views import (
     coverage_card_context, dimension_context, history_context, mini_view_context,
     official_history_context, official_raw_context, official_section_context,
-    overview_context, session_context, settings_provider_toggles, sidebar_freshness,
+    overview_context, savers_context, session_context, settings_provider_toggles,
+    sidebar_freshness,
 )
 
 _BASE = resource_path("tokenomy/web")
@@ -166,6 +168,12 @@ def dashboard(request: Request, sort: str = "cost", notice: str | None = None):
     conn = connect()
     update_tag = check_update(conn)
     ctx = overview_context(conn, sort)
+    # 절약 수단 적용 상태 감지 — 대시보드 로드마다 돌려 전이 시각을 놓치지 않는다(ADR 0026).
+    # 감지 실패가 대시보드를 깨지 않게 방어(파일 읽기만이라 대개 조용히 성공).
+    try:
+        refresh_saver_states(conn, datetime.now(KST).isoformat())
+    except Exception:
+        pass
     return templates.TemplateResponse(
         request, "overview.html",
         {**ctx, "notice": notice, "update_tag": update_tag},
@@ -285,6 +293,16 @@ def analysis_view(request: Request, anchor: str | None = None, provider: str = "
     return templates.TemplateResponse(
         request, "analysis.html",
         {**ctx, "notice": notice, "update_tag": update_tag},
+    )
+
+
+@app.get("/savers")
+def savers_view(request: Request):
+    conn = connect()
+    update_tag = check_update(conn)
+    ctx = savers_context(conn, load_config(), datetime.now(KST))
+    return templates.TemplateResponse(
+        request, "savers.html", {**ctx, "update_tag": update_tag},
     )
 
 
