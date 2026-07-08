@@ -1158,17 +1158,6 @@ def _saver_row(entry: dict, gated: list[str], detected: dict) -> dict:
                 "state": st,
                 "state_label": _SAVER_STATE_LABELS.get(st),
             })
-    # 설치 스텝 — 활성 provider별(설치형만).
-    install = []
-    for p in gated:
-        step = (entry.get("install") or {}).get(p)
-        if step and step.get("steps"):
-            install.append({
-                "provider": p,
-                "provider_label": _PROVIDER_STYLE.get(p, {}).get("label", p),
-                "steps": step["steps"],
-                "note": step.get("note"),
-            })
     return {
         "id": entry["id"],
         "type": entry["type"],
@@ -1179,7 +1168,6 @@ def _saver_row(entry: dict, gated: list[str], detected: dict) -> dict:
         "state_badges": state_badges,
         "repo_url": entry.get("repo_url"),
         "link_url": entry.get("link_url"),
-        "install": install,
     }
 
 

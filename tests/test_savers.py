@@ -58,17 +58,17 @@ def test_catalog_has_cavemankorean_installable_entry():
     caveman = by_id["cavemankorean"]
     assert caveman["type"] == "installable"
     assert "claude" in caveman["providers"]
-    # 설치형은 provider별 설치 스텝을 가진다
-    assert caveman["install"]["claude"]["steps"], "claude 설치 스텝이 있어야 함"
+    # 설치 스텝은 담지 않는다 — 저장소 링크로 안내(유지보수 부담 회피).
+    assert "install" not in caveman
+    assert caveman["repo_url"], "저장소 링크가 있어야 함"
     # 주장 절감률(제작자 주장) 텍스트
     assert caveman["claimed_saving"]
 
 
 def test_catalog_cavemankorean_supports_codex():
-    # ADR 0026 결정③: provider 추가로 흡수. Codex도 Caveman 플러그인 설치·감지 대상.
+    # ADR 0026 결정③: provider 추가로 흡수. Codex도 Caveman 플러그인 감지 대상.
     caveman = {e["id"]: e for e in savers.load_saver_catalog()}["cavemankorean"]
     assert "codex" in caveman["providers"]
-    assert caveman["install"]["codex"]["steps"], "codex 설치 스텝이 있어야 함"
 
 
 def test_load_catalog_missing_file_returns_empty(tmp_path):
@@ -244,8 +244,8 @@ def test_savers_context_per_provider_badges_mixed_states(tmp_path):
     assert b["codex"]["provider_label"] == "Codex"
 
 
-def test_savers_context_codex_applied_state_and_install(tmp_path):
-    # codex 활성 + config.toml에 caveman enabled → 적용됨, codex 설치 스텝 노출
+def test_savers_context_codex_applied_state(tmp_path):
+    # codex 활성 + config.toml에 caveman enabled → 적용됨(감지 배지)
     conn = connect(":memory:")
     home = _codex_home(tmp_path, plugins={"caveman@caveman-repo": True})
     cfg = {"tracked_providers": ["codex"]}
@@ -255,10 +255,9 @@ def test_savers_context_codex_applied_state_and_install(tmp_path):
     b = _badges(row)["codex"]
     assert b["state"] == savers.APPLIED
     assert b["state_label"] == "적용됨"
-    assert "codex" in [ins["provider"] for ins in row["install"]]
 
 
-def test_savers_context_applied_state_and_install_steps(tmp_path):
+def test_savers_context_applied_state_no_install_only_repo(tmp_path):
     conn = connect(":memory:")
     ctx = _ctx(conn, ["claude"], tmp_path, active_marker=True)
     row = next(e for e in ctx["entries"] if e["id"] == "cavemankorean")
@@ -266,8 +265,9 @@ def test_savers_context_applied_state_and_install_steps(tmp_path):
     assert b["state"] == savers.APPLIED
     assert b["state_label"] == "적용됨"
     assert row["claimed_saving"]
-    # 설치 스텝은 활성 provider(claude)에 대해 노출
-    assert row["install"] and row["install"][0]["steps"]
+    # 설치 스텝은 노출하지 않고 저장소 링크만 안내한다
+    assert "install" not in row
+    assert row["repo_url"]
 
 
 def test_savers_context_not_applied_state(tmp_path):

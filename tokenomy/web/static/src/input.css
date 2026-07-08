@@ -459,12 +459,6 @@
 .saver-claim { font-size: 13px; font-weight: 600; color: var(--color-fg); margin: 0 0 10px; }
 .saver-claim .muted { font-weight: 400; }
 .saver-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
-.saver-install { margin-top: auto; }
-.install-block { margin-top: 8px; }
-.install-prov { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
-.install-cmd { background: var(--color-dark); color: var(--color-on-dark); border-radius: 8px; padding: 10px 12px; margin: 0 0 6px; font: 12px/1.6 "Cascadia Code", Consolas, "Courier New", monospace; overflow-x: auto; white-space: pre; }
-.install-cmd code { color: inherit; background: none; }
-.install-note { margin: 4px 0 0; }
-.saver-links { display: flex; gap: 14px; margin-top: 10px; font-size: 13px; }
+.saver-links { display: flex; gap: 14px; margin-top: auto; padding-top: 10px; font-size: 13px; }
 .saver-foot { margin-top: 18px; }
 .saver-foot .muted { margin: 0; }
