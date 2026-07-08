@@ -728,6 +728,39 @@ def test_ensure_skips_when_not_expiring(tmp_path):
     assert tok == "cur-acc"
 
 
+def _conn_recent_claude():
+    """_NOW_T4 기준 1h 전 claude 활동이 있는 DB — auto 안전망이 '쓰는 기기'로 판정하는 상태."""
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+                 ("k_recent", "claude", "2026-06-26T11:00:00+00:00"))
+    conn.commit()
+    return conn
+
+
+def test_ensure_refreshes_when_already_expired_despite_recent_activity(tmp_path):
+    """이미 만료된 토큰은 auto 안전망(최근 활동)을 우회해 선제 갱신한다(ADR 0021 개정 — 블랙아웃 해소)."""
+    past = int(_NOW_T4.timestamp() * 1000) - 60_000          # 1분 전 만료(죽은 토큰)
+    p = _creds_exp(tmp_path, past)
+    body = json.dumps({"access_token": "fresh", "refresh_token": "r2", "expires_in": 28800})
+    cfg = {"official_fetch": {"auto_refresh_token": "auto", "auto_refresh_safety_hours": 24}}
+    tok = ensure_fresh_claude_token(cfg, _conn_recent_claude(), now=_NOW_T4, path=p,
+                                    urlopen=lambda req, timeout: _Resp(body))
+    assert tok == "fresh"
+
+
+def test_ensure_keeps_safety_net_when_expiring_but_alive(tmp_path):
+    """만료 임박이지만 **아직 유효**한 토큰은 auto 안전망을 유지한다(우회는 죽은 토큰 한정).
+
+    살아있는 토큰은 실행 중 CLI가 쓰고 있을 수 있어 rotation 충돌 보호가 여전히 필요하다.
+    """
+    near = int(_NOW_T4.timestamp() * 1000) + 60_000          # 1분 뒤 만료(임박·아직 유효)
+    p = _creds_exp(tmp_path, near)
+    cfg = {"official_fetch": {"auto_refresh_token": "auto", "auto_refresh_safety_hours": 24}}
+    def _never(req, timeout): raise AssertionError("refresh 호출되면 안 됨")
+    tok = ensure_fresh_claude_token(cfg, _conn_recent_claude(), now=_NOW_T4, path=p, urlopen=_never)
+    assert tok == "cur-acc"
+
+
 def test_auto_refresh_allowed_old_activity_returns_true():
     """auto 모드 + 마지막 claude 활동이 safety_hours보다 오래됨 → True(refresh 허용, ADR 0021 핵심 유스케이스).
 
@@ -754,6 +787,23 @@ def test_auto_refresh_allowed_modes():
     conn.commit()
     assert _auto_refresh_allowed({"official_fetch": {"auto_refresh_token": "auto",
                                   "auto_refresh_safety_hours": 24}}, conn, _NOW_T4, "auto") is False
+
+
+def test_auto_refresh_allowed_expired_token_bypasses_activity():
+    """auto 모드 + 최근 활동 있어도 토큰이 **이미 만료**면 허용(ADR 0021 개정).
+
+    안전망의 목적은 실행 중 CLI의 살아있는 토큰과 rotation 충돌 방지 — 이미 죽은 토큰은
+    CLI도 못 쓰므로 보호 대상이 없다. 이 우회가 없으면 마지막 CLI 사용 후 8h(TTL)~24h
+    (safety_hours) 사이에 갱신 불가 블랙아웃이 생긴다. off는 만료여도 여전히 불허.
+    """
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+                 ("k", "claude", "2026-06-26T11:00:00+00:00"))   # _NOW_T4(12:00)보다 1h 전(최근)
+    conn.commit()
+    cfg = {"official_fetch": {"auto_refresh_token": "auto", "auto_refresh_safety_hours": 24}}
+    assert _auto_refresh_allowed(cfg, conn, _NOW_T4, "auto", token_expired=True) is True
+    assert _auto_refresh_allowed({"official_fetch": {"auto_refresh_token": "off"}},
+                                 conn, _NOW_T4, "off", token_expired=True) is False
 
 
 # ---------------------------------------------------------------------------
@@ -784,6 +834,66 @@ def test_reactive_refresh_on_401_then_retry(tmp_path, monkeypatch):
     r = fetch_provider("claude", now_kst=_NOW2, config=cfg, conn=connect(":memory:"), urlopen=_op)
     assert calls["n"] == 2                                 # 401 후 정확히 1회 재시도
     assert r.status in ("ok", "http_error")               # 재시도가 일어났음을 호출 횟수로 확인
+
+
+def test_reactive_401_refreshes_when_expired_despite_recent_activity(tmp_path, monkeypatch):
+    """401 + 파일 만료 확인 + auto + 최근 활동 → 안전망 우회해 갱신·재시도(ADR 0021 개정)."""
+    import tokenomy.official_fetch as of
+    from tokenomy import paths
+    p = tmp_path / ".credentials.json"
+    past = int(_NOW2.timestamp() * 1000) - 60_000         # 이미 만료(죽은 토큰)
+    p.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "a", "refreshToken": "r", "expiresAt": past}}), encoding="utf-8")
+    monkeypatch.setattr(of, "CLAUDE_CREDS", p)
+    monkeypatch.setattr(paths, "CLAUDE_CREDS", p)          # creds_present 게이트용
+    monkeypatch.setattr(of, "refresh_claude_token", lambda path, *, now_ms, urlopen: "a2")
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+                 ("k_recent", "claude", "2026-06-26T11:00:00+00:00"))   # _NOW2(12:00) 1h 전(최근)
+    conn.commit()
+    calls = {"n": 0}
+    def _op(req, timeout):
+        calls["n"] += 1                                    # usage GET만 여기 온다(refresh는 스텁)
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError("u", 401, "unauth", {}, None)
+        return _Resp(json.dumps({}))
+    cfg = {"tracked_providers": ["claude"],
+           "official_fetch": {"auto_refresh_token": "auto", "auto_refresh_safety_hours": 24}}
+    r = fetch_provider("claude", now_kst=_NOW2, config=cfg, conn=conn, urlopen=_op)
+    assert calls["n"] == 2                                 # 만료 확인 → 안전망 우회 → 1회 재시도
+    assert r.status in ("ok", "http_error")
+
+
+def test_reactive_401_keeps_safety_net_when_token_still_valid(tmp_path, monkeypatch):
+    """401이라도 파일상 토큰이 **아직 유효**하면 auto 안전망 유지(갱신·재시도 없음).
+
+    우회는 만료가 확인된 죽은 토큰 한정 — 살아있는 토큰의 401(일시 장애 등)에 rotation을
+    돌리면 실행 중 CLI와 충돌할 수 있어 기존 auth_error 폴백을 지킨다.
+    """
+    import tokenomy.official_fetch as of
+    from tokenomy import paths
+    p = tmp_path / ".credentials.json"
+    far = int(_NOW2.timestamp() * 1000) + 3_600_000        # 1시간 뒤 만료(아직 유효)
+    p.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "a", "refreshToken": "r", "expiresAt": far}}), encoding="utf-8")
+    monkeypatch.setattr(of, "CLAUDE_CREDS", p)
+    monkeypatch.setattr(paths, "CLAUDE_CREDS", p)
+    def _no_refresh(path, *, now_ms, urlopen):
+        raise AssertionError("refresh 호출되면 안 됨")
+    monkeypatch.setattr(of, "refresh_claude_token", _no_refresh)
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+                 ("k_recent", "claude", "2026-06-26T11:00:00+00:00"))   # 최근 활동 → 안전망 발동
+    conn.commit()
+    calls = {"n": 0}
+    def _op(req, timeout):
+        calls["n"] += 1
+        raise urllib.error.HTTPError("u", 401, "unauth", {}, None)
+    cfg = {"tracked_providers": ["claude"],
+           "official_fetch": {"auto_refresh_token": "auto", "auto_refresh_safety_hours": 24}}
+    r = fetch_provider("claude", now_kst=_NOW2, config=cfg, conn=conn, urlopen=_op)
+    assert calls["n"] == 1                                 # 재시도 없음
+    assert r.status == "auth_error"
 
 
 # ---------------------------------------------------------------------------
@@ -941,4 +1051,33 @@ def test_reactive_refresh_codex_on_401_then_retry(tmp_path, monkeypatch):
            "official_fetch": {"auto_refresh_token": "always"}}
     r = fetch_provider("codex", now_kst=_NOW2, config=cfg, conn=connect(":memory:"), urlopen=_op)
     assert calls["n"] == 2                                  # 401 후 정확히 1회 재시도
+    assert r.status in ("ok", "http_error")
+
+
+def test_reactive_401_codex_expired_jwt_bypasses_activity(tmp_path, monkeypatch):
+    """Codex parity — JWT exp가 이미 지난 토큰의 401은 최근 codex 활동이 있어도 갱신·재시도(ADR 0021 개정 공용 엔진)."""
+    import tokenomy.official_fetch as of
+    from tokenomy import paths
+    past = int(_NOW2.timestamp()) - 60                      # 이미 만료(초 단위 JWT exp)
+    p = tmp_path / "auth.json"
+    p.write_text(json.dumps({"auth_mode": "chatgpt", "tokens": {
+        "access_token": _codex_jwt(past), "refresh_token": "r",
+        "id_token": "i", "account_id": "acc"}}), encoding="utf-8")
+    monkeypatch.setattr(of, "CODEX_AUTH", p)
+    monkeypatch.setattr(paths, "CODEX_AUTH", p)
+    monkeypatch.setattr(of, "refresh_codex_token", lambda path, *, now_ms, urlopen: "a2")
+    conn = connect(":memory:")
+    conn.execute("INSERT INTO messages (dedup_key, provider, ts) VALUES (?,?,?)",
+                 ("k_recent", "codex", "2026-06-26T11:00:00+00:00"))    # 최근 codex 활동
+    conn.commit()
+    calls = {"n": 0}
+    def _op(req, timeout):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError("u", 401, "unauth", {}, None)
+        return _Resp(json.dumps({}))
+    cfg = {"tracked_providers": ["codex"], "credit_to_usd": 0.04,
+           "official_fetch": {"auto_refresh_token": "auto", "auto_refresh_safety_hours": 24}}
+    r = fetch_provider("codex", now_kst=_NOW2, config=cfg, conn=conn, urlopen=_op)
+    assert calls["n"] == 2                                  # 만료 JWT → 안전망 우회 → 1회 재시도
     assert r.status in ("ok", "http_error")

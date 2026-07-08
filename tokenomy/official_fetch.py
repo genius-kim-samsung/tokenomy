@@ -263,16 +263,23 @@ def refresh_codex_token(path: Path = CODEX_AUTH, *, now_ms: int,
         body_extra={"scope": "openid profile email"})
 
 
-def _auto_refresh_allowed(config, conn, now, mode: str, provider: str = "claude") -> bool:
+def _auto_refresh_allowed(config, conn, now, mode: str, provider: str = "claude",
+                          *, token_expired: bool = False) -> bool:
     """자동 갱신 안전망(ADR 0021/0022). off=불허, always=허용, auto=최근 *해당 provider* 활동 없을 때만 허용.
 
     auto는 이 기기의 마지막 provider 메시지 ts가 safety_hours 이내면 '그 CLI를 쓰는 기기'로 보고
     skip한다(실행 중 CLI의 메모리 토큰과 충돌 회피). 활동 없음/파싱 불가는 허용(=CLI 안 쓰는 기기로
     간주). provider별 활동 판정이라 claude·codex가 한 기기에서 섞여도 각각 옳게 게이팅된다(ADR 0022).
+
+    단, token_expired=True(이미 만료 확인)면 auto에서도 활동 판정을 생략하고 허용한다(ADR 0021 개정)
+    — 죽은 토큰은 실행 중 CLI도 못 쓰므로 rotation 충돌로 보호할 대상이 없고, 이 우회가 없으면
+    마지막 CLI 사용 후 TTL(8h)~safety_hours(24h) 사이에 갱신 불가 블랙아웃이 생긴다.
     """
     if mode == "off":
         return False
     if mode == "always":
+        return True
+    if token_expired:
         return True
     last = last_provider_activity_ts(conn, provider)
     if last is None:
@@ -305,7 +312,8 @@ def _ensure_fresh(config, conn, *, now, path: Path, urlopen, provider: str,
     """선제 갱신 공통 골격 — 모드 게이트 → 만료 판정 → _PREEMPT_MS·안전망 → 락 안 double-check
     → refresh → 최종 파일 읽기 반환(ADR 0021/0022).
 
-    만료 5분 이내(_PREEMPT_MS) + 안전망 허용이면 락 안에서 double-check 후 refresh한다. 어떤
+    만료 5분 이내(_PREEMPT_MS) + 안전망 허용이면 락 안에서 double-check 후 refresh한다. 이미
+    만료된 토큰(exp ≤ now)은 안전망의 활동 판정을 우회한다(token_expired — ADR 0021 개정). 어떤
     경우든 마지막엔 read_final(path)로 파일의 현재(혹은 갱신된) 값을 읽어 돌려준다(갱신 실패해도
     기존 토큰으로 진행 → 상위가 401 폴백). provider 차분은 read_expiry_ms(만료 판정)·refresh·
     read_final(최종 읽기)·provider(안전망 판정)로 주입한다.
@@ -314,7 +322,8 @@ def _ensure_fresh(config, conn, *, now, path: Path, urlopen, provider: str,
     if mode != "off":
         now_ms = int(now.timestamp() * 1000)
         exp = read_expiry_ms(path)
-        if exp is not None and exp - now_ms < _PREEMPT_MS and _auto_refresh_allowed(config, conn, now, mode, provider):
+        if exp is not None and exp - now_ms < _PREEMPT_MS and _auto_refresh_allowed(
+                config, conn, now, mode, provider, token_expired=exp <= now_ms):
             with _token_lock:
                 exp2 = read_expiry_ms(path)           # double-check — 다른 스레드가 그새 갱신했으면 skip
                 if exp2 is not None and exp2 - int(now.timestamp() * 1000) < _PREEMPT_MS:
@@ -375,6 +384,7 @@ class ProviderSpec:
     auth_note: str                 # 인증 오류 안내(옛 _auth_note)
     headers: Callable              # (config, conn, *, now, urlopen) -> dict
     refresh: Callable              # (*, now_ms, urlopen) -> str | None
+    expiry_ms: Callable            # () -> int | None — 크레덴셜 파일의 만료 시각(ms), 판정 불가면 None
     parse: Callable                # (raw, *, credit_to_usd) -> buckets
 
 
@@ -400,6 +410,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         auth_note="재로그인이 필요합니다", headers=_claude_headers,
         refresh=lambda *, now_ms, urlopen: refresh_claude_token(
             CLAUDE_CREDS, now_ms=now_ms, urlopen=urlopen),
+        expiry_ms=lambda: _claude_expiry_ms(CLAUDE_CREDS),
         parse=lambda raw, *, credit_to_usd: parse_claude(raw, credit_to_usd=credit_to_usd),
     ),
     "codex": ProviderSpec(
@@ -407,6 +418,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         auth_note="Codex CLI를 1회 실행해 토큰을 갱신하세요", headers=_codex_headers,
         refresh=lambda *, now_ms, urlopen: refresh_codex_token(
             CODEX_AUTH, now_ms=now_ms, urlopen=urlopen),
+        expiry_ms=lambda: _codex_expiry_ms(CODEX_AUTH),
         parse=lambda raw, *, credit_to_usd: parse_codex(raw, credit_to_usd=credit_to_usd),
     ),
 }
@@ -525,16 +537,18 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
         _capture_raw(conn, provider, ts, "http_error", e.code, _read_err_body(e))
         if e.code == 401:
             settings = official_fetch_settings(config)
-            if (not _retried and settings["auto_refresh_token"] != "off"
-                    and _auto_refresh_allowed(config, conn, now_kst,
-                                              settings["auto_refresh_token"], provider)):
+            if not _retried and settings["auto_refresh_token"] != "off":
                 now_ms = int(now_kst.timestamp() * 1000)
-                with _token_lock:                         # spec.refresh로 디스패치(ADR 0021/0022)
-                    new = spec.refresh(now_ms=now_ms, urlopen=urlopen)
-                if new:                                   # 갱신 성공 → 딱 1회 재시도
-                    return fetch_provider(provider, now_kst=now_kst, config=config,
-                                          conn=conn, urlopen=urlopen, manual=manual,
-                                          _retried=True)
+                exp = spec.expiry_ms()                    # 파일 만료 재확인 — 죽은 토큰만 안전망 우회(ADR 0021 개정)
+                if _auto_refresh_allowed(config, conn, now_kst,
+                                         settings["auto_refresh_token"], provider,
+                                         token_expired=exp is not None and exp <= now_ms):
+                    with _token_lock:                     # spec.refresh로 디스패치(ADR 0021/0022)
+                        new = spec.refresh(now_ms=now_ms, urlopen=urlopen)
+                    if new:                               # 갱신 성공 → 딱 1회 재시도
+                        return fetch_provider(provider, now_kst=now_kst, config=config,
+                                              conn=conn, urlopen=urlopen, manual=manual,
+                                              _retried=True)
             upsert_fetch_state(conn, provider, last_attempt_at=ts, last_success_at=None,
                                last_status="auth_error", last_error="HTTP 401")
             return FetchResult(provider, "auth_error", spec.auth_note)
