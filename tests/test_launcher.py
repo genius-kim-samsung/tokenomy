@@ -815,6 +815,90 @@ def test_save_mini_position_persists_xy(monkeypatch):
     assert {"x": 640, "y": 480} in saved
 
 
+# ── 최소화 복원 — pywebview show()는 WindowState(Minimized)를 안 건드린다 ─────
+def test_restore_if_minimized_restores_iconic_window(monkeypatch):
+    """Windows에서 최소화(IsIconic)된 창은 SW_RESTORE로 복원해야 한다.
+    pywebview WinForms show()는 Show()+Activate()만 호출해 최소화 상태가 남고,
+    그 창은 화면에 안 뜨고 Alt+Tab에만 보인다(미니뷰 VoC — 프레임리스라 복원 수단도 없음)."""
+    import types
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    calls = []
+    fake_user32 = types.SimpleNamespace(
+        IsIconic=lambda hwnd: calls.append(("IsIconic", hwnd)) or 1,
+        ShowWindow=lambda hwnd, cmd: calls.append(("ShowWindow", hwnd, cmd)),
+    )
+    fake_ctypes = types.SimpleNamespace(windll=types.SimpleNamespace(user32=fake_user32))
+    monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
+    win = types.SimpleNamespace(native=types.SimpleNamespace(
+        Handle=types.SimpleNamespace(ToInt32=lambda: 42)))
+    launcher._restore_if_minimized(win)
+    assert ("ShowWindow", 42, 9) in calls          # SW_RESTORE=9 (최대화 이력 보존)
+
+
+def test_restore_if_minimized_skips_normal_window(monkeypatch):
+    """최소화 아닌 창은 건드리지 않는다 — 무조건 restore하면 최대화 상태를 잃는다."""
+    import types
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    calls = []
+    fake_user32 = types.SimpleNamespace(
+        IsIconic=lambda hwnd: 0,
+        ShowWindow=lambda hwnd, cmd: calls.append(("ShowWindow", hwnd, cmd)),
+    )
+    fake_ctypes = types.SimpleNamespace(windll=types.SimpleNamespace(user32=fake_user32))
+    monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
+    win = types.SimpleNamespace(native=types.SimpleNamespace(
+        Handle=types.SimpleNamespace(ToInt32=lambda: 42)))
+    launcher._restore_if_minimized(win)
+    assert calls == []
+
+
+def test_restore_if_minimized_noop_off_windows(monkeypatch):
+    """비Windows는 native를 만지기 전에 반환한다(win32 전용 API — ADR 0013 좁은 분기)."""
+    monkeypatch.setattr(launcher.sys, "platform", "linux")
+    touched = []
+
+    class Win:
+        @property
+        def native(self):
+            touched.append(True)
+            return None
+    launcher._restore_if_minimized(Win())
+    assert touched == []
+
+
+def test_restore_if_minimized_swallows_missing_native(monkeypatch):
+    """native 미준비(생성 직후 등) 창은 조용히 무시 — 표시 흐름을 깨면 안 된다."""
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    launcher._restore_if_minimized(object())       # native 속성 없음 — 예외 전파 없이 반환
+
+
+def test_show_mini_window_restores_minimized_on_reshow(monkeypatch):
+    """미니 재표시(배타 전환·트레이 복원)는 최소화 복원을 거쳐야 한다 — 미니뷰 VoC 회귀 가드.
+    미니가 Win+D/작업표시줄 클릭으로 최소화되면 show()만으론 영영 화면에 안 뜬다."""
+    w_mini = _FakeWindow()
+    _reset_mini_state(monkeypatch, mini=w_mini, current_view="mini")
+    monkeypatch.setattr(launcher, "_refresh_mini_content", lambda m: None)
+    restored = []
+    monkeypatch.setattr(launcher, "_restore_if_minimized", lambda w: restored.append(w))
+    launcher._show_mini_window()
+    assert restored == [w_mini]
+
+
+def test_show_window_restores_minimized(monkeypatch):
+    """큰 창 복원(트레이 '열기'·/app/show·_to_main)도 최소화 복원을 거친다 — 동일 결함."""
+    w = _FakeWindow()
+    _reset_tray_state(monkeypatch, window=w)
+
+    class FakeThread:
+        def __init__(self, target=None, daemon=None, **k): pass
+        def start(self): pass
+    monkeypatch.setattr(launcher.threading, "Thread", FakeThread)
+    restored = []
+    monkeypatch.setattr(launcher, "_restore_if_minimized", lambda w_: restored.append(w_))
+    launcher._show_window()
+    assert restored == [w]
+
+
 # ── JS 브리지(Api) ───────────────────────────────────────────────────────────
 def test_api_to_mini_delegates(monkeypatch):
     called = []

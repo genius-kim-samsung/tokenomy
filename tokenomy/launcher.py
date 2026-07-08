@@ -87,12 +87,34 @@ def _maybe_first_time_notice() -> None:
     save_config(config)
 
 
+def _restore_if_minimized(win) -> None:
+    """최소화(Minimized)된 창을 정상 상태로 복원 — pywebview show() 보완.
+
+    pywebview(WinForms)의 show()는 Show()+Activate()만 호출해 WindowState를
+    안 건드린다 — Win+D·작업표시줄 클릭 등으로 최소화된 창은 show() 뒤에도
+    화면에 안 뜨고 Alt+Tab에만 남는다(프레임리스 미니는 사용자가 복원할 수단도
+    없어 영구 '안 뜸'). Windows에서만 IsIconic으로 판정해 SW_RESTORE로 복원한다
+    (무조건 restore()하면 큰 창의 최대화 상태를 잃으므로 조건부). native 미준비
+    (생성 직후 등) 예외는 조용히 삼킨다 — 최초 생성 창은 최소화일 수 없다."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        hwnd = win.native.Handle.ToInt32()
+        user32 = ctypes.windll.user32
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)      # SW_RESTORE — 최대화 이력 보존
+    except Exception:
+        pass
+
+
 def _show_window() -> None:
     """숨긴 창을 복원하고, 백그라운드에서 재수집 후 신규 있으면 리로드(조건부)."""
     window = _tray_state["window"]
     if window is None:
         return
     window.show()
+    _restore_if_minimized(window)
     threading.Thread(target=_reingest_and_maybe_reload, daemon=True).start()
 
 
@@ -288,6 +310,7 @@ def _show_mini_window() -> None:
     existed = _tray_state.get("mini") is not None
     mini = _ensure_mini()
     mini.show()
+    _restore_if_minimized(mini)
     _tray_state["mini_visible"] = True
     if existed:
         _refresh_mini_content(mini)
