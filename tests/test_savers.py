@@ -220,6 +220,30 @@ def test_savers_context_gates_by_active_ai(tmp_path):
     assert "cavemankorean" in ids2
 
 
+def _badges(row) -> dict:
+    """설치형 행의 state_badges를 {provider: badge}로. 테스트 편의."""
+    return {b["provider"]: b for b in row["state_badges"]}
+
+
+def test_savers_context_per_provider_badges_mixed_states(tmp_path):
+    # claude 미적용 + codex 적용, 둘 다 활성 → provider별 배지가 각자 상태를 가진다
+    # (단일 배지로 뭉개지 않음). 감지는 provider별이었으나 표시가 하나였던 회귀 가드.
+    conn = connect(":memory:")
+    _claude_home(tmp_path)                                         # .claude 존재, 신호 없음 → 미적용
+    home = _codex_home(tmp_path, plugins={"caveman@caveman-repo": True})  # codex 적용
+    cfg = {"tracked_providers": ["claude", "codex"]}
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=KST)
+    ctx = views.savers_context(conn, cfg, now, home=home)
+    row = next(e for e in ctx["entries"] if e["id"] == "cavemankorean")
+    b = _badges(row)
+    assert b["claude"]["state"] == savers.NOT_APPLIED
+    assert b["claude"]["state_label"] == "미적용"
+    assert b["claude"]["provider_label"] == "Claude"
+    assert b["codex"]["state"] == savers.APPLIED
+    assert b["codex"]["state_label"] == "적용됨"
+    assert b["codex"]["provider_label"] == "Codex"
+
+
 def test_savers_context_codex_applied_state_and_install(tmp_path):
     # codex 활성 + config.toml에 caveman enabled → 적용됨, codex 설치 스텝 노출
     conn = connect(":memory:")
@@ -228,8 +252,9 @@ def test_savers_context_codex_applied_state_and_install(tmp_path):
     now = datetime(2026, 6, 20, 12, 0, tzinfo=KST)
     ctx = views.savers_context(conn, cfg, now, home=home)
     row = next(e for e in ctx["entries"] if e["id"] == "cavemankorean")
-    assert row["state"] == savers.APPLIED
-    assert row["state_label"] == "적용됨"
+    b = _badges(row)["codex"]
+    assert b["state"] == savers.APPLIED
+    assert b["state_label"] == "적용됨"
     assert "codex" in [ins["provider"] for ins in row["install"]]
 
 
@@ -237,8 +262,9 @@ def test_savers_context_applied_state_and_install_steps(tmp_path):
     conn = connect(":memory:")
     ctx = _ctx(conn, ["claude"], tmp_path, active_marker=True)
     row = next(e for e in ctx["entries"] if e["id"] == "cavemankorean")
-    assert row["state"] == savers.APPLIED
-    assert row["state_label"] == "적용됨"
+    b = _badges(row)["claude"]
+    assert b["state"] == savers.APPLIED
+    assert b["state_label"] == "적용됨"
     assert row["claimed_saving"]
     # 설치 스텝은 활성 provider(claude)에 대해 노출
     assert row["install"] and row["install"][0]["steps"]
@@ -248,8 +274,9 @@ def test_savers_context_not_applied_state(tmp_path):
     conn = connect(":memory:")
     ctx = _ctx(conn, ["claude"], tmp_path, enabled={"caveman@caveman": False})
     row = next(e for e in ctx["entries"] if e["id"] == "cavemankorean")
-    assert row["state"] == savers.NOT_APPLIED
-    assert row["state_label"] == "미적용"
+    b = _badges(row)["claude"]
+    assert b["state"] == savers.NOT_APPLIED
+    assert b["state_label"] == "미적용"
 
 
 def test_savers_context_advisory_has_no_state(tmp_path):
@@ -258,7 +285,7 @@ def test_savers_context_advisory_has_no_state(tmp_path):
     advisory = [e for e in ctx["entries"] if e["type"] == "advisory"]
     assert advisory, "조언형 엔트리가 있어야 함"
     for e in advisory:
-        assert e["state"] is None      # 조언형은 적용 상태 없음
+        assert e["state_badges"] is None      # 조언형은 적용 상태 없음
 
 
 def test_savers_context_has_suggest_url(tmp_path):

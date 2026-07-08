@@ -1144,12 +1144,20 @@ def _saver_row(entry: dict, gated: list[str], detected: dict) -> dict:
     """카탈로그 엔트리 하나를 화면용 행으로. gated=이 엔트리의 활성 provider들."""
     from tokenomy import savers as _savers
     installable = entry["type"] == "installable"
-    # 적용 상태: 설치형은 감지 함수 결과(활성 provider 중 감지된 첫 값), 없으면 감지 불가.
-    # 조언형은 적용 상태 자체가 없다(설명·링크만).
-    state = None
+    # 적용 상태: 설치형은 활성 provider별로 각각 감지해 배지를 하나씩 만든다(단일 배지로
+    # 뭉개지 않음 — Caveman처럼 claude·codex 상태가 갈릴 수 있으므로). 감지 함수 없는
+    # provider는 감지 불가로 폴백. 조언형은 적용 상태 자체가 없다(설명·링크만).
+    state_badges = None
     if installable:
-        state = next((detected[(entry["id"], p)] for p in gated
-                      if (entry["id"], p) in detected), _savers.UNKNOWN)
+        state_badges = []
+        for p in gated:
+            st = detected.get((entry["id"], p), _savers.UNKNOWN)
+            state_badges.append({
+                "provider": p,
+                "provider_label": _PROVIDER_STYLE.get(p, {}).get("label", p),
+                "state": st,
+                "state_label": _SAVER_STATE_LABELS.get(st),
+            })
     # 설치 스텝 — 활성 provider별(설치형만).
     install = []
     for p in gated:
@@ -1168,8 +1176,7 @@ def _saver_row(entry: dict, gated: list[str], detected: dict) -> dict:
         "summary": entry["summary"],
         "claimed_saving": entry.get("claimed_saving"),
         "providers": [_PROVIDER_STYLE.get(p, {}).get("label", p) for p in gated],
-        "state": state,
-        "state_label": _SAVER_STATE_LABELS.get(state) if state else None,
+        "state_badges": state_badges,
         "repo_url": entry.get("repo_url"),
         "link_url": entry.get("link_url"),
         "install": install,

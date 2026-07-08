@@ -16,9 +16,11 @@
     <div class="saver-head">
       <h2 class="saver-name">{{ e.name }}</h2>
       {% if e.type == 'installable' %}
-        {% if e.state == 'applied' %}<span class="chip chip-ok" title="이 기기에 적용됨">✓ 적용됨</span>
-        {% elif e.state == 'not_applied' %}<span class="chip chip-off" title="이 기기에 미적용">미적용</span>
-        {% else %}<span class="chip chip-wait" title="적용 여부를 판정할 근거가 없음">감지 불가</span>{% endif %}
+        {% for b in e.state_badges %}
+        {% if b.state == 'applied' %}<span class="chip chip-ok" title="{{ b.provider_label }} — 이 기기에 적용됨">{{ b.provider_label }} ✓ 적용됨</span>
+        {% elif b.state == 'not_applied' %}<span class="chip chip-off" title="{{ b.provider_label }} — 이 기기에 미적용">{{ b.provider_label }} 미적용</span>
+        {% else %}<span class="chip chip-wait" title="{{ b.provider_label }} — 적용 여부를 판정할 근거가 없음">{{ b.provider_label }} 감지 불가</span>{% endif %}
+        {% endfor %}
       {% else %}
         <span class="chip chip-wait">방법</span>
       {% endif %}
@@ -31,9 +33,11 @@
       <span class="muted" title="제작자·커뮤니티 주장 그대로 — Tokenomy가 검증하지 않았습니다">(제작자 주장)</span></p>
     {% endif %}
 
+    {% if e.type != 'installable' %}
     <div class="saver-meta">
       {% for p in e.providers %}<span class="chip chip-off">{{ p }}</span>{% endfor %}
     </div>
+    {% endif %}
 
     {% if e.install %}
     <details class="more saver-install">
