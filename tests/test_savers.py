@@ -9,8 +9,12 @@ from tokenomy.db import connect
 
 # ─── 가짜 홈 픽스처(감지 함수용) ──────────────────────────────────────────────
 
-def _claude_home(tmp_path, *, active_marker=False, enabled=None, settings=True):
-    """~/.claude 흔적을 가진 가짜 홈을 만든다. 이 기기 실측(cavemankorean)을 재현."""
+def _claude_home(tmp_path, *, active_marker=False, enabled=None, hooks=None, settings=True):
+    """~/.claude 흔적을 가진 가짜 홈을 만든다. 이 기기 실측(cavemankorean)을 재현.
+
+    hooks={"SessionStart": [{"hooks": [{"command": "…caveman…"}]}]} → settings.json hooks 섹션
+    (스크립트 설치 경로 신호 재현).
+    """
     claude = tmp_path / ".claude"
     claude.mkdir(parents=True, exist_ok=True)
     if active_marker:
@@ -19,6 +23,8 @@ def _claude_home(tmp_path, *, active_marker=False, enabled=None, settings=True):
         body = {}
         if enabled is not None:
             body["enabledPlugins"] = enabled
+        if hooks is not None:
+            body["hooks"] = hooks
         (claude / "settings.json").write_text(json.dumps(body), encoding="utf-8")
     return tmp_path
 
@@ -94,15 +100,50 @@ def test_load_catalog_skips_entries_missing_id_or_type(tmp_path):
 
 # ─── Layer 2: caveman/claude 감지(파일 읽기만·3상태) ──────────────────────────
 
-def test_detect_caveman_applied_via_active_marker(tmp_path):
-    home = _claude_home(tmp_path, active_marker=True)
-    assert savers._detect_caveman_claude(home) == savers.APPLIED
+def test_detect_caveman_marker_only_is_not_applied(tmp_path):
+    # stale `.caveman-active` 마커만 남고 설치 근거 없음(마켓플레이스 언인스톨 잔재) → 미적용.
+    # 마커는 설치가 아니라 모드 상태 플래그일 뿐이라 영구 오탐을 냈다(ADR 0026 개정 2026-07-08).
+    home = _claude_home(tmp_path, active_marker=True, enabled={"other@x": True})
+    assert savers._detect_caveman_claude(home) == savers.NOT_APPLIED
 
 
 def test_detect_caveman_applied_via_enabled_plugin(tmp_path):
     # 이 기기 실측: settings.json enabledPlugins에 "caveman@caveman": true
     home = _claude_home(tmp_path, enabled={"caveman@caveman": True, "other@x": True})
     assert savers._detect_caveman_claude(home) == savers.APPLIED
+
+
+def test_detect_caveman_applied_via_hooks(tmp_path):
+    # 스크립트 설치 경로(install.ps1): settings.json hooks에 caveman command 등록 →
+    # enabledPlugins가 없어도 적용됨.
+    home = _claude_home(tmp_path, hooks={
+        "SessionStart": [{"hooks": [
+            {"type": "command", "command": "node ~/.claude/plugins/caveman/caveman-mode-tracker.js"},
+        ]}],
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "echo hi"}]}],
+    })
+    assert savers._detect_caveman_claude(home) == savers.APPLIED
+
+
+def test_detect_caveman_unrelated_hooks_is_not_applied(tmp_path):
+    # hooks에 caveman 참조가 없으면(다른 훅만) 미적용 — hooks 존재 자체가 신호가 아니다.
+    home = _claude_home(tmp_path, hooks={
+        "PreToolUse": [{"matcher": "Skill", "hooks": [
+            {"type": "command", "command": "npx -y ccstatusline@latest --hook"},
+        ]}],
+    })
+    assert savers._detect_caveman_claude(home) == savers.NOT_APPLIED
+
+
+def test_detect_caveman_malformed_hooks_does_not_crash(tmp_path):
+    # 유효 JSON이지만 hooks 구조가 깨진 경우(내부 hooks가 null/비-리스트) → 크래시 없이 미적용.
+    # 감지는 읽어서만·malformed면 폴백(ADR 0026 결정④, _read_json과 같은 관용).
+    home = _claude_home(tmp_path, hooks={
+        "SessionStart": [{"hooks": None}],   # null → for-loop 대상 아님
+        "UserPromptSubmit": 42,              # 비-리스트 그룹
+        "PreToolUse": [{"hooks": "caveman"}],  # 문자열(dict 아님) → command 없음
+    })
+    assert savers._detect_caveman_claude(home) == savers.NOT_APPLIED
 
 
 def test_detect_caveman_not_applied_when_claude_present_but_no_signal(tmp_path):
@@ -163,7 +204,7 @@ def test_detect_states_covers_codex_provider(tmp_path):
 
 def test_refresh_records_first_observation(tmp_path):
     conn = connect(":memory:")
-    home = _claude_home(tmp_path, active_marker=True)
+    home = _claude_home(tmp_path, enabled={"caveman@caveman": True})
     savers.refresh_saver_states(conn, "2026-06-20T12:00:00+09:00", home=home)
     latest = savers.db.latest_saver_states(conn)
     assert latest[("cavemankorean", "claude")][0] == savers.APPLIED
@@ -171,7 +212,7 @@ def test_refresh_records_first_observation(tmp_path):
 
 def test_refresh_records_transition_only_on_change(tmp_path):
     conn = connect(":memory:")
-    applied = _claude_home(tmp_path / "a", active_marker=True)
+    applied = _claude_home(tmp_path / "a", enabled={"caveman@caveman": True})
     savers.refresh_saver_states(conn, "2026-06-20T12:00:00+09:00", home=applied)
     # 같은 상태 재감지 — 새 행 없음. cavemankorean은 claude+codex 두 provider를 감지하므로
     # provider='claude'로 좁혀 "같은 상태 무기록"을 검증한다(codex는 .codex 부재로 UNKNOWN).
@@ -259,7 +300,7 @@ def test_savers_context_codex_applied_state(tmp_path):
 
 def test_savers_context_applied_state_no_install_only_repo(tmp_path):
     conn = connect(":memory:")
-    ctx = _ctx(conn, ["claude"], tmp_path, active_marker=True)
+    ctx = _ctx(conn, ["claude"], tmp_path, enabled={"caveman@caveman": True})
     row = next(e for e in ctx["entries"] if e["id"] == "cavemankorean")
     b = _badges(row)["claude"]
     assert b["state"] == savers.APPLIED

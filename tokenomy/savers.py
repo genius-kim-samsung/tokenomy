@@ -59,8 +59,9 @@ def _valid_entry(e: object) -> bool:
 
 
 # ─── 적용 상태 감지(파일 읽기 한정·subprocess 금지, ADR 0026 결정④) ────────────
-# 감지는 마커 기반으로 OS 중립하게 — 특정 .ps1 경로가 아니라 플러그인/settings 흔적으로
-# 판정한다(cavemankorean 설치 산출물이 OS별로 다름). Path.home() 기준 상대 경로만 사용.
+# 감지는 설치 근거(settings.json의 enabledPlugins·hooks) 기반으로 OS 중립하게 — 특정 .ps1
+# 경로가 아니라 설정 흔적으로 판정한다(cavemankorean 설치 산출물이 OS별로 다름). Path.home()
+# 기준 상대 경로만 사용.
 
 def _read_json(p: Path) -> dict:
     """JSON 파일을 dict로. 없거나 깨지면 빈 dict(감지는 흔적이 있으면 읽고, 없으면 없는 대로)."""
@@ -82,23 +83,51 @@ def _read_toml(p: Path) -> dict:
 def _detect_caveman_claude(home: Path) -> str:
     """Caveman(cavemankorean) 플러그인의 Claude Code 적용 상태를 3상태로.
 
-    강한 신호(활성):
-      - `~/.claude/.caveman-active` 존재(런타임 활성 마커 — 훅이 기록).
-      - `~/.claude/settings.json`의 `enabledPlugins`에 "caveman" 포함 키가 truthy(활성 플러그인).
-    `~/.claude`가 아예 없으면 판정 근거가 없어 UNKNOWN(거짓 미적용 방지). 설정은 읽히지만
-    두 신호가 없으면 NOT_APPLIED. 읽은 내용은 버리고 상태만 반환한다.
+    설치 근거 2신호 OR(둘 중 하나면 활성):
+      - `~/.claude/settings.json`의 `enabledPlugins`에 "caveman" 포함 키가 truthy(플러그인 설치).
+      - `~/.claude/settings.json`의 `hooks`에 command가 "caveman"을 참조(스크립트 설치 —
+        install.ps1이 SessionStart/UserPromptSubmit 훅을 등록).
+    `~/.claude/.caveman-active` 마커는 **설치 신호로 쓰지 않는다**(ADR 0026 개정 2026-07-08):
+    마커는 설치가 아니라 caveman 모드 상태 플래그일 뿐이고, 마켓플레이스 언인스톨은 이를 지우지
+    않아 stale 잔재로 영구 오탐(항상 applied)을 냈다. `~/.claude`가 아예 없으면 판정 근거가 없어
+    UNKNOWN(거짓 미적용 방지). 설정은 읽히지만 두 신호가 없으면 NOT_APPLIED. 읽은 내용은 버리고
+    상태만 반환한다.
     """
     claude = home / ".claude"
     if not claude.exists():
         return UNKNOWN
-    if (claude / ".caveman-active").exists():
-        return APPLIED
-    enabled = _read_json(claude / "settings.json").get("enabledPlugins", {})
+    settings = _read_json(claude / "settings.json")
+    enabled = settings.get("enabledPlugins", {})
     if isinstance(enabled, dict):
         for key, val in enabled.items():
             if "caveman" in str(key).lower() and val:
                 return APPLIED
+    if _hooks_reference_caveman(settings.get("hooks", {})):
+        return APPLIED
     return NOT_APPLIED
+
+
+def _hooks_reference_caveman(hooks: object) -> bool:
+    """settings.json의 hooks 섹션에 caveman을 참조하는 command가 있는지(스크립트 설치 신호).
+
+    구조: `{이벤트명: [{"hooks": [{"command": "…"}, …]}, …]}`. 전 이벤트의 command 문자열을
+    훑어 "caveman"(대소문자 무시) 포함 여부만 본다(내용은 버림 — 발췌선 불변).
+    """
+    if not isinstance(hooks, dict):
+        return False
+    for groups in hooks.values():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            inner = group.get("hooks")
+            if not isinstance(inner, list):
+                continue
+            for hook in inner:
+                if isinstance(hook, dict) and "caveman" in str(hook.get("command", "")).lower():
+                    return True
+    return False
 
 
 def _detect_caveman_codex(home: Path) -> str:
