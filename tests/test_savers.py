@@ -330,9 +330,10 @@ def test_savers_context_advisory_has_no_state(tmp_path):
 
 
 def test_savers_context_has_suggest_url(tmp_path):
+    # 제안 접수는 사내 GHE Issues — 사용자 전원이 사내망 임직원(ADR 0026 개정)
     conn = connect(":memory:")
     ctx = _ctx(conn, ["claude"], tmp_path, active_marker=True)
-    assert "genius-kim-samsung/tokenomy/issues/new" in ctx["suggest_url"]
+    assert "github.sec.samsung.net/genius-kim/tokenomy/issues/new" in ctx["suggest_url"]
 
 
 def test_record_transition_conditional_no_dup_same_state(tmp_path):

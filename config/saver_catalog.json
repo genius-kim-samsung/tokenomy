@@ -3,7 +3,7 @@
     "what": "토큰 절약 카탈로그 — 절약 수단의 큐레이션 목록(ADR 0026). 배포에 포함(=신뢰 경계).",
     "keys": "id 유일. type=installable|advisory. providers=활성 AI 게이트 축. repo_url/link_url=저장소·문서 링크. 설치형은 savers.py 감지로 적용 여부만 표시한다(설치 절차는 담지 않음).",
     "trust": "원격 취득 없이 메인테이너 검토분만 릴리스로 배포한다(bucket_catalog.json·pricing.json과 같은 결). 낡기 쉬운 설치 명령은 담지 않고 저장소 링크만 둬 — 설치 절차는 각 저장소 README가 정본이다.",
-    "note": "새 절약 수단 추가 = 엔트리 한 줄 + (설치형이면) savers.py 감지 함수 → release-exe로 전원 배포. 사용자 제안은 GitHub Issues prefill 링크로 받는다."
+    "note": "새 절약 수단 추가 = 엔트리 한 줄 + (설치형이면) savers.py 감지 함수 → release-exe로 전원 배포. 사용자 제안은 사내 GitHub Enterprise Issues prefill 링크로 받는다."
   },
   "savers": [
     {

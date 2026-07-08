@@ -1124,9 +1124,10 @@ def coverage_card_context(conn, pricing: dict) -> dict:
 
 # ─── 토큰 절약 카탈로그 화면(ADR 0026) ────────────────────────────────────────
 
-# 사용자 제안 = GitHub Issues prefill 링크(앱 내 제출 백엔드 없음). 메인테이너 검토 후 편입.
+# 사용자 제안 = 사내 GHE Issues prefill 링크(앱 내 제출 백엔드 없음). 사용자 전원이
+# 사내망 임직원이라 사외 GitHub 계정 장벽을 없앤다(ADR 0026 개정). 메인테이너 검토 후 편입.
 _SAVER_SUGGEST_URL = (
-    "https://github.com/genius-kim-samsung/tokenomy/issues/new"
+    "https://github.sec.samsung.net/genius-kim/tokenomy/issues/new"
     "?title=" + "%5B%EC%A0%88%EC%95%BD%20%EC%88%98%EB%8B%A8%20%EC%A0%9C%EC%95%88%5D%20"
     "&labels=needs-triage"
     "&body=" + "%EC%88%98%EB%8B%A8%20%EC%9D%B4%EB%A6%84%3A%0A%EB%A7%81%ED%81%AC%3A%0A"
