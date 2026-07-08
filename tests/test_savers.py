@@ -23,6 +23,23 @@ def _claude_home(tmp_path, *, active_marker=False, enabled=None, settings=True):
     return tmp_path
 
 
+def _codex_home(tmp_path, *, plugins=None, config=True):
+    """~/.codex 흔적을 가진 가짜 홈. 이 기기 실측(config.toml의 [plugins."…"] enabled)을 재현.
+
+    plugins={"caveman@caveman-repo": True} → config.toml에 해당 플러그인 섹션(enabled=true).
+    config=False면 config.toml 자체를 안 만든다(설정 부재).
+    """
+    codex = tmp_path / ".codex"
+    codex.mkdir(parents=True, exist_ok=True)
+    if config:
+        lines = []
+        for key, val in (plugins or {}).items():
+            lines.append(f'[plugins."{key}"]')
+            lines.append(f"enabled = {'true' if val else 'false'}")
+        (codex / "config.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return tmp_path
+
+
 # ─── Layer 1: 카탈로그 로더/스키마 ─────────────────────────────────────────────
 
 def test_load_catalog_returns_entries_with_required_fields():
@@ -45,6 +62,13 @@ def test_catalog_has_cavemankorean_installable_entry():
     assert caveman["install"]["claude"]["steps"], "claude 설치 스텝이 있어야 함"
     # 주장 절감률(제작자 주장) 텍스트
     assert caveman["claimed_saving"]
+
+
+def test_catalog_cavemankorean_supports_codex():
+    # ADR 0026 결정③: provider 추가로 흡수. Codex도 Caveman 플러그인 설치·감지 대상.
+    caveman = {e["id"]: e for e in savers.load_saver_catalog()}["cavemankorean"]
+    assert "codex" in caveman["providers"]
+    assert caveman["install"]["codex"]["steps"], "codex 설치 스텝이 있어야 함"
 
 
 def test_load_catalog_missing_file_returns_empty(tmp_path):
@@ -96,6 +120,29 @@ def test_detect_caveman_unknown_when_no_claude_dir(tmp_path):
     assert savers._detect_caveman_claude(tmp_path) == savers.UNKNOWN
 
 
+# ─── Layer 2: caveman/codex 감지(config.toml TOML·3상태) ──────────────────────
+
+def test_detect_caveman_codex_applied_via_enabled_plugin(tmp_path):
+    # 이 기기 실측: config.toml [plugins."caveman@caveman-repo"] enabled=true
+    home = _codex_home(tmp_path, plugins={"caveman@caveman-repo": True, "browser@openai-bundled": True})
+    assert savers._detect_caveman_codex(home) == savers.APPLIED
+
+
+def test_detect_caveman_codex_not_applied_when_codex_present_but_no_signal(tmp_path):
+    home = _codex_home(tmp_path, plugins={"browser@openai-bundled": True})
+    assert savers._detect_caveman_codex(home) == savers.NOT_APPLIED
+
+
+def test_detect_caveman_codex_disabled_plugin_is_not_applied(tmp_path):
+    home = _codex_home(tmp_path, plugins={"caveman@caveman-repo": False})
+    assert savers._detect_caveman_codex(home) == savers.NOT_APPLIED
+
+
+def test_detect_caveman_codex_unknown_when_no_codex_dir(tmp_path):
+    # ~/.codex 부재 = 판정 근거 없음 → 거짓 "미적용" 대신 "감지 불가"
+    assert savers._detect_caveman_codex(tmp_path) == savers.UNKNOWN
+
+
 def test_detect_states_covers_registry(tmp_path):
     home = _claude_home(tmp_path, active_marker=True)
     triples = savers.detect_states(home)
@@ -103,6 +150,13 @@ def test_detect_states_covers_registry(tmp_path):
     assert "cavemankorean" in ids
     for _sid, _prov, state in triples:
         assert state in (savers.APPLIED, savers.NOT_APPLIED, savers.UNKNOWN)
+
+
+def test_detect_states_covers_codex_provider(tmp_path):
+    # 레지스트리가 cavemankorean×codex 감지를 포함한다
+    home = _codex_home(tmp_path, plugins={"caveman@caveman-repo": True})
+    pairs = {(sid, prov): state for sid, prov, state in savers.detect_states(home)}
+    assert pairs[("cavemankorean", "codex")] == savers.APPLIED
 
 
 # ─── Layer 2: 전이 기록(상태 변화 시각만 DB) ─────────────────────────────────
@@ -119,10 +173,11 @@ def test_refresh_records_transition_only_on_change(tmp_path):
     conn = connect(":memory:")
     applied = _claude_home(tmp_path / "a", active_marker=True)
     savers.refresh_saver_states(conn, "2026-06-20T12:00:00+09:00", home=applied)
-    # 같은 상태 재감지 — 새 행 없음
+    # 같은 상태 재감지 — 새 행 없음. cavemankorean은 claude+codex 두 provider를 감지하므로
+    # provider='claude'로 좁혀 "같은 상태 무기록"을 검증한다(codex는 .codex 부재로 UNKNOWN).
     savers.refresh_saver_states(conn, "2026-06-20T13:00:00+09:00", home=applied)
     n1 = conn.execute(
-        "SELECT COUNT(*) FROM saver_state_transitions WHERE saver_id='cavemankorean'"
+        "SELECT COUNT(*) FROM saver_state_transitions WHERE saver_id='cavemankorean' AND provider='claude'"
     ).fetchone()[0]
     assert n1 == 1
     # 상태 바뀜(applied → not_applied) — 전이 1행 추가
@@ -130,7 +185,7 @@ def test_refresh_records_transition_only_on_change(tmp_path):
     savers.refresh_saver_states(conn, "2026-06-20T14:00:00+09:00", home=off)
     rows = conn.execute(
         "SELECT state, changed_at FROM saver_state_transitions "
-        "WHERE saver_id='cavemankorean' ORDER BY id"
+        "WHERE saver_id='cavemankorean' AND provider='claude' ORDER BY id"
     ).fetchall()
     assert [r[0] for r in rows] == [savers.APPLIED, savers.NOT_APPLIED]
     assert rows[-1][1] == "2026-06-20T14:00:00+09:00"
@@ -152,14 +207,30 @@ def _ctx(conn, tracked, tmp_path, **home_kw):
 
 def test_savers_context_gates_by_active_ai(tmp_path):
     conn = connect(":memory:")
-    # codex만 활성 → claude 전용 엔트리(cavemankorean 등) 숨김
+    # codex만 활성 → claude 전용 엔트리(compact-habit)는 숨김,
+    # 멀티 provider 엔트리(cavemankorean=claude+codex)는 codex만 활성이어도 노출.
     ctx = _ctx(conn, ["codex"], tmp_path, active_marker=True)
     ids = {e["id"] for e in ctx["entries"]}
-    assert "cavemankorean" not in ids
-    # claude+codex 활성 → 노출
-    ctx2 = _ctx(conn, ["claude", "codex"], tmp_path, active_marker=True)
+    assert "compact-habit" not in ids
+    assert "cavemankorean" in ids
+    # claude 활성 → claude 전용도 노출
+    ctx2 = _ctx(conn, ["claude"], tmp_path, active_marker=True)
     ids2 = {e["id"] for e in ctx2["entries"]}
+    assert "compact-habit" in ids2
     assert "cavemankorean" in ids2
+
+
+def test_savers_context_codex_applied_state_and_install(tmp_path):
+    # codex 활성 + config.toml에 caveman enabled → 적용됨, codex 설치 스텝 노출
+    conn = connect(":memory:")
+    home = _codex_home(tmp_path, plugins={"caveman@caveman-repo": True})
+    cfg = {"tracked_providers": ["codex"]}
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=KST)
+    ctx = views.savers_context(conn, cfg, now, home=home)
+    row = next(e for e in ctx["entries"] if e["id"] == "cavemankorean")
+    assert row["state"] == savers.APPLIED
+    assert row["state_label"] == "적용됨"
+    assert "codex" in [ins["provider"] for ins in row["install"]]
 
 
 def test_savers_context_applied_state_and_install_steps(tmp_path):

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 from tokenomy import db
@@ -70,6 +71,14 @@ def _read_json(p: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _read_toml(p: Path) -> dict:
+    """TOML 파일을 dict로. 없거나 깨지면 빈 dict(_read_json과 대칭 — Codex config.toml용)."""
+    try:
+        return tomllib.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+
+
 def _detect_caveman_claude(home: Path) -> str:
     """Caveman(cavemankorean) 플러그인의 Claude Code 적용 상태를 3상태로.
 
@@ -92,10 +101,31 @@ def _detect_caveman_claude(home: Path) -> str:
     return NOT_APPLIED
 
 
+def _detect_caveman_codex(home: Path) -> str:
+    """Caveman 플러그인의 Codex 적용 상태를 3상태로.
+
+    강한 신호(활성): `~/.codex/config.toml`의 `[plugins."caveman@…"]` 섹션이 truthy `enabled`.
+    Codex 플러그인 시스템으로 설치하면(repo clone 후 `/plugins`에서 활성화) 활성 플래그가
+    글로벌 config.toml에 남는다(마켓플레이스는 workspace-local이라 남지 않아도 무방).
+    `~/.codex`가 아예 없으면 UNKNOWN(거짓 미적용 방지). config는 읽히지만 신호 없으면
+    NOT_APPLIED. Claude 감지(settings.json enabledPlugins)와 대칭 — 포맷만 JSON→TOML.
+    """
+    codex = home / ".codex"
+    if not codex.exists():
+        return UNKNOWN
+    plugins = _read_toml(codex / "config.toml").get("plugins", {})
+    if isinstance(plugins, dict):
+        for key, val in plugins.items():
+            if "caveman" in str(key).lower() and isinstance(val, dict) and val.get("enabled"):
+                return APPLIED
+    return NOT_APPLIED
+
+
 # 감지 레지스트리 — (saver_id, provider, 감지 함수). 설치형 엔트리 중 감지 함수를 가진 것만.
 # 감지 함수 없는 설치형/조언형은 뷰에서 UNKNOWN/None으로 폴백(카탈로그가 정본, 여긴 코드 감지).
 DETECTORS: list[tuple[str, str, object]] = [
     ("cavemankorean", "claude", _detect_caveman_claude),
+    ("cavemankorean", "codex", _detect_caveman_codex),
 ]
 
 

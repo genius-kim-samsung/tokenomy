@@ -10,9 +10,9 @@
       "id": "cavemankorean",
       "type": "installable",
       "name": "Caveman 모드",
-      "summary": "에이전트 출력을 원시인 말투로 압축해 출력 토큰을 줄이는 Claude Code 플러그인. 기술 내용·코드·에러 문자열은 그대로 두고 관사·군더더기만 덜어낸다.",
+      "summary": "에이전트 출력을 원시인 말투로 압축해 출력 토큰을 줄이는 플러그인. 기술 내용·코드·에러 문자열은 그대로 두고 관사·군더더기만 덜어낸다. Claude Code·Codex 등 여러 코딩 에이전트에서 쓸 수 있다.",
       "claimed_saving": "출력 토큰 65~75% 절감",
-      "providers": ["claude"],
+      "providers": ["claude", "codex"],
       "repo_url": "https://github.com/blacknabis/cavemankorean",
       "install": {
         "claude": {
@@ -21,6 +21,12 @@
             "claude plugin install caveman@cavemankorean"
           ],
           "note": "정확한 마켓플레이스·플러그인 이름은 repo README에서 확인하세요. 설치 후 /caveman 으로 강도를 조절합니다."
+        },
+        "codex": {
+          "steps": [
+            "git clone https://github.com/blacknabis/cavemankorean.git"
+          ],
+          "note": "클론한 폴더에서 codex를 실행하고 /plugins → 'Caveman Repo' 마켓플레이스에서 Caveman을 설치(Space로 활성화)하세요. Codex는 repo 안의 워크스페이스 마켓플레이스로 설치하며, 설치 후 config.toml에 활성 플래그가 남아 적용 상태로 감지됩니다."
         }
       }
     },
