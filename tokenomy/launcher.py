@@ -139,8 +139,11 @@ def _ensure_on_screen(win) -> None:
     try:
         import ctypes
         from ctypes import wintypes
-        hwnd = win.native.Handle.ToInt32()
         user32 = ctypes.windll.user32
+        # HWND·HMONITOR는 포인터 크기 — ToInt32()/기본 c_int는 64비트 핸들에서 절단·오버플로해
+        # recovery를 조용히 무력화한다(broad except). 핸들은 self-describing c_void_p 인스턴스로
+        # 넘겨(전역 argtypes 변형 없이) 포인터 크기를 보존하고, MonitorFromRect restype만 c_void_p로.
+        hwnd = ctypes.c_void_p(win.native.Handle.ToInt64())
         user32.MonitorFromRect.restype = ctypes.c_void_p     # 64비트 HMONITOR 절단 방지
         rect = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
@@ -151,7 +154,7 @@ def _ensure_on_screen(win) -> None:
             (rect.left, rect.top, rect.right, rect.bottom),
             (wa.left, wa.top, wa.right, wa.bottom), on_any)
         if target is not None:
-            user32.SetWindowPos(hwnd, 0, target[0], target[1], 0, 0,
+            user32.SetWindowPos(hwnd, ctypes.c_void_p(0), target[0], target[1], 0, 0,
                                 0x0001 | 0x0004 | 0x0010)  # NOSIZE|NOZORDER|NOACTIVATE
     except Exception:
         pass
