@@ -607,6 +607,27 @@ def test_default_mini_position_bottom_right():
     assert launcher._default_mini_position(1920, 1080, 300, 160, margin=16) == (1604, 904)
 
 
+# ── 화면 밖 배치 복귀(순수) — webview.screens 좌표계가 물리로 뒤집히는 멀티모니터·고배율 조합 ──
+def test_reposition_target_offscreen_returns_workarea_corner():
+    # 문제 PC 실측: 배율 1.25·미니 좌측 4405 > 데스크톱 우단 3840 → 화면 완전 밖(ON-SCREEN=False).
+    # primary 작업영역 (0,0)~(3840,3152), 창 375x307 → 보이는 우하단 코너로 되돌린다.
+    target = launcher._reposition_target(
+        (4405, 2430, 4780, 2737), (0, 0, 3840, 3152), on_any_monitor=False)
+    assert target == (3840 - 375 - 16, 3152 - 307 - 16)     # (3449, 2829)
+
+
+def test_reposition_target_none_when_on_a_monitor():
+    # 어떤 모니터엔가 걸쳐 있으면(부분 걸침 포함 — 잡을 수 있는 창) 이동하지 않는다.
+    assert launcher._reposition_target(
+        (100, 100, 475, 407), (0, 0, 3840, 3152), on_any_monitor=True) is None
+
+
+def test_reposition_target_clamps_to_workarea_origin_when_window_larger():
+    # 창이 작업영역보다 크면 좌상단(작업영역 원점)으로 clamp — 음수 코너 방지.
+    assert launcher._reposition_target(
+        (5000, 5000, 5400, 5400), (0, 0, 300, 300), on_any_monitor=False) == (0, 0)
+
+
 # ── 설정 영속 ────────────────────────────────────────────────────────────────
 def test_persist_mini_writes_last_view(monkeypatch, tmp_path):
     cfg = tmp_path / "c.json"
@@ -882,6 +903,41 @@ def test_show_mini_window_restores_minimized_on_reshow(monkeypatch):
     monkeypatch.setattr(launcher, "_restore_if_minimized", lambda w: restored.append(w))
     launcher._show_mini_window()
     assert restored == [w_mini]
+
+
+# ── 화면 밖 배치 복귀 — 표시 후 실제 rect를 Win32로 확인해 되돌린다(오프스크린 VoC) ──────
+def test_show_mini_window_ensures_on_screen_on_reshow(monkeypatch):
+    """미니 재표시(배타 전환·트레이 복원)는 화면 밖 복귀 안전망을 거쳐야 한다.
+    webview.screens가 물리 픽셀을 반환하는 멀티모니터·고배율 조합에서 좌표가 이중 스케일돼
+    화면 밖(썸네일·Alt+Tab엔 보이나 본체 비가시)으로 밀리는 결함 회귀 가드."""
+    w_mini = _FakeWindow()
+    _reset_mini_state(monkeypatch, mini=w_mini, current_view="mini")
+    monkeypatch.setattr(launcher, "_refresh_mini_content", lambda m: None)
+    monkeypatch.setattr(launcher, "_restore_if_minimized", lambda w: None)
+    ensured = []
+    monkeypatch.setattr(launcher, "_ensure_on_screen", lambda w: ensured.append(w))
+    launcher._show_mini_window()
+    assert ensured == [w_mini]
+
+
+def test_ensure_on_screen_noop_off_windows(monkeypatch):
+    """비Windows는 native를 만지기 전에 반환한다(win32 전용 API — ADR 0013 좁은 분기)."""
+    monkeypatch.setattr(launcher.sys, "platform", "linux")
+    touched = []
+
+    class Win:
+        @property
+        def native(self):
+            touched.append(True)
+            return None
+    launcher._ensure_on_screen(Win())
+    assert touched == []
+
+
+def test_ensure_on_screen_swallows_missing_native(monkeypatch):
+    """native 미준비(생성 직후 등) 창은 조용히 무시 — 표시 흐름을 깨면 안 된다."""
+    monkeypatch.setattr(launcher.sys, "platform", "win32")
+    launcher._ensure_on_screen(object())       # native 속성 없음 — 예외 전파 없이 반환
 
 
 def test_show_window_restores_minimized(monkeypatch):

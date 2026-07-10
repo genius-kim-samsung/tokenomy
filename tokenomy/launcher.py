@@ -108,6 +108,55 @@ def _restore_if_minimized(win) -> None:
         pass
 
 
+def _reposition_target(win_rect, work_area, on_any_monitor, margin=16):
+    """미니 창이 어떤 모니터에도 안 걸쳐 있으면(on_any_monitor=False) 보이는 작업영역 우하단
+    코너 좌표를, 걸쳐 있으면 None(이동 불필요)을 반환 — 순수(win32 조회는 호출부 몫).
+
+    win_rect·work_area는 (left, top, right, bottom) 물리 픽셀. 창이 작업영역보다 크면
+    좌상단(원점)으로 clamp해 음수 코너를 막는다."""
+    if on_any_monitor:
+        return None
+    l, t, r, b = win_rect
+    wl, wt, wr, wb = work_area
+    win_w, win_h = r - l, b - t
+    x = max(wr - win_w - margin, wl)
+    y = max(wb - win_h - margin, wt)
+    return (x, y)
+
+
+def _ensure_on_screen(win) -> None:
+    """미니 창이 화면 밖(어떤 모니터에도 없음)으로 배치되면 보이는 작업영역 우하단으로 되돌린다.
+
+    pywebview(WinForms)는 create_window(x, y)를 논리 픽셀로 간주해 배율을 곱해 배치하는데,
+    일부 멀티모니터·고배율 조합에서 webview.screens가 물리 픽셀을 반환해(좌표계 오락가락)
+    좌표가 이중 스케일되어 화면 밖으로 밀린다 — 썸네일·Alt+Tab엔 보이나 본체는 비가시
+    (프레임리스 미니라 사용자가 끌어올 수단도 없음, VoC). screens 좌표계를 신뢰하는 대신
+    표시 후 실제 창 rect를 Win32로 확인해(순수 물리 좌표라 DPI 무관) 어떤 모니터에도 없으면
+    primary 작업영역 우하단으로 SetWindowPos한다. 부분 걸침(잡을 수 있는 창)은 건드리지 않는다.
+    win32 외 no-op·native 미준비(생성 직후 등) 예외는 조용히 삼킨다."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        hwnd = win.native.Handle.ToInt32()
+        user32 = ctypes.windll.user32
+        user32.MonitorFromRect.restype = ctypes.c_void_p     # 64비트 HMONITOR 절단 방지
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        on_any = bool(user32.MonitorFromRect(ctypes.byref(rect), 0))  # MONITOR_DEFAULTTONULL
+        wa = wintypes.RECT()
+        user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(wa), 0)  # SPI_GETWORKAREA(primary)
+        target = _reposition_target(
+            (rect.left, rect.top, rect.right, rect.bottom),
+            (wa.left, wa.top, wa.right, wa.bottom), on_any)
+        if target is not None:
+            user32.SetWindowPos(hwnd, 0, target[0], target[1], 0, 0,
+                                0x0001 | 0x0004 | 0x0010)  # NOSIZE|NOZORDER|NOACTIVATE
+    except Exception:
+        pass
+
+
 def _show_window() -> None:
     """숨긴 창을 복원하고, 백그라운드에서 재수집 후 신규 있으면 리로드(조건부)."""
     window = _tray_state["window"]
@@ -311,6 +360,7 @@ def _show_mini_window() -> None:
     mini = _ensure_mini()
     mini.show()
     _restore_if_minimized(mini)
+    _ensure_on_screen(mini)          # 화면 밖(멀티모니터·고배율 좌표 이중 스케일) 복귀
     _tray_state["mini_visible"] = True
     if existed:
         _refresh_mini_content(mini)
