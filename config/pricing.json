@@ -26,6 +26,10 @@
     { "contains": "gpt-5.3-codex", "provider": "codex", "input": 1.75, "output": 14.0, "cache_write": 0.0, "cache_read": 0.175 },
     { "contains": "gpt-5",         "provider": "codex", "input": 1.25, "output": 10.0, "cache_write": 0.0, "cache_read": 0.125 },
     { "contains": "o4",            "provider": "codex", "input": 1.10, "output": 4.40, "cache_write": 0.0, "cache_read": 0.275 },
-    { "contains": "gpt-4",         "provider": "codex", "input": 2.50, "output": 10.0, "cache_write": 0.0, "cache_read": 1.25  }
+    { "contains": "gpt-4",         "provider": "codex", "input": 2.50, "output": 10.0, "cache_write": 0.0, "cache_read": 1.25  },
+
+    { "contains": "flash-lite", "provider": "gemini", "input": 0.10, "output": 0.40,  "cache_write": 0.0, "cache_read": 0.025 },
+    { "contains": "flash",      "provider": "gemini", "input": 0.30, "output": 2.50,  "cache_write": 0.0, "cache_read": 0.075 },
+    { "contains": "gemini",     "provider": "gemini", "input": 1.25, "output": 10.0,  "cache_write": 0.0, "cache_read": 0.31 }
   ]
 }

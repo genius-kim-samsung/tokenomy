@@ -128,3 +128,41 @@ def test_gemini_message_without_tokens_skipped(tmp_path):
     ])
     recs = parse_session_file(str(f))
     assert [r.message_id for r in recs] == ["g1"]
+
+
+from tokenomy import domain, paths
+from tokenomy.pricing import load_pricing, find_rate
+
+
+def test_gemini_registered_in_providers():
+    assert "gemini" in domain.PROVIDERS
+
+
+def test_creds_present_gemini(tmp_path, monkeypatch):
+    creds = tmp_path / "oauth_creds.json"
+    monkeypatch.setattr(paths, "GEMINI_CREDS", creds, raising=False)
+    assert paths.creds_present("gemini") is False
+    creds.write_text("{}", encoding="utf-8")
+    assert paths.creds_present("gemini") is True
+
+
+def test_pricing_matches_gemini_tiers():
+    pricing = load_pricing()
+    assert find_rate("gemini-3.1-pro-preview", pricing)["provider"] == "gemini"
+    assert find_rate("gemini-3.1-flash-preview", pricing)["provider"] == "gemini"
+    # flash-lite는 flash보다 먼저 매칭돼야 한다(first-match)
+    lite = find_rate("gemini-3.1-flash-lite-preview", pricing)
+    flash = find_rate("gemini-3.1-flash-preview", pricing)
+    assert lite["input"] < flash["input"]  # lite가 더 쌈
+
+
+def test_gemini_record_is_priced(tmp_path):
+    f = _write_session(tmp_path, [
+        _gemini_msg("g1", {"input": 1000, "output": 50, "cached": 200,
+                           "thoughts": 10, "tool": 0, "total": 1060}),
+    ])
+    r = parse_session_file(str(f))[0]
+    cost = compute_cost(r, load_pricing())
+    assert cost.priced is True
+    assert cost.provider == "gemini"
+    assert cost.cost_usd > 0

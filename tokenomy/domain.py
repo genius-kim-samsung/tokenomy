@@ -11,8 +11,8 @@ bucket_kind 자체의 **생산**은 official_parser(raw dict → OfficialBucket)
 """
 from __future__ import annotations
 
-# 합산/탭바가 도는 provider 목록. 3번째 AI 추가 시 여기 + 파서 + 단가만 보강.
-PROVIDERS = ("claude", "codex")
+# 합산/탭바가 도는 provider 목록. 4번째 AI 추가 시 여기 + 파서 + 단가만 보강.
+PROVIDERS = ("claude", "codex", "gemini")
 
 # 풀 기본 멤버십 = 안정 월 한도 키만(주기형). 만료형 크레딧(event_credit)·promo·
 # rate_window는 카탈로그/오버라이드 pooled=True로만 옵트인(ADR 0016·0024).
