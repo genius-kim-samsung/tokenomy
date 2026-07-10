@@ -677,7 +677,7 @@ def test_refresh_write_failure_returns_none_and_cleans_tmp(tmp_path, monkeypatch
     monkeypatch.setattr(of.os, "replace", _boom_replace)
     assert of.refresh_claude_token(p, now_ms=1, urlopen=lambda req, timeout: _Resp(body)) is None
     assert p.read_text(encoding="utf-8") == before          # 원본 무손상
-    assert not p.with_name(p.name + ".tmp").exists()        # 임시파일 정리됨
+    assert list(p.parent.glob("*.tmp")) == []               # 임시파일 정리됨(고유 temp명 포함)
 
 
 def test_refresh_creates_tmp_with_0600_mode(tmp_path, monkeypatch):

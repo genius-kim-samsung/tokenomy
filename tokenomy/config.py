@@ -9,20 +9,15 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from pathlib import Path
 
+from tokenomy.atomicio import atomic_write_json
 from tokenomy.domain import PROVIDERS, is_pooled_kind
 from tokenomy.paths import creds_present
 
 # 프로세스 내 동시 save 직렬화 — 미니 위치 저장(moved)·뷰 전환(last_view)·모드 시드가
 # 서로 다른 스레드(UI/트레이/백그라운드)에서 겹쳐 호출되므로 write 임계구역을 잠근다.
 _SAVE_LOCK = threading.Lock()
-
-# Windows에서 os.replace는 대상 파일을 다른 스레드/프로세스가 열고 있으면(리더의 read_text 등)
-# PermissionError로 막힌다 — 리더의 open 창은 수 ms라 짧게 물러났다 재시도해 흡수한다.
-_REPLACE_ATTEMPTS = 25
-_REPLACE_BACKOFF = 0.004
 
 
 def _default_label() -> str:
@@ -81,34 +76,15 @@ def _quarantine_corrupt(p: Path) -> None:
 def save_config(config: dict, path: str | Path | None = None) -> None:
     """config를 원자적으로 파일에 기록 — 부분 기록·동시 쓰기로 인한 손상을 원천 차단한다.
 
-    같은 디렉터리 temp 파일에 완전히 쓴 뒤 `os.replace`로 원자 교체한다. 그래서 리더는 항상
-    완전한 파일(옛것 또는 새것)만 보고, 프로세스 종료가 쓰기 도중에 끼어도 원본이 남는다
-    (옛 비원자 write_text는 두 스레드가 겹치면 'Extra data'로 파일을 깨 앱을 브릭시켰다).
-    `_SAVE_LOCK`으로 프로세스 내 동시 save를 직렬화한다. temp 파일명은 **쓰기 주체별로 고유**
-    (PID+스레드) — `_SAVE_LOCK`은 프로세스 로컬이라, 만약 다른 프로세스(예: CLI)가 동시에
-    save하면 공유 temp명은 서로의 temp를 덮어/지워 FileNotFoundError·오염을 낼 수 있다.
-    토큰 write-back의 `_atomic_write_json`(ADR 0021)과 동형이나, config엔 비밀이 없어 0600은 제외."""
+    실제 쓰기는 공용 `atomicio.atomic_write_json`(고유 temp→원자 replace·PermissionError
+    재시도)이 담당하고(옛 비원자 write_text는 두 스레드가 겹치면 'Extra data'로 파일을 깨
+    앱을 브릭시켰다 — v0.1.46 근인), 최종 실패는 OSError를 전파한다(옛 write_text 계약 유지).
+    `_SAVE_LOCK`으로 프로세스 내 동시 save를 직렬화한다. config엔 비밀이 없어 perms는 제외
+    (토큰 write-back은 같은 헬퍼를 0600으로 쓴다, ADR 0021)."""
     p = _config_path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(config, indent=2, ensure_ascii=False)
-    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     with _SAVE_LOCK:
-        try:
-            tmp.write_text(data, encoding="utf-8")
-            for attempt in range(_REPLACE_ATTEMPTS):
-                try:
-                    os.replace(tmp, p)
-                    break
-                except PermissionError:       # Windows 리더가 p를 연 순간 — 잠깐 뒤 재시도
-                    if attempt == _REPLACE_ATTEMPTS - 1:
-                        raise
-                    time.sleep(_REPLACE_BACKOFF)
-        except OSError:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
+        atomic_write_json(p, config)
 
 
 def user_label(config: dict) -> str:

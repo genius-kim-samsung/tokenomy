@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Callable
 
 from tokenomy import paths
+from tokenomy.atomicio import atomic_write_json
 from tokenomy.paths import CLAUDE_CREDS, CODEX_AUTH
 from tokenomy.clock import parse_ts
 from tokenomy.official_aggregate import official_view
@@ -123,21 +124,14 @@ def _jwt_exp_ms(token: str) -> int | None:
 def _atomic_write_json(path: Path, data) -> bool:
     """data(dict)를 path에 원자적·0600으로 기록(ADR 0021/0022 토큰 write-back 공용).
 
-    토큰이 담긴 파일이라 평문 권한 노출을 막으려 0600으로 생성한다(POSIX 권한; Windows는 상위
-    디렉터리 ACL 상속). 같은 디렉터리 temp→`os.replace`로 부분 기록을 차단한다. 성공 True,
-    실패(OSError) 시 임시파일을 정리하고 False를 반환하며 **원본은 건드리지 않는다**(무손상 폴백).
+    실제 쓰기는 공용 `atomicio.atomic_write_json`(고유 temp→원자 replace·PermissionError
+    재시도)에 위임하되, 토큰이 담긴 파일이라 평문 권한 노출을 막으려 0600으로 생성한다
+    (POSIX 권한; Windows는 상위 디렉터리 ACL 상속). 성공 True, 실패(OSError) 시 False를
+    반환하며 **원본은 건드리지 않는다**(무손상 폴백 — raise를 bool로 감싸는 셸).
     """
-    tmp = path.with_name(path.name + ".tmp")
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        atomic_write_json(path, data, perms=0o600)
     except OSError:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
         return False
     return True
 
