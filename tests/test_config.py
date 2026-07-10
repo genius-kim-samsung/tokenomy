@@ -399,4 +399,4 @@ def test_save_config_atomic_under_concurrent_writers(tmp_path):
     r.join()
     assert corrupt_seen == []                  # 어떤 리더도 손상된 JSON을 못 봄
     load_config(p)                             # 최종 파일도 유효(예외 없음)
-    assert not (tmp_path / "c.json.tmp").exists()   # temp 잔재 없음
+    assert list(tmp_path.glob("*.tmp")) == []  # temp 잔재 없음(고유 temp명 포함)

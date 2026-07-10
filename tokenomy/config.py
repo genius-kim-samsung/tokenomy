@@ -84,12 +84,14 @@ def save_config(config: dict, path: str | Path | None = None) -> None:
     같은 디렉터리 temp 파일에 완전히 쓴 뒤 `os.replace`로 원자 교체한다. 그래서 리더는 항상
     완전한 파일(옛것 또는 새것)만 보고, 프로세스 종료가 쓰기 도중에 끼어도 원본이 남는다
     (옛 비원자 write_text는 두 스레드가 겹치면 'Extra data'로 파일을 깨 앱을 브릭시켰다).
-    `_SAVE_LOCK`으로 프로세스 내 동시 save를 직렬화한다. 토큰 write-back의 `_atomic_write_json`
-    (ADR 0021)과 동형이나, config엔 비밀이 없어 0600 권한은 두지 않는다."""
+    `_SAVE_LOCK`으로 프로세스 내 동시 save를 직렬화한다. temp 파일명은 **쓰기 주체별로 고유**
+    (PID+스레드) — `_SAVE_LOCK`은 프로세스 로컬이라, 만약 다른 프로세스(예: CLI)가 동시에
+    save하면 공유 temp명은 서로의 temp를 덮어/지워 FileNotFoundError·오염을 낼 수 있다.
+    토큰 write-back의 `_atomic_write_json`(ADR 0021)과 동형이나, config엔 비밀이 없어 0600은 제외."""
     p = _config_path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     data = json.dumps(config, indent=2, ensure_ascii=False)
-    tmp = p.with_name(p.name + ".tmp")
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     with _SAVE_LOCK:
         try:
             tmp.write_text(data, encoding="utf-8")
