@@ -16,6 +16,7 @@ from tokenomy.aggregate import by_project, by_session, month_spend, pricing_cove
 from tokenomy.clock import KST, parse_ts
 from tokenomy.official_aggregate import official_view
 from tokenomy.codex_parser import CODEX_ROOT, ingest_codex
+from tokenomy.gemini_parser import GEMINI_ROOT, ingest_gemini
 from tokenomy.archive import archive_tree
 from tokenomy.db import connect, ingest_root, ingest_titles, ingest_user_turns, maybe_reprice, insert_official_buckets
 from tokenomy.freshness import CLEANUP_DAYS, freshness, record_ingest
@@ -33,6 +34,7 @@ def cmd_ingest(conn) -> int:
     n_arch = archive_tree(CLAUDE_ROOT, conn, provider="claude")
     n_codex = ingest_codex(conn, CODEX_ROOT, pricing)
     archive_tree(CODEX_ROOT, conn, provider="codex")
+    n_gemini = ingest_gemini(conn, GEMINI_ROOT, pricing)
     # 세션 작업 요약(aiTitle)을 휘발 전 L1에 캐시. Codex엔 ai-title이 없어 claude만.
     n_titles = ingest_titles(conn, CLAUDE_ROOT)
     n_turns = ingest_user_turns(conn, CLAUDE_ROOT)
@@ -40,7 +42,7 @@ def cmd_ingest(conn) -> int:
     repriced = maybe_reprice(conn, pricing)
     record_ingest(conn, datetime.now(KST))
     msg = (
-        f"[ingest] claude={n_claude}  codex={n_codex}  "
+        f"[ingest] claude={n_claude}  codex={n_codex}  gemini={n_gemini}  "
         f"archived_files={n_arch}  titles={n_titles}  turns={n_turns}  new records"
     )
     if repriced:
@@ -49,7 +51,7 @@ def cmd_ingest(conn) -> int:
     # 수집은 순수 — 공식 갱신은 트리거하지 않는다(웹 대시보드 로드 시 hx-trigger="load"가 첫 갱신,
     # 이후 '자동 갱신 간격'마다 폴링 / 수동 갱신 버튼 / 설정 변경이 담당).
     # 화면에 영향을 주는 변경 합계(archive 제외) — 창 복원 시 조건부 리로드 판정용.
-    return n_claude + n_codex + n_titles + n_turns + repriced
+    return n_claude + n_codex + n_gemini + n_titles + n_turns + repriced
 
 
 def cmd_official_import(conn, provider: str, path: str, *, now_kst=None,

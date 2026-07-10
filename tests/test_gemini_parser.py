@@ -1,5 +1,7 @@
 import json
+from datetime import datetime
 
+from tokenomy.clock import KST
 from tokenomy.gemini_parser import parse_session_file
 from tokenomy.pricing import compute_cost
 
@@ -166,3 +168,46 @@ def test_gemini_record_is_priced(tmp_path):
     assert cost.priced is True
     assert cost.provider == "gemini"
     assert cost.cost_usd > 0
+
+
+from tokenomy.db import connect
+from tokenomy.gemini_parser import ingest_gemini
+from tokenomy.aggregate import by_project
+
+
+def test_ingest_gemini_idempotent_and_aggregated(tmp_path):
+    # tmp/<proj>/chats/*.json 두 세션
+    _write_session(tmp_path, [
+        _user_msg("u1", "q"),
+        _gemini_msg("g1", {"input": 1000, "output": 50, "cached": 200, "thoughts": 10, "tool": 0, "total": 1060}),
+    ], session_id="s1", name="session-1.json")
+    _write_session(tmp_path, [
+        _gemini_msg("g2", {"input": 500, "output": 20, "cached": 0, "thoughts": 5, "tool": 0, "total": 525}),
+    ], session_id="s2", name="session-2.json")
+
+    conn = connect(":memory:")
+    n1 = ingest_gemini(conn, root=tmp_path)
+    assert n1 == 2  # 세션 2개
+
+    rows_after_first = conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"]
+    assert rows_after_first == 2  # gemini 메시지 2개
+
+    # 재수집 — dedup으로 행 수 불변(멱등)
+    ingest_gemini(conn, root=tmp_path)
+    rows_after_second = conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"]
+    assert rows_after_second == 2
+
+    # 폴더 집계에 등장(.project_root 경로)
+    projects = {p.project for p in by_project(conn, "gemini", datetime(2026, 6, 15, tzinfo=KST))}
+    assert "c:\\projects\\myproj" in projects
+
+
+def test_discover_ignores_jsonl(tmp_path):
+    proj = tmp_path / "p"
+    (proj / "chats").mkdir(parents=True)
+    (proj / "chats" / "live.jsonl").write_text("{}", encoding="utf-8")
+    (proj / "chats" / "done.json").write_text(
+        json.dumps({"sessionId": "s", "messages": []}), encoding="utf-8")
+    from tokenomy.gemini_parser import discover_sessions
+    found = [p.name for p in discover_sessions(tmp_path)]
+    assert found == ["done.json"]  # .jsonl 제외

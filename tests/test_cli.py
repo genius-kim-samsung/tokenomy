@@ -65,8 +65,9 @@ def test_cmd_ingest_returns_total_visible_changes(monkeypatch):
     monkeypatch.setattr(cli, "ingest_root", lambda *a, **k: 2)      # n_claude
     monkeypatch.setattr(cli, "ingest_codex", lambda *a, **k: 3)     # n_codex
     monkeypatch.setattr(cli, "archive_tree", lambda *a, **k: 9)     # 합계 제외
+    monkeypatch.setattr(cli, "ingest_gemini", lambda *a, **k: 5)    # n_gemini
     monkeypatch.setattr(cli, "ingest_titles", lambda *a, **k: 1)    # n_titles
     monkeypatch.setattr(cli, "ingest_user_turns", lambda *a, **k: 0)
     monkeypatch.setattr(cli, "maybe_reprice", lambda *a, **k: 4)    # repriced
     monkeypatch.setattr(cli, "record_ingest", lambda *a, **k: None)
-    assert cli.cmd_ingest(conn=None) == 2 + 3 + 1 + 0 + 4
+    assert cli.cmd_ingest(conn=None) == 2 + 3 + 5 + 1 + 0 + 4
