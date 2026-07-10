@@ -171,10 +171,12 @@ def test_fetch_env_skip(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_provider_specs_cover_all_providers():
-    """레지스트리가 domain.PROVIDERS와 정확히 일치 — 새 provider 누락/유령 spec 방지."""
+    """레지스트리가 공식 지원 provider(OFFICIAL_PROVIDERS)와 정확히 일치 — 누락/유령 spec 방지.
+
+    (gemini 같은 로컬 전용 provider는 spec 없음이 정상.)"""
     from tokenomy.official_fetch import PROVIDER_SPECS
     from tokenomy import domain
-    assert set(PROVIDER_SPECS) == set(domain.PROVIDERS)
+    assert set(PROVIDER_SPECS) == set(domain.OFFICIAL_PROVIDERS)
 
 
 def test_fetch_unknown_provider_is_disabled_fail_loud(monkeypatch):

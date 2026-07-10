@@ -14,6 +14,11 @@ from __future__ import annotations
 # 합산/탭바가 도는 provider 목록. 4번째 AI 추가 시 여기 + 파서 + 단가만 보강.
 PROVIDERS = ("claude", "codex", "gemini")
 
+# 공식 quota(official_fetch) 지원 provider 목록 — 이들만 PROVIDER_SPEC 필수. gemini는
+# 로컬 전용(공식 quota는 이번 범위 밖)이라 PROVIDERS에는 있지만 여기엔 없다.
+# (OFFICIAL_PROVIDERS ⊆ PROVIDERS.)
+OFFICIAL_PROVIDERS = ("claude", "codex")
+
 # 풀 기본 멤버십 = 안정 월 한도 키만(주기형). 만료형 크레딧(event_credit)·promo·
 # rate_window는 카탈로그/오버라이드 pooled=True로만 옵트인(ADR 0016·0024).
 POOL_DEFAULT_KINDS = ("monthly_limit", "codex_monthly")
