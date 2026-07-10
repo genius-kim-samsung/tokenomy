@@ -108,7 +108,7 @@ def cmd_report(conn) -> None:
                     title = s.summary or "(요약 없음)"
                     print(f"          ${s.cost:7.1f}  {title}")
 
-    _print_recent_sessions(conn, now)
+    _print_recent_sessions(conn, config, now)
 
     pricing = apply_pricing_overrides(load_pricing(), config.get("pricing_overrides"))
     cov = pricing_coverage(conn, pricing)
@@ -119,10 +119,10 @@ def cmd_report(conn) -> None:
         print("\n단가 커버리지: 정상")
 
 
-def _print_recent_sessions(conn, now, top_n: int = 10) -> None:
+def _print_recent_sessions(conn, config, now, top_n: int = 10) -> None:
     """프로바이더 합산, 최근 세션 타임라인(시간순)."""
     recents: list = []
-    for prov in ("claude", "codex"):
+    for prov in tracked_providers(config):
         recents += by_session(conn, prov, now, order="recent")
     recents.sort(key=lambda x: x.last_ts or "", reverse=True)
     recents = recents[:top_n]

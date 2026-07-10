@@ -484,6 +484,46 @@ def test_trend_data_embedded(tmp_path, monkeypatch):
     assert "endLabels" in r.text            # 끝점 라벨 플러그인(상시 구성 표시)
 
 
+def test_trend_includes_gemini_when_active_with_data(tmp_path, monkeypatch):
+    """gemini가 활성 AI + 로컬 데이터를 가지면 대시보드 추세 밴드에 포함된다.
+
+    Fix 1 회귀 가드: _PROVIDER_STYLE에 gemini 엔트리가 없으면 trend_providers 파생
+    (`[p for p in _PROVIDER_STYLE if p in active and _provider_has_data(...)]`)에서
+    구조적으로 빠져 밴드 자체가 생기지 않는다(회색 폴백이 아니라 아예 누락).
+    """
+    from tokenomy.web.views import overview_context
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["claude", "gemini"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+
+    conn = connect(":memory:")
+    conn.execute(
+        "INSERT INTO messages (dedup_key, provider, session_id, ts, cost_usd, priced) "
+        "VALUES ('g1','gemini','s1','2026-06-10T10:00:00Z', 3.0, 1)"
+    )
+    conn.commit()
+    ctx = overview_context(conn, "cost", now_kst=datetime(2026, 6, 10, 12, tzinfo=KST))
+    labels = {s["label"] for s in ctx["trend_series"]}
+    colors = {s["color"] for s in ctx["trend_series"]}
+    assert "Gemini" in labels
+    assert "#4285f4" in colors
+
+
+def test_official_cards_excludes_gemini(tmp_path, monkeypatch):
+    """gemini는 공식 quota 미지원(OFFICIAL_PROVIDERS 밖)이라 활성이어도 공식 카드가 없다.
+
+    Fix 2 회귀 가드: claude는 대조군으로 카드가 생성됨을 함께 확인해 게이트가
+    OFFICIAL_PROVIDERS만 걸러내고 다른 활성 provider는 건드리지 않음을 검증한다.
+    """
+    from tokenomy.web.views import official_cards
+    config = {"tracked_providers": ["claude", "gemini"]}
+    conn = connect(":memory:")
+    cards = official_cards(conn, config, now_kst=datetime(2026, 6, 10, 12, tzinfo=KST))
+    providers = {c["provider"] for c in cards}
+    assert "gemini" not in providers
+    assert "claude" in providers
+
+
 def test_overview_context_includes_forecast(tmp_path, monkeypatch):
     from datetime import datetime
     from tokenomy.clock import KST
