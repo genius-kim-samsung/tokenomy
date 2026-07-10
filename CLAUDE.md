@@ -36,7 +36,8 @@ start_tokenomy.bat         # ingest → 대시보드 → 브라우저 자동 열
 ```
 ~/.claude/projects/**/*.jsonl      ─ parser.py ───────┐
 ~/.codex/sessions/**/rollout-*     ─ codex_parser.py ─┤→ UsageRecord → db.py(SQLite) → aggregate.py ─┬→ cli.py (report)
-                                                      │                                              └→ web/ (FastAPI+Jinja2)
+~/.gemini/tmp/**/chats/*.json      ─ gemini_parser.py ─┤                                             └→ web/ (FastAPI+Jinja2)
+                                                      │
                                                  archive.py (raw 30일 휘발 전 원문 보존)
 공식 사용량 API ── official_fetch.py(유일한 아웃바운드, ≤3s, 백오프 없음, tracked providers만) ─ raw JSON ─ official_parser.py ─→ db.py(official_buckets) → official_aggregate.py ─→ cli.py·web/
 ```
