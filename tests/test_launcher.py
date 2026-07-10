@@ -657,6 +657,45 @@ def test_persist_mini_ignores_none_fields(monkeypatch, tmp_path):
     assert mv == {"last_view": "mini", "x": 5, "y": 99}
 
 
+def test_persist_mini_serializes_concurrent_saves(monkeypatch, tmp_path):
+    """동시 _persist_mini(뷰 전환 + 위치)는 load-modify-save를 직렬화해 서로의 필드를 잃지 않는다.
+
+    v0.1.46에서 미니 오픈 시 _ensure_on_screen의 SetWindowPos가 유발한 위치 저장(moved)이
+    _set_view의 last_view 저장과 read-modify-write로 경쟁했다. 강제 인터리브: 스레드 A가
+    load한 직후 B의 전체 _persist_mini를 끼워넣는다 — 직렬화 락이 없으면 A의 save가 B의
+    위치 갱신을 덮어써 x=99를 잃는다. 락이 있으면 B는 A 완료까지 대기해 둘 다 보존된다."""
+    import json
+    import threading
+    import time
+    import tokenomy.config as cfgmod
+    cfg = tmp_path / "c.json"
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+    launcher._persist_mini(last_view="main", x=1, y=2)    # 초기 상태
+
+    real_load = cfgmod.load_config
+    first_load = threading.Event()
+
+    def slow_load(path=None):
+        data = real_load(path)
+        if not first_load.is_set():                        # A의 첫 load에서만 창을 연다
+            first_load.set()
+            time.sleep(0.15)                               # B가 끼어들 틈
+        return data
+    monkeypatch.setattr(cfgmod, "load_config", slow_load)
+
+    def a():
+        launcher._persist_mini(last_view="mini")
+    def b():
+        first_load.wait(1)                                 # A가 먼저 load하도록 순서 보장
+        launcher._persist_mini(x=99, y=88)
+    ta = threading.Thread(target=a); tb = threading.Thread(target=b)
+    ta.start(); tb.start(); ta.join(); tb.join()
+
+    mv = json.loads(cfg.read_text(encoding="utf-8"))["mini_view"]
+    assert mv["last_view"] == "mini"                        # A의 갱신 보존
+    assert mv["x"] == 99 and mv["y"] == 88                  # B의 갱신도 보존(lost-update 없음)
+
+
 # ── lazy 생성 ────────────────────────────────────────────────────────────────
 def test_ensure_mini_lazy_creates_visible_frameless(monkeypatch, tmp_path):
     """미니 없으면 보이는 프레임리스 on_top 창으로 lazy 생성(hidden 아님 — 흰 창 회피)."""

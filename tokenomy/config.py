@@ -8,10 +8,21 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 from tokenomy.domain import PROVIDERS, is_pooled_kind
 from tokenomy.paths import creds_present
+
+# 프로세스 내 동시 save 직렬화 — 미니 위치 저장(moved)·뷰 전환(last_view)·모드 시드가
+# 서로 다른 스레드(UI/트레이/백그라운드)에서 겹쳐 호출되므로 write 임계구역을 잠근다.
+_SAVE_LOCK = threading.Lock()
+
+# Windows에서 os.replace는 대상 파일을 다른 스레드/프로세스가 열고 있으면(리더의 read_text 등)
+# PermissionError로 막힌다 — 리더의 open 창은 수 ms라 짧게 물러났다 재시도해 흡수한다.
+_REPLACE_ATTEMPTS = 25
+_REPLACE_BACKOFF = 0.004
 
 
 def _default_label() -> str:
@@ -41,15 +52,61 @@ def load_config(path: str | Path | None = None) -> dict:
     p = _config_path(path)
     if not p.exists():
         return base
-    loaded = json.loads(p.read_text(encoding="utf-8"))
+    try:
+        loaded = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError):             # 손상 JSON('Extra data' 등) / 읽기 실패
+        _quarantine_corrupt(p)               # 손상 파일을 브릭시키지 않는다 — 격리 후 기본값 복구
+        return base
+    if not isinstance(loaded, dict):         # 유효 JSON이나 최상위가 dict 아님(리스트/스칼라) → 손상 취급
+        _quarantine_corrupt(p)
+        return base
     base.update(loaded)                       # top-level 키 덮어쓰기
     return base
 
 
+def _quarantine_corrupt(p: Path) -> None:
+    """손상된 config를 `*.corrupt`로 격리(원본 바이트는 진단용 보존, 원본은 치운다).
+
+    이렇게 두면 (1) 다음 load가 재손상을 안 보고 기본값으로 뜨며 (2) 다음 save가 새 유효
+    config를 써서 자가 회복한다. 격리 자체 실패(권한 등)는 조용히 삼킨다 — 어떤 경우에도
+    load_config가 예외로 앱을 브릭하지 않는 것이 이 함수의 유일한 계약이다."""
+    try:
+        backup = p.with_name(p.name + ".corrupt")
+        os.replace(p, backup)                 # 덮어쓰기(직전 손상분 대체) — 원자적 rename
+        print(f"[config] 손상된 설정 파일 격리 후 기본값 복구: {p} → {backup}")
+    except OSError:
+        pass
+
+
 def save_config(config: dict, path: str | Path | None = None) -> None:
+    """config를 원자적으로 파일에 기록 — 부분 기록·동시 쓰기로 인한 손상을 원천 차단한다.
+
+    같은 디렉터리 temp 파일에 완전히 쓴 뒤 `os.replace`로 원자 교체한다. 그래서 리더는 항상
+    완전한 파일(옛것 또는 새것)만 보고, 프로세스 종료가 쓰기 도중에 끼어도 원본이 남는다
+    (옛 비원자 write_text는 두 스레드가 겹치면 'Extra data'로 파일을 깨 앱을 브릭시켰다).
+    `_SAVE_LOCK`으로 프로세스 내 동시 save를 직렬화한다. 토큰 write-back의 `_atomic_write_json`
+    (ADR 0021)과 동형이나, config엔 비밀이 없어 0600 권한은 두지 않는다."""
     p = _config_path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    data = json.dumps(config, indent=2, ensure_ascii=False)
+    tmp = p.with_name(p.name + ".tmp")
+    with _SAVE_LOCK:
+        try:
+            tmp.write_text(data, encoding="utf-8")
+            for attempt in range(_REPLACE_ATTEMPTS):
+                try:
+                    os.replace(tmp, p)
+                    break
+                except PermissionError:       # Windows 리더가 p를 연 순간 — 잠깐 뒤 재시도
+                    if attempt == _REPLACE_ATTEMPTS - 1:
+                        raise
+                    time.sleep(_REPLACE_BACKOFF)
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
 
 def user_label(config: dict) -> str:

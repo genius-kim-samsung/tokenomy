@@ -314,3 +314,89 @@ def test_auto_refresh_invalid_falls_back():
         "auto_refresh_token": "bogus", "auto_refresh_safety_hours": "x"}})
     assert s["auto_refresh_token"] == "auto"
     assert s["auto_refresh_safety_hours"] == 24
+
+
+# ── 손상 config 관용 로드 — 손상 파일이 앱을 절대 브릭하지 않게(v0.1.46 리그레션 회귀 가드) ──
+def test_load_config_recovers_from_extra_data_corruption(tmp_path):
+    """뒤에 잉여 바이트가 붙은 config('Extra data')는 크래시 대신 기본값으로 복구한다.
+
+    비원자 동시 write가 남긴 손상 config로 앱이 재실행 시 JSONDecodeError로 브릭되던
+    v0.1.46 리그레션 회귀 가드 — load_config는 어떤 손상에도 예외를 던지지 않아야 한다."""
+    p = tmp_path / "c.json"
+    p.write_text('{"user_label": "alice"}\n{"stale": 1}', encoding="utf-8")  # Extra data
+    cfg = load_config(p)                       # 크래시 없이 기본값 복구
+    assert isinstance(cfg, dict)
+    assert cfg["tracked_providers"] is None    # 손상분 무시 → base 기본 형태
+    assert "official_fetch" in cfg
+
+
+def test_load_config_quarantines_corrupt_file(tmp_path):
+    """손상 config는 *.corrupt로 격리(원본 바이트 보존) → 다음 save가 새 유효 config를 쓴다(자가 회복)."""
+    p = tmp_path / "c.json"
+    bad = '{"a": 1}garbage'
+    p.write_text(bad, encoding="utf-8")
+    load_config(p)
+    backup = tmp_path / "c.json.corrupt"
+    assert backup.exists()
+    assert backup.read_text(encoding="utf-8") == bad   # 진단용 원본 보존
+    assert not p.exists()                              # 원본은 치워져 다음 load가 재손상 안 봄
+
+
+def test_load_config_recovers_from_non_dict_top_level(tmp_path):
+    """유효 JSON이지만 최상위가 dict가 아니면(리스트/스칼라) 손상으로 보고 복구한다."""
+    p = tmp_path / "c.json"
+    p.write_text('[1, 2, 3]', encoding="utf-8")
+    cfg = load_config(p)
+    assert isinstance(cfg, dict) and cfg["tracked_providers"] is None
+    assert (tmp_path / "c.json.corrupt").exists()
+
+
+def test_load_config_still_reads_valid_file(tmp_path):
+    """정상 config는 그대로 로드되고 .corrupt 백업을 만들지 않는다(관용화가 정상 경로를 안 건드림)."""
+    p = tmp_path / "c.json"
+    save_config({"user_label": "alice"}, p)
+    cfg = load_config(p)
+    assert cfg["user_label"] == "alice"
+    assert not (tmp_path / "c.json.corrupt").exists()
+
+
+# ── 원자적 save — 동시 쓰기가 config를 손상시키지 않게(v0.1.46 근인) ──────────────
+def test_save_config_atomic_under_concurrent_writers(tmp_path):
+    """두 스레드가 서로 다른 크기 config를 동시 반복 저장해도 파일이 절대 손상되지 않는다.
+
+    비원자 write_text가 바이트 레벨로 인터리브해 'Extra data' 손상을 내던 v0.1.46 근인
+    회귀 가드. 쓰는 동안 계속 읽어도(리더 스레드) 어떤 관찰자도 깨진 JSON을 보면 안 된다."""
+    import threading
+    p = tmp_path / "c.json"
+    small = {"user_label": "a", "mini_view": {"last_view": "main"}}
+    large = {"user_label": "b" * 400, "pad": ["x"] * 60,
+             "mini_view": {"last_view": "mini", "x": 4405, "y": 1200}}
+    corrupt_seen = []
+    stop = threading.Event()
+
+    def hammer(payload):
+        for _ in range(200):
+            save_config(dict(payload), p)
+
+    def reader():
+        while not stop.is_set():
+            try:
+                if p.exists():
+                    json.loads(p.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                corrupt_seen.append(str(e))
+            except (OSError, ValueError):
+                pass
+
+    r = threading.Thread(target=reader)
+    r.start()
+    writers = [threading.Thread(target=hammer, args=(pl,)) for pl in (small, large)]
+    for t in writers:
+        t.start()
+    for t in writers:
+        t.join()
+    stop.set()
+    r.join()
+    assert corrupt_seen == []                  # 어떤 리더도 손상된 JSON을 못 봄
+    load_config(p)                             # 최종 파일도 유효(예외 없음)
+    assert not (tmp_path / "c.json.tmp").exists()   # temp 잔재 없음

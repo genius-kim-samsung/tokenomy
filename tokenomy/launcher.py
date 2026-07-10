@@ -305,17 +305,25 @@ def _default_mini_position(screen_w, screen_h, win_w, win_h, margin=16):
 
 
 # ── 미니 뷰 — 설정 영속 ──────────────────────────────────────────────────────
+# load-modify-save 직렬화 락 — 위치 저장(moved, UI 스레드)과 뷰 전환(_set_view, 트레이/JS
+# 스레드)이 겹쳐 각자 옛 config를 읽고 저장하면 서로의 필드를 잃는다(lost-update). 전체
+# read-modify-write를 잠가 순차화한다(save_config 원자성과 별개 — 이건 갱신 유실 방지).
+_PERSIST_LOCK = threading.Lock()
+
+
 def _persist_mini(**fields) -> None:
     """미니 뷰 설정 일부(last_view·x·y)를 config['mini_view']에 병합 저장.
 
     None 값은 무시(부분 갱신) — 위치 저장(잦음)과 뷰 전환(last_view)이
-    서로를 덮지 않게 기존 키를 보존한다."""
+    서로를 덮지 않게 기존 키를 보존한다. 동시 호출은 _PERSIST_LOCK으로 직렬화해
+    load-modify-save 경쟁(lost-update)을 막는다."""
     from tokenomy.config import load_config, save_config
-    config = load_config()
-    mv = dict(config.get("mini_view") or {})
-    mv.update({k: v for k, v in fields.items() if v is not None})
-    config["mini_view"] = mv
-    save_config(config)
+    with _PERSIST_LOCK:
+        config = load_config()
+        mv = dict(config.get("mini_view") or {})
+        mv.update({k: v for k, v in fields.items() if v is not None})
+        config["mini_view"] = mv
+        save_config(config)
 
 
 def _save_mini_position(x, y) -> None:
