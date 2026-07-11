@@ -15,8 +15,9 @@ from tokenomy.db import (
     get_official_raw, list_official_raw,
 )
 from tokenomy.official_fetch import (
-    AuthError, FetchResult, _auto_refresh_allowed, _read_claude_token, _read_codex_auth,
-    ensure_fresh_claude_token, fetch_provider, refresh_claude_token, refresh_gemini_token,
+    AuthError, FetchResult, _auto_refresh_allowed, _gemini_expiry_ms, _read_claude_token,
+    _read_codex_auth, _read_gemini_token, ensure_fresh_claude_token, fetch_provider,
+    refresh_claude_token, refresh_gemini_token,
 )
 
 
@@ -66,6 +67,26 @@ def test_read_codex_auth_missing_account_id(tmp_path):
     p.write_text(json.dumps({"tokens": {"access_token": "jwt-x"}}), encoding="utf-8")
     with pytest.raises(AuthError):
         _read_codex_auth(p)
+
+
+def test_read_gemini_token_ok(tmp_path):
+    p = tmp_path / "oauth_creds.json"
+    p.write_text(json.dumps({"access_token": "ya29.x", "expiry_date": 123}), encoding="utf-8")
+    assert _read_gemini_token(p) == "ya29.x"
+
+
+def test_read_gemini_token_missing_raises(tmp_path):
+    with pytest.raises(AuthError):
+        _read_gemini_token(tmp_path / "nope.json")
+
+
+def test_gemini_expiry_ms_direct(tmp_path):
+    p = tmp_path / "oauth_creds.json"
+    p.write_text(json.dumps({"access_token": "x", "expiry_date": 1783735909585}), encoding="utf-8")
+    assert _gemini_expiry_ms(p) == 1783735909585
+    # 스키마 오류 → None
+    p.write_text(json.dumps({"access_token": "x"}), encoding="utf-8")
+    assert _gemini_expiry_ms(p) is None
 
 
 # ---------------------------------------------------------------------------

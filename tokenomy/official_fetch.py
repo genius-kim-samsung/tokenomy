@@ -111,6 +111,18 @@ def _read_codex_auth(path: Path = CODEX_AUTH) -> tuple[str, str]:
     return tok, acct
 
 
+def _read_gemini_token(path: Path = GEMINI_CREDS) -> str:
+    """~/.gemini/oauth_creds.json → access_token(읽기 전용)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        tok = data["access_token"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise AuthError(f"gemini credentials: {e}") from e
+    if not tok:
+        raise AuthError("gemini access_token empty")
+    return tok
+
+
 def _jwt_exp_ms(token: str) -> int | None:
     """JWT의 `exp` 클레임(초)을 ms로 반환(ADR 0022). 서명 검증은 안 한다 — 발급자가 아니라
     "곧 만료?"만 판정하므로 페이로드(가운데 세그먼트)만 base64url 디코드한다.
@@ -350,6 +362,14 @@ def _codex_expiry_ms(path: Path) -> int | None:
         return None
 
 
+def _gemini_expiry_ms(path: Path) -> int | None:
+    """Gemini creds의 expiry_date(ms epoch, 직접 읽기 — JWT 디코드 불필요). 오류면 None."""
+    try:
+        return int(json.loads(path.read_text(encoding="utf-8"))["expiry_date"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def _ensure_fresh(config, conn, *, now, path: Path, urlopen, provider: str,
                   read_expiry_ms: Callable, refresh: Callable, read_final: Callable):
     """선제 갱신 공통 골격 — 모드 게이트 → 만료 판정 → _PREEMPT_MS·안전망 → 락 안 double-check
@@ -384,6 +404,18 @@ def ensure_fresh_claude_token(config, conn, *, now, path: Path = CLAUDE_CREDS,
     return _ensure_fresh(config, conn, now=now, path=path, urlopen=urlopen, provider="claude",
                          read_expiry_ms=_claude_expiry_ms, refresh=refresh_claude_token,
                          read_final=_read_claude_token)
+
+
+def ensure_fresh_gemini_token(config, conn, *, now, path: Path = GEMINI_CREDS,
+                              urlopen=urllib.request.urlopen) -> str:
+    """필요 시 Gemini access token을 선제 갱신하고 현재(혹은 갱신된) access_token을 반환(ADR 0021/0022 gemini 확장).
+
+    만료 5분 이내 + 안전망 허용이면 락 안 double-check 후 refresh(Claude str-토큰 경로 미러).
+    만료 판정은 expiry_date(ms) 직접. 갱신 실패해도 기존 토큰으로 진행 → 상위가 401 폴백.
+    """
+    return _ensure_fresh(config, conn, now=now, path=path, urlopen=urlopen, provider="gemini",
+                         read_expiry_ms=_gemini_expiry_ms, refresh=refresh_gemini_token,
+                         read_final=_read_gemini_token)
 
 
 def ensure_fresh_codex_token(config, conn, *, now, path: Path = CODEX_AUTH,
