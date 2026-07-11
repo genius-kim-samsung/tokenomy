@@ -389,8 +389,9 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None, *,
 
     표시 대상 = **활성 AI**(tracked_providers) ∩ **공식 quota 지원**(OFFICIAL_PROVIDERS)뿐. 끈
     provider는 공식 스냅샷·로컬 데이터가 있어도 카드를 띄우지 않는다(데이터는 보존, 표시만
-    숨김 — ADR 0005). 공식 quota 미지원인 로컬 전용 provider(gemini 등)는 공식 스펙 자체가
-    없어 영구히 빈 카드가 되므로 애초에 그리드에서 제외한다. 활성 0개면 빈 리스트.
+    숨김 — ADR 0005). 공식 quota 미지원인 로컬 전용 provider는 공식 스펙 자체가 없어 영구히
+    빈 카드가 되므로 애초에 그리드에서 제외한다(현재 전 provider가 OFFICIAL_PROVIDERS라 실질
+    제외 대상 없음). 활성 0개면 빈 리스트.
     순서는 PROVIDERS 고정(claude→codex→…) 중 OFFICIAL_PROVIDERS만. 새 공식 provider는
     PROVIDERS·OFFICIAL_PROVIDERS·_PROVIDER_STYLE만 늘리면 된다.
     공식 뷰 팬아웃은 outlook(전망 조립 정본)의 중간 산물(views) 재사용 — 조립부가 이미 계산한
@@ -401,7 +402,7 @@ def official_cards(conn, config: dict, now_kst: datetime | None = None, *,
     curation, _ = _curation_for(config)       # 표시용 hidden/label(숫자 팬아웃은 ol.params)
     cards: list[dict] = []
     for p in PROVIDERS:
-        if p not in OFFICIAL_PROVIDERS:       # 공식 quota 미지원(gemini 등)은 공식 그리드에서 제외
+        if p not in OFFICIAL_PROVIDERS:       # 공식 quota 미지원 provider는 공식 그리드에서 제외
             continue
         view = ol.views.get(p)
         if view is None:                      # 비활성 provider — 카드 없음(ADR 0005)
