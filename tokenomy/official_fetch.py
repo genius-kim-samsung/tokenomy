@@ -56,6 +56,7 @@ _GEMINI_REFRESH_URL = "https://oauth2.googleapis.com/token"
 _GEMINI_CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
 _GEMINI_CLIENT_SECRET = "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"
 _GEMINI_UA = "gemini-cli/0.50.0"
+_GEMINI_ENDPOINT = "https://cloudcode-pa.googleapis.com/v1internal"
 _REFRESH_TIMEOUT = 10  # 초(백오프 없음)
 _PREEMPT_MS = 5 * 60 * 1000  # 만료 5분 전이면 선제 갱신
 
@@ -461,6 +462,7 @@ class ProviderSpec:
     refresh: Callable              # (*, now_ms, urlopen) -> str | None
     expiry_ms: Callable            # () -> int | None — 크레덴셜 파일의 만료 시각(ms), 판정 불가면 None
     parse: Callable                # (raw, *, credit_to_usd) -> buckets
+    fetch: Callable                # (spec, headers, *, urlopen) -> (raw_text, http_code). 기본=단발 GET
 
 
 def _claude_headers(config, conn, *, now, urlopen) -> dict:
@@ -477,6 +479,43 @@ def _codex_headers(config, conn, *, now, urlopen) -> dict:
             "ChatGPT-Account-Id": acct, "User-Agent": _CODEX_UA}
 
 
+def _default_get_fetch(spec, headers, *, urlopen) -> tuple[str, int]:
+    """기본 취득 — 단발 GET(Claude/Codex). spec.usage_url로 요청."""
+    return _http_get_text(spec.usage_url, headers, urlopen)
+
+
+def _gemini_headers(config, conn, *, now, urlopen) -> dict:
+    """Gemini 요청 헤더 — ensure_fresh(선제 갱신) 후 Bearer + JSON Content-Type + UA(2-step 공용)."""
+    tok = ensure_fresh_gemini_token(config, conn, now=now, path=GEMINI_CREDS, urlopen=urlopen)
+    return {"Authorization": f"Bearer {tok}",
+            "Content-Type": "application/json", "User-Agent": _GEMINI_UA}
+
+
+def _gemini_fetch(spec, headers, *, urlopen) -> tuple[str, int]:
+    """2-step 취득(ADR 0027 결정 1) — loadCodeAssist(project 발견) → retrieveUserQuota.
+
+    project 조달(ADR 0027 결정 4): GOOGLE_CLOUD_PROJECT env → loadCodeAssist 응답 cloudaicompanionProject.
+    둘 다 없으면 AuthError(안내 유도). loadCodeAssist 응답(project 포함)은 버리고 retrieveUserQuota
+    응답만 (raw_text, code)로 반환한다(파싱·포착 대상). 어느 단계든 HTTPError는 그대로 전파돼
+    fetch_provider의 401 재시도가 처리한다.
+    """
+    env_project = os.environ.get("GOOGLE_CLOUD_PROJECT") or None
+    lca_body: dict = {"metadata": {"ideType": "IDE_UNSPECIFIED",
+                                   "platform": "PLATFORM_UNSPECIFIED", "pluginType": "GEMINI"}}
+    if env_project:
+        lca_body["cloudaicompanionProject"] = env_project
+        lca_body["metadata"]["duetProject"] = env_project
+    lca_text, _ = _http_post_json(f"{_GEMINI_ENDPOINT}:loadCodeAssist", lca_body, headers, urlopen)
+    project = env_project
+    try:
+        project = json.loads(lca_text).get("cloudaicompanionProject") or env_project
+    except (ValueError, TypeError):
+        pass
+    if not project:
+        raise AuthError("gemini project 미확인 — GOOGLE_CLOUD_PROJECT 설정이 필요합니다")
+    return _http_post_json(f"{_GEMINI_ENDPOINT}:retrieveUserQuota", {"project": project}, headers, urlopen)
+
+
 # provider 레지스트리 — 새 AI는 여기 spec 1개 추가(+파서·단가). refresh는 모듈 전역 이름을 경유하는
 # lambda라 테스트의 monkeypatch(of.refresh_claude_token 등)가 반영된다(늦은 바인딩).
 PROVIDER_SPECS: dict[str, ProviderSpec] = {
@@ -487,6 +526,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
             CLAUDE_CREDS, now_ms=now_ms, urlopen=urlopen),
         expiry_ms=lambda: _claude_expiry_ms(CLAUDE_CREDS),
         parse=lambda raw, *, credit_to_usd: parse_claude(raw, credit_to_usd=credit_to_usd),
+        fetch=_default_get_fetch,
     ),
     "codex": ProviderSpec(
         usage_url=CODEX_USAGE_URL,
@@ -495,6 +535,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
             CODEX_AUTH, now_ms=now_ms, urlopen=urlopen),
         expiry_ms=lambda: _codex_expiry_ms(CODEX_AUTH),
         parse=lambda raw, *, credit_to_usd: parse_codex(raw, credit_to_usd=credit_to_usd),
+        fetch=_default_get_fetch,
     ),
 }
 
@@ -515,6 +556,19 @@ def _http_get_text(url: str, headers: dict, urlopen) -> tuple[str, int]:
     본문을 **텍스트로** 돌려줘 호출자가 파싱 전에 raw를 포착할 수 있게 한다(ADR 0014).
     """
     req = urllib.request.Request(url, headers=headers)
+    with urlopen(req, timeout=_TIMEOUT) as resp:
+        text = resp.read().decode("utf-8")
+        code = getattr(resp, "status", None) or getattr(resp, "code", None) or 200
+        return text, code
+
+
+def _http_post_json(url: str, body: dict, headers: dict, urlopen) -> tuple[str, int]:
+    """HTTP POST(JSON body) → (응답 본문 텍스트, 상태코드). 실패 시 예외 전파(호출자가 분류).
+
+    _http_get_text의 POST 짝 — gemini 2-step용. 본문을 텍스트로 돌려줘 raw 포착(ADR 0014)을 잇는다.
+    """
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urlopen(req, timeout=_TIMEOUT) as resp:
         text = resp.read().decode("utf-8")
         code = getattr(resp, "status", None) or getattr(resp, "code", None) or 200
@@ -600,7 +654,7 @@ def fetch_provider(provider: str, *, now_kst, config, conn,
     ts = now_kst.isoformat()
     try:
         headers = spec.headers(config, conn, now=now_kst, urlopen=urlopen)
-        raw_text, http_code = _http_get_text(spec.usage_url, headers, urlopen)
+        raw_text, http_code = spec.fetch(spec, headers, urlopen=urlopen)
     except AuthError as e:
         # 크레덴셜/로컬 문제 — 네트워크 응답 자체가 없어 포착할 raw도 없다
         upsert_fetch_state(conn, provider, last_attempt_at=ts, last_success_at=None,

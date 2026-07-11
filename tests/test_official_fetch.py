@@ -15,9 +15,9 @@ from tokenomy.db import (
     get_official_raw, list_official_raw,
 )
 from tokenomy.official_fetch import (
-    AuthError, FetchResult, _auto_refresh_allowed, _gemini_expiry_ms, _read_claude_token,
-    _read_codex_auth, _read_gemini_token, ensure_fresh_claude_token, fetch_provider,
-    refresh_claude_token, refresh_gemini_token,
+    AuthError, FetchResult, _auto_refresh_allowed, _gemini_expiry_ms, _gemini_fetch,
+    _read_claude_token, _read_codex_auth, _read_gemini_token, ensure_fresh_claude_token,
+    fetch_provider, refresh_claude_token, refresh_gemini_token,
 )
 
 
@@ -1151,3 +1151,33 @@ def test_reactive_401_codex_expired_jwt_bypasses_activity(tmp_path, monkeypatch)
     r = fetch_provider("codex", now_kst=_NOW2, config=cfg, conn=conn, urlopen=_op)
     assert calls["n"] == 2                                  # 만료 JWT → 안전망 우회 → 1회 재시도
     assert r.status in ("ok", "http_error")
+
+
+def test_gemini_fetch_2step_returns_quota(monkeypatch, tmp_path):
+    """loadCodeAssist(project 발견) → retrieveUserQuota. 두 번째 응답(raw_text)만 반환."""
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj-x")
+    calls = []
+    lca = {"cloudaicompanionProject": "proj-x", "currentTier": {"id": "standard-tier"}}
+    quota = {"buckets": [{"resetTime": "2026-06-15T07:00:00Z", "tokenType": "REQUESTS",
+                          "modelId": "gemini-2.5-pro", "remainingFraction": 0.5}]}
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req.full_url)
+        payload = lca if req.full_url.endswith("loadCodeAssist") else quota
+        return _FakeResp(payload)
+
+    # spec은 usage_url만 참조(fetch가 URL을 자체 조립하므로 실제 spec 불필요 — None 전달)
+    text, code = _gemini_fetch(None, {"Authorization": "Bearer t"}, urlopen=fake_urlopen)
+    assert calls[0].endswith(":loadCodeAssist")
+    assert calls[1].endswith(":retrieveUserQuota")
+    assert json.loads(text) == quota      # retrieveUserQuota 응답만 반환(loadCodeAssist 버림)
+    assert code == 200
+
+
+def test_gemini_fetch_no_project_raises(monkeypatch):
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    # loadCodeAssist 응답에도 project 없음 → AuthError
+    def fake_urlopen(req, timeout=None):
+        return _FakeResp({"currentTier": {"id": "free-tier"}})   # cloudaicompanionProject 없음
+    with pytest.raises(AuthError):
+        _gemini_fetch(None, {"Authorization": "Bearer t"}, urlopen=fake_urlopen)
