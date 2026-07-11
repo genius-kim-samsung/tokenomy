@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from tokenomy.official_parser import OfficialBucket, parse_claude, parse_codex
+from tokenomy.official_parser import OfficialBucket, parse_claude, parse_codex, parse_gemini
 
 FIX = Path(__file__).parent / "fixtures" / "official"
 
@@ -128,3 +128,29 @@ def test_no_pii_extracted():
     buckets = parse_codex(_load("codex_enterprise.json"), credit_to_usd=0.04)
     blob = repr(buckets)
     assert "redacted" not in blob       # email/user_id/account_id 미추출
+
+
+def test_gemini_collapses_aliases_to_class_buckets():
+    buckets = parse_gemini(_load("gemini_standard.json"), credit_to_usd=0.04)
+    # 9 alias → 3 quota(Pro/Flash/Flash-Lite)
+    assert len(buckets) == 3
+    labels = [b.label for b in buckets]
+    assert labels == ["Pro", "Flash", "Flash-Lite"]     # util 내림차순
+    for b in buckets:
+        assert b.bucket_kind == "rate_window"
+        assert b.native_unit == "percent"
+        assert b.used_usd is None and b.limit_usd is None and b.remaining_usd is None
+        assert isinstance(b.resets_at, datetime)
+    pro, flash, lite = buckets
+    assert round(pro.utilization, 1) == 70.4          # (1-0.296)*100
+    assert round(flash.utilization, 1) == 31.9
+    assert round(lite.utilization, 1) == 1.7
+    assert {b.raw_key for b in buckets} == {"pro", "flash", "flash-lite"}
+
+
+def test_gemini_empty_or_malformed_buckets():
+    assert parse_gemini({}, credit_to_usd=0.04) == []
+    assert parse_gemini({"buckets": "x"}, credit_to_usd=0.04) == []
+    # remainingFraction 없는 버킷은 skip
+    raw = {"buckets": [{"resetTime": "2026-06-15T07:00:00Z", "modelId": "gemini-2.5-pro"}]}
+    assert parse_gemini(raw, credit_to_usd=0.04) == []

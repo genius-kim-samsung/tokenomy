@@ -1,0 +1,13 @@
+{
+  "buckets": [
+    {"resetTime": "2026-06-15T07:11:58Z", "tokenType": "REQUESTS", "modelId": "gemini-2.5-flash", "remainingFraction": 0.6806667},
+    {"resetTime": "2026-06-15T07:09:50Z", "tokenType": "REQUESTS", "modelId": "gemini-2.5-flash-lite", "remainingFraction": 0.9826667},
+    {"resetTime": "2026-06-15T08:20:41Z", "tokenType": "REQUESTS", "modelId": "gemini-2.5-pro", "remainingFraction": 0.296},
+    {"resetTime": "2026-06-15T07:11:58Z", "tokenType": "REQUESTS", "modelId": "gemini-3-flash", "remainingFraction": 0.6806667},
+    {"resetTime": "2026-06-15T07:11:58Z", "tokenType": "REQUESTS", "modelId": "gemini-3-flash-preview", "remainingFraction": 0.6806667},
+    {"resetTime": "2026-06-15T08:20:41Z", "tokenType": "REQUESTS", "modelId": "gemini-3-pro-preview", "remainingFraction": 0.296},
+    {"resetTime": "2026-06-15T07:09:50Z", "tokenType": "REQUESTS", "modelId": "gemini-3.1-flash-lite", "remainingFraction": 0.9826667},
+    {"resetTime": "2026-06-15T07:09:50Z", "tokenType": "REQUESTS", "modelId": "gemini-3.1-flash-lite-preview", "remainingFraction": 0.9826667},
+    {"resetTime": "2026-06-15T08:20:41Z", "tokenType": "REQUESTS", "modelId": "gemini-3.1-pro-preview", "remainingFraction": 0.296}
+  ]
+}

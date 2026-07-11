@@ -218,3 +218,69 @@ def parse_codex(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
                 resets_at=_parse_unix(val.get("reset_at")),
             ))
     return out
+
+
+# Gemini 모델 클래스 라벨(회전하는 버전/preview 접미사를 지우고 클래스 토큰만 남긴다).
+_GEMINI_CLASS_LABELS = {"flash-lite": "Flash-Lite", "flash": "Flash", "pro": "Pro"}
+
+
+def _gemini_model_class(model_id: str) -> str:
+    """modelId에서 클래스 슬러그 추출 — flash-lite→flash→pro 순(부분일치). 미지는 modelId 그대로.
+
+    버전(2.5/3/3.1)·preview 접미사는 회전하므로 안정적인 클래스 토큰만 남긴다(하드코딩 모델
+    화이트리스트가 아니라 부분일치 — 새 버전이 와도 클래스만 맞으면 접힌다).
+    """
+    m = (model_id or "").lower()
+    if "flash-lite" in m:
+        return "flash-lite"
+    if "flash" in m:
+        return "flash"
+    if "pro" in m:
+        return "pro"
+    return model_id or "unknown"
+
+
+def parse_gemini(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
+    """Gemini retrieveUserQuota 응답 → rate_window 버킷(모델 클래스별, ADR 0027 결정 2·5).
+
+    버킷은 `remainingFraction`(0..1)+`resetTime`+`modelId`뿐(USD/`remainingAmount` 없음).
+    같은 클래스의 모델 alias들이 **동일 quota를 공유**(fraction·resetTime 완전 일치)하므로
+    `(remainingFraction, resetTime)` 동일 버킷을 접어 quota당 게이지 1개만 낸다(9 alias→3).
+    라벨·raw_key=클래스, `native_unit='percent'`, `utilization=(1-frac)*100`, util 내림차순.
+    USD가 없어 풀·월말 전망에서 자동 제외(rate_window kind, ADR 0016·0004). credit_to_usd 미사용
+    (시그니처 통일용). 클래스 raw_key 충돌 시 접미사로 유일화(UNIQUE(provider,fetched_at,bucket_key,raw_key)).
+    """
+    items = raw.get("buckets")
+    if not isinstance(items, list):
+        return []
+    groups: dict = {}   # (frac, resetTime) -> {"frac", "reset", "models": [...]}  (삽입 순 보존)
+    for b in items:
+        if not isinstance(b, dict):
+            continue
+        frac = _to_float(b.get("remainingFraction"))
+        if frac is None:
+            continue
+        reset = b.get("resetTime")
+        key = (frac, reset)
+        g = groups.setdefault(key, {"frac": frac, "reset": reset, "models": []})
+        g["models"].append(b.get("modelId") or "")
+
+    out: list[OfficialBucket] = []
+    used_keys: set = set()
+    for g in groups.values():
+        cls = _gemini_model_class(g["models"][0])
+        raw_key = cls
+        while raw_key in used_keys:                 # 클래스 충돌(미래 quota 분할) 방지
+            raw_key = f"{cls}-{len(used_keys)}"
+        used_keys.add(raw_key)
+        label = _GEMINI_CLASS_LABELS.get(cls, g["models"][0])
+        out.append(OfficialBucket(
+            bucket_key="rate_window", raw_key=raw_key, bucket_kind="rate_window",
+            label=label, native_unit="percent",
+            used_native=None, limit_native=None, remaining_native=None,
+            used_usd=None, limit_usd=None, remaining_usd=None,
+            utilization=round((1.0 - g["frac"]) * 100, 4),
+            resets_at=_parse_iso(g["reset"]),
+        ))
+    out.sort(key=lambda b: b.utilization, reverse=True)   # 실제로 닳는 클래스가 맨 위
+    return out
