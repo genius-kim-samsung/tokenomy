@@ -15,6 +15,10 @@ def test_providers_registered():
     assert set(OFFICIAL_PROVIDERS) <= set(PROVIDERS)
 
 
+def test_gemini_promoted_to_official():
+    assert "gemini" in OFFICIAL_PROVIDERS
+
+
 def test_pool_default_kinds_are_periodic_monthly_limits():
     # 풀 기본값 = 안정 월 한도 키만(회전 코드네임 달러 크레딧은 opt-in 제외).
     assert POOL_DEFAULT_KINDS == ("monthly_limit", "codex_monthly")

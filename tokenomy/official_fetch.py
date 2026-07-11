@@ -34,7 +34,7 @@ from tokenomy.db import (
     get_fetch_state, insert_official_buckets, insert_official_raw, last_provider_activity_ts,
     upsert_fetch_state,
 )
-from tokenomy.official_parser import parse_claude, parse_codex
+from tokenomy.official_parser import parse_claude, parse_codex, parse_gemini
 
 # 공식 사용량 API 엔드포인트
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -537,6 +537,15 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         expiry_ms=lambda: _codex_expiry_ms(CODEX_AUTH),
         parse=lambda raw, *, credit_to_usd: parse_codex(raw, credit_to_usd=credit_to_usd),
         fetch=_default_get_fetch,
+    ),
+    "gemini": ProviderSpec(
+        usage_url=f"{_GEMINI_ENDPOINT}:retrieveUserQuota",   # 명목(fetch가 2-step URL 자체 조립)
+        auth_note="gemini-cli 로그인 또는 GOOGLE_CLOUD_PROJECT 설정이 필요합니다",
+        headers=_gemini_headers,
+        refresh=lambda *, now_ms, urlopen: refresh_gemini_token(GEMINI_CREDS, now_ms=now_ms, urlopen=urlopen),
+        expiry_ms=lambda: _gemini_expiry_ms(GEMINI_CREDS),
+        parse=lambda raw, *, credit_to_usd: parse_gemini(raw, credit_to_usd=credit_to_usd),
+        fetch=_gemini_fetch,
     ),
 }
 

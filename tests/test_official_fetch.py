@@ -203,15 +203,15 @@ def test_provider_specs_cover_all_providers():
 def test_fetch_unknown_provider_is_disabled_fail_loud(monkeypatch):
     """미등록 provider는 tracked에 넣어도 레지스트리 게이트에서 'unknown provider'로 거부.
 
-    tracked/creds 게이트보다 레지스트리 체크가 먼저임을 검증(gemini를 tracked에 넣어도
-    creds_absent가 아니라 unknown provider가 나와야 함). state도 기록하지 않는다."""
+    tracked/creds 게이트보다 레지스트리 체크가 먼저임을 검증. sentinel `nonesuch`는 실재하지 않아
+    새 provider 추가 시에도 이 테스트가 썩지 않는다(과거 gemini를 예시로 써서 rot한 교훈)."""
     monkeypatch.delenv("TOKENOMY_SKIP_OFFICIAL_FETCH", raising=False)
     conn = _memory_conn()
-    cfg = {"tracked_providers": ["gemini"], "credit_to_usd": 0.04}
-    res = fetch_provider("gemini", now_kst=_NOW, config=cfg, conn=conn, urlopen=_never)
+    cfg = {"tracked_providers": ["nonesuch"], "credit_to_usd": 0.04}
+    res = fetch_provider("nonesuch", now_kst=_NOW, config=cfg, conn=conn, urlopen=_never)
     assert res.status == "disabled"
     assert res.note == "unknown provider"
-    assert get_fetch_state(conn, "gemini") is None
+    assert get_fetch_state(conn, "nonesuch") is None
 
 
 def test_fetch_claude_success_stores_buckets(monkeypatch, tmp_path):
