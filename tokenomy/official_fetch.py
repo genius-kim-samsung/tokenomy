@@ -507,10 +507,11 @@ def _gemini_fetch(spec, headers, *, urlopen) -> tuple[str, int]:
         lca_body["metadata"]["duetProject"] = env_project
     lca_text, _ = _http_post_json(f"{_GEMINI_ENDPOINT}:loadCodeAssist", lca_body, headers, urlopen)
     project = env_project
-    try:
-        project = json.loads(lca_text).get("cloudaicompanionProject") or env_project
-    except (ValueError, TypeError):
-        pass
+    if not project:                       # env 우선(ADR 0027 결정 4) — 미설정일 때만 응답에서 조달
+        try:
+            project = json.loads(lca_text).get("cloudaicompanionProject")
+        except (ValueError, TypeError, AttributeError):
+            pass
     if not project:
         raise AuthError("gemini project 미확인 — GOOGLE_CLOUD_PROJECT 설정이 필요합니다")
     return _http_post_json(f"{_GEMINI_ENDPOINT}:retrieveUserQuota", {"project": project}, headers, urlopen)

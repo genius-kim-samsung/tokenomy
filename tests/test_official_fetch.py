@@ -1181,3 +1181,21 @@ def test_gemini_fetch_no_project_raises(monkeypatch):
         return _FakeResp({"currentTier": {"id": "free-tier"}})   # cloudaicompanionProject 없음
     with pytest.raises(AuthError):
         _gemini_fetch(None, {"Authorization": "Bearer t"}, urlopen=fake_urlopen)
+
+
+def test_gemini_fetch_env_project_wins_over_response(monkeypatch):
+    """env 우선(ADR 0027 결정 4) — env와 loadCodeAssist 응답 project가 다르면 env가 이긴다."""
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "env-proj")
+    seen = {}
+    lca = {"cloudaicompanionProject": "resp-proj", "currentTier": {"id": "standard-tier"}}
+    quota = {"buckets": [{"resetTime": "2026-06-15T07:00:00Z", "tokenType": "REQUESTS",
+                          "modelId": "gemini-2.5-pro", "remainingFraction": 0.5}]}
+
+    def fake_urlopen(req, timeout=None):
+        if req.full_url.endswith("retrieveUserQuota"):
+            seen["quota_body"] = req.data.decode("utf-8")
+            return _FakeResp(quota)
+        return _FakeResp(lca)
+
+    _gemini_fetch(None, {"Authorization": "Bearer t"}, urlopen=fake_urlopen)
+    assert '"project": "env-proj"' in seen["quota_body"]      # 응답의 resp-proj가 아니라 env가 이김
