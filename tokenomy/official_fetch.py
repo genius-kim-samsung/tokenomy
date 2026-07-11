@@ -14,6 +14,7 @@ import json
 import os
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,7 +23,7 @@ from typing import Callable
 
 from tokenomy import paths
 from tokenomy.atomicio import atomic_write_json
-from tokenomy.paths import CLAUDE_CREDS, CODEX_AUTH
+from tokenomy.paths import CLAUDE_CREDS, CODEX_AUTH, GEMINI_CREDS
 from tokenomy.clock import parse_ts
 from tokenomy.official_aggregate import official_view
 from tokenomy.config import (
@@ -50,6 +51,11 @@ _CLAUDE_REFRESH_URL = "https://api.anthropic.com/v1/oauth/token"
 _CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _CODEX_REFRESH_URL = "https://auth.openai.com/oauth/token"
 _CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+_GEMINI_REFRESH_URL = "https://oauth2.googleapis.com/token"
+# gemini-cli installed-app 공개 client(소스에 공개 — 조사 Q4). Google refresh_token은 비회전·장수명.
+_GEMINI_CLIENT_ID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
+_GEMINI_CLIENT_SECRET = "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"
+_GEMINI_UA = "gemini-cli/0.50.0"
 _REFRESH_TIMEOUT = 10  # 초(백오프 없음)
 _PREEMPT_MS = 5 * 60 * 1000  # 만료 5분 전이면 선제 갱신
 
@@ -142,9 +148,19 @@ def _iso_z(now_ms: int) -> str:
         "%Y-%m-%dT%H:%M:%S.000000000Z")
 
 
+def _json_body(payload: dict) -> bytes:
+    """기본 refresh body 인코더 — JSON(Claude/Codex, 기존 동작 그대로)."""
+    return json.dumps(payload).encode("utf-8")
+
+
+def _form_body(payload: dict) -> bytes:
+    """form-urlencoded refresh body 인코더 — Google OAuth 토큰 엔드포인트(gemini)."""
+    return urllib.parse.urlencode(payload).encode("utf-8")
+
+
 def _refresh_oauth(path: Path, *, now_ms: int, urlopen, read_refresh_token: Callable,
                    apply_response: Callable, refresh_url: str, client_id: str,
-                   headers: dict, body_extra: dict) -> str | None:
+                   headers: dict, body_extra: dict, body_encoder: Callable = _json_body) -> str | None:
     """OAuth refresh 공통 엔진 — refresh token으로 새 access token을 받아 atomic write-back(ADR 0021/0022).
 
     골격: 파일 읽기 → refresh_token 추출·가드 → POST(json body, _REFRESH_TIMEOUT) → access_token
@@ -161,8 +177,8 @@ def _refresh_oauth(path: Path, *, now_ms: int, urlopen, read_refresh_token: Call
     if not rt:
         return None
 
-    body = json.dumps({"grant_type": "refresh_token", "refresh_token": rt,
-                       "client_id": client_id, **body_extra}).encode("utf-8")
+    body = body_encoder({"grant_type": "refresh_token", "refresh_token": rt,
+                         "client_id": client_id, **body_extra})
     req = urllib.request.Request(refresh_url, data=body, headers=headers, method="POST")
     try:
         with urlopen(req, timeout=_REFRESH_TIMEOUT) as resp:
@@ -255,6 +271,39 @@ def refresh_codex_token(path: Path = CODEX_AUTH, *, now_ms: int,
         headers={"Content-Type": "application/json", "Accept": "application/json",
                  "User-Agent": _CODEX_UA},
         body_extra={"scope": "openid profile email"})
+
+
+def _gemini_read_refresh_token(data) -> str | None:
+    """Gemini creds에서 refresh token 추출(oauth_creds.json top-level refresh_token)."""
+    return data.get("refresh_token")
+
+
+def _gemini_apply_response(data, resp, now_ms: int) -> None:
+    """Gemini refresh 응답 반영 — access_token·expiry_date 갱신, refresh_token은 오면 기록(비회전이라 보통 불변)."""
+    data["access_token"] = resp["access_token"]
+    nrt = resp.get("refresh_token")
+    if nrt:
+        data["refresh_token"] = nrt
+    exp_in = resp.get("expires_in")
+    if exp_in:
+        data["expiry_date"] = now_ms + int(exp_in) * 1000    # ms epoch(Claude expiresAt과 동형)
+
+
+def refresh_gemini_token(path: Path = GEMINI_CREDS, *, now_ms: int,
+                         urlopen=urllib.request.urlopen) -> str | None:
+    """refresh token으로 새 access token을 받아 oauth_creds.json에 atomic write-back(ADR 0021/0022 gemini 확장).
+
+    Google 토큰 엔드포인트는 **form-urlencoded + client_secret**이라 body_encoder=_form_body로 위임한다.
+    성공 시 새 access_token 반환, 실패(파일/네트워크/스키마)나 refresh_token 부재는 None + 원본 불변.
+    Google refresh_token은 비회전·장수명이라 write-back 부담이 Codex(회전)보다 작다.
+    """
+    return _refresh_oauth(
+        path, now_ms=now_ms, urlopen=urlopen,
+        read_refresh_token=_gemini_read_refresh_token, apply_response=_gemini_apply_response,
+        refresh_url=_GEMINI_REFRESH_URL, client_id=_GEMINI_CLIENT_ID,
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+        body_extra={"client_secret": _GEMINI_CLIENT_SECRET},
+        body_encoder=_form_body)
 
 
 def _auto_refresh_allowed(config, conn, now, mode: str, provider: str = "claude",

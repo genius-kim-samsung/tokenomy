@@ -16,7 +16,7 @@ from tokenomy.db import (
 )
 from tokenomy.official_fetch import (
     AuthError, FetchResult, _auto_refresh_allowed, _read_claude_token, _read_codex_auth,
-    ensure_fresh_claude_token, fetch_provider, refresh_claude_token,
+    ensure_fresh_claude_token, fetch_provider, refresh_claude_token, refresh_gemini_token,
 )
 
 
@@ -988,6 +988,53 @@ def test_refresh_codex_missing_refresh_token_is_noop(tmp_path):
                              "tokens": {"access_token": "a", "account_id": "x"}}),
                  encoding="utf-8")
     assert refresh_codex_token(p, now_ms=1, urlopen=_never) is None
+
+
+class _CaptureResp:
+    """refresh 응답 stub — 요청 body를 캡처해 form-encoding을 검증한다."""
+    def __init__(self, payload, captured):
+        self._b = json.dumps(payload).encode("utf-8")
+        self._captured = captured
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self): return self._b
+
+
+def test_refresh_gemini_form_encoded_and_writeback(tmp_path):
+    p = tmp_path / "oauth_creds.json"
+    p.write_text(json.dumps({
+        "access_token": "old-at", "refresh_token": "rt-1",
+        "token_type": "Bearer", "expiry_date": 1000,
+    }), encoding="utf-8")
+
+    seen = {}
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["body"] = req.data.decode("utf-8")
+        seen["ctype"] = req.headers.get("Content-type")
+        return _CaptureResp({"access_token": "new-at", "expires_in": 3600}, seen)
+
+    at = refresh_gemini_token(p, now_ms=5000, urlopen=fake_urlopen)
+    assert at == "new-at"
+    # Google 토큰 엔드포인트 + form-encoding + client_secret
+    assert seen["url"] == "https://oauth2.googleapis.com/token"
+    assert "application/x-www-form-urlencoded" in seen["ctype"]
+    assert "grant_type=refresh_token" in seen["body"]
+    assert "client_secret=" in seen["body"]
+    assert "refresh_token=rt-1" in seen["body"]
+    # write-back: 새 access_token + expiry_date(ms) 갱신, 나머지 보존
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["access_token"] == "new-at"
+    assert data["expiry_date"] == 5000 + 3600 * 1000
+    assert data["refresh_token"] == "rt-1"
+
+
+def test_refresh_gemini_missing_refresh_token_noop(tmp_path):
+    p = tmp_path / "oauth_creds.json"
+    p.write_text(json.dumps({"access_token": "x", "expiry_date": 1}), encoding="utf-8")
+    assert refresh_gemini_token(p, now_ms=1, urlopen=lambda *a, **k: None) is None
+    # 원본 불변
+    assert json.loads(p.read_text(encoding="utf-8")) == {"access_token": "x", "expiry_date": 1}
 
 
 def test_auto_refresh_allowed_codex_gates_on_codex_activity():
