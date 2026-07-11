@@ -509,19 +509,40 @@ def test_trend_includes_gemini_when_active_with_data(tmp_path, monkeypatch):
     assert "#4285f4" in colors
 
 
-def test_official_cards_excludes_gemini(tmp_path, monkeypatch):
-    """gemini는 공식 quota 미지원(OFFICIAL_PROVIDERS 밖)이라 활성이어도 공식 카드가 없다.
+def test_official_cards_includes_gemini(tmp_path, monkeypatch):
+    """gemini는 공식 quota 편입(B, ADR 0027) 후 활성이면 공식 카드로 뜬다 — utilization 게이지.
 
-    Fix 2 회귀 가드: claude는 대조군으로 카드가 생성됨을 함께 확인해 게이트가
-    OFFICIAL_PROVIDERS만 걸러내고 다른 활성 provider는 건드리지 않음을 검증한다.
-    """
+    A가 남긴 official_cards 게이트(OFFICIAL_PROVIDERS∩활성)가 승격만으로 gemini를 렌더한다.
+    (과거 test_official_cards_excludes_gemini의 전제 반전 — 로컬 전용 → 공식 편입.)"""
+    monkeypatch.setenv("TOKENOMY_SKIP_OFFICIAL_FETCH", "1")
+    monkeypatch.setenv("TOKENOMY_SKIP_UPDATE_CHECK", "1")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text('{"tracked_providers": ["gemini"]}', encoding="utf-8")
+    monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))
+
+    conn = connect(str(tmp_path / "t.db"))
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=KST)
+    # gemini 공식 스냅샷 시드(파서 출력 모양 = rate_window percent 버킷)
+    from tokenomy.official_parser import parse_gemini
+    import json as _json
+    raw = _json.loads((Path(__file__).parent / "fixtures" / "official" / "gemini_standard.json")
+                      .read_text(encoding="utf-8"))
+    # resetTime을 now 이후로 밀어 만료 숨김을 피한다(rolling window).
+    for b in raw["buckets"]:
+        b["resetTime"] = "2026-06-20T18:00:00Z"
+    buckets = parse_gemini(raw, credit_to_usd=0.04)
+    insert_official_buckets(conn, provider="gemini", fetched_at=now.isoformat(),
+                            buckets=buckets, created_at=now.isoformat())
+
+    from tokenomy.config import load_config
     from tokenomy.web.views import official_cards
-    config = {"tracked_providers": ["claude", "gemini"]}
-    conn = connect(":memory:")
-    cards = official_cards(conn, config, now_kst=datetime(2026, 6, 10, 12, tzinfo=KST))
-    providers = {c["provider"] for c in cards}
-    assert "gemini" not in providers
-    assert "claude" in providers
+    cards = official_cards(conn, load_config(), now)
+    providers = [c["provider"] for c in cards]
+    assert "gemini" in providers
+    gemini_card = next(c for c in cards if c["provider"] == "gemini")
+    assert gemini_card["status"] == "ok"
+    assert len(gemini_card["gauges"]) == 3            # Pro/Flash/Flash-Lite
+    assert gemini_card["glance"] is None              # USD 풀 없음 → 글랜스 숨김
 
 
 def test_overview_context_includes_forecast(tmp_path, monkeypatch):
