@@ -253,7 +253,7 @@ def parse_gemini(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
     items = raw.get("buckets")
     if not isinstance(items, list):
         return []
-    groups: dict = {}   # (frac, resetTime) -> {"frac", "reset", "models": [...]}  (삽입 순 보존)
+    groups: dict = {}   # (cls, frac, resetTime) -> {"frac", "reset", "cls", "models": [...]}  (삽입 순 보존)
     for b in items:
         if not isinstance(b, dict):
             continue
@@ -261,14 +261,17 @@ def parse_gemini(raw: dict, *, credit_to_usd: float) -> list[OfficialBucket]:
         if frac is None:
             continue
         reset = b.get("resetTime")
-        key = (frac, reset)
-        g = groups.setdefault(key, {"frac": frac, "reset": reset, "models": []})
+        cls = _gemini_model_class(b.get("modelId") or "")
+        # 클래스를 키에 포함 — frac·reset만으로 묶으면 서로 다른 클래스가 우연히 같은 값(신규
+        # 계정 전 클래스 100%+공유 reset)일 때 한 게이지로 합쳐진다. 같은 클래스 내 alias 접기는 유지.
+        key = (cls, frac, reset)
+        g = groups.setdefault(key, {"frac": frac, "reset": reset, "cls": cls, "models": []})
         g["models"].append(b.get("modelId") or "")
 
     out: list[OfficialBucket] = []
     used_keys: set = set()
     for g in groups.values():
-        cls = _gemini_model_class(g["models"][0])
+        cls = g["cls"]
         raw_key = cls
         while raw_key in used_keys:                 # 클래스 충돌(미래 quota 분할) 방지
             raw_key = f"{cls}-{len(used_keys)}"

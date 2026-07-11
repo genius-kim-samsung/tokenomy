@@ -148,6 +148,20 @@ def test_gemini_collapses_aliases_to_class_buckets():
     assert {b.raw_key for b in buckets} == {"pro", "flash", "flash-lite"}
 
 
+def test_gemini_distinct_classes_not_merged_on_equal_fraction():
+    """다른 모델 클래스가 우연히 같은 remainingFraction·resetTime이어도 합쳐지지 않는다(신규 계정 전 클래스 100% 등)."""
+    raw = {"buckets": [
+        {"resetTime": "2026-06-15T07:00:00Z", "tokenType": "REQUESTS", "modelId": "gemini-2.5-pro", "remainingFraction": 1.0},
+        {"resetTime": "2026-06-15T07:00:00Z", "tokenType": "REQUESTS", "modelId": "gemini-2.5-flash", "remainingFraction": 1.0},
+        {"resetTime": "2026-06-15T07:00:00Z", "tokenType": "REQUESTS", "modelId": "gemini-2.5-flash-lite", "remainingFraction": 1.0},
+    ]}
+    buckets = parse_gemini(raw, credit_to_usd=0.04)
+    assert len(buckets) == 3                                  # 클래스별 개별 게이지 유지(합쳐짐 아님)
+    assert {b.raw_key for b in buckets} == {"pro", "flash", "flash-lite"}
+    for b in buckets:
+        assert b.utilization == 0.0                          # (1-1.0)*100
+
+
 def test_gemini_empty_or_malformed_buckets():
     assert parse_gemini({}, credit_to_usd=0.04) == []
     assert parse_gemini({"buckets": "x"}, credit_to_usd=0.04) == []
