@@ -1,9 +1,13 @@
-"""Gemini CLI 세션 로그(.json) 파서 — 플러그인.
+"""Gemini CLI 세션 로그 파서 — 플러그인. 두 저장 포맷을 모두 지원한다.
 
-Gemini CLI는 완료된 세션을 단일 JSON 문서로 저장한다(Claude/Codex와 또 다르다):
-- 위치: ~/.gemini/tmp/<프로젝트>/chats/session-<ts>-<id>.json (세션당 1파일)
-- 최상위: {sessionId, projectHash, startTime, lastUpdated, messages[], kind}
-- messages[]: 각 {id(uuid), timestamp, type("user"|"gemini"), content, ...}.
+Gemini CLI는 세션당 1파일을 ~/.gemini/tmp/<프로젝트>/chats/session-<ts>-<id>.* 에 쓴다.
+버전에 따라 포맷이 갈린다(gemini-cli가 봄~여름 2026에 `.json` → `.jsonl`로 전환):
+- 옛 `.json`: 단일 JSON 문서 {sessionId, projectHash, startTime, lastUpdated, messages[], kind}.
+- 새 `.jsonl`(v0.50~): **append-only 뮤테이션 로그**. 줄마다 레코드 — 메시지(id 보유)·
+  `$rewindTo`(되감기)·`$set`(메타/messages 치환)·헤더(sessionId+projectHash). _collect_jsonl_messages가
+  **소비 이벤트**를 id별 union(last-wins)한다 — gemini-cli 대화 재구성과 달리 되감기·교체된 턴도
+  이미 소비된 토큰이라 계상에서 빼지 않는다(claude/codex 원장 불변식과 동일, ADR 0028).
+공통: messages[]의 각 {id(uuid), timestamp, type("user"|"gemini"), content, ...}에서
   gemini 타입 메시지에만 tokens{input,output,cached,thoughts,tool,total}·model이 붙는다.
 - 토큰은 메시지별(누적 아님) — gemini 메시지마다 UsageRecord 1개로 정규화.
 - 폴더 귀속: ~/.gemini/tmp/<프로젝트>/.project_root 에 실제 절대경로.
@@ -55,10 +59,15 @@ def _extract_first_prompt(messages: list, limit: int = 120) -> str | None:
 def _project_root(session_path: Path) -> str | None:
     """세션 파일의 프로젝트 실제 경로 — tmp/<프로젝트>/.project_root 파일을 읽는다.
 
-    session_path = tmp/<프로젝트>/chats/session-*.json → 조부모가 <프로젝트> 디렉터리.
+    <프로젝트> = `chats` 디렉터리의 부모다. 최상위 세션(`chats/session-*.*`)과
+    subagent 중첩 세션(`chats/<parentSessionId>/*.jsonl`)의 깊이가 달라, 경로에서
+    `chats` 조상을 찾아 그 부모를 프로젝트로 잡는다(중첩 파일이 "chats"로 오귀속되지 않게).
     .project_root가 없으면(구 세션·해시 디렉터리) 디렉터리명으로 폴백.
     """
-    project_dir = session_path.parent.parent
+    project_dir = next(
+        (p.parent for p in session_path.parents if p.name == "chats"),
+        session_path.parent.parent,  # 방어적 폴백(chats 조상이 없으면 조부모)
+    )
     marker = project_dir / ".project_root"
     try:
         root = marker.read_text(encoding="utf-8").strip()
@@ -69,20 +78,59 @@ def _project_root(session_path: Path) -> str | None:
     return project_dir.name
 
 
-def parse_session_file(path: str) -> list[UsageRecord]:
-    """세션 .json 1개 → gemini 메시지별 UsageRecord 리스트. 손상/토큰없음이면 []."""
-    try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    if not isinstance(doc, dict):
-        return []
-    messages = doc.get("messages")
-    if not isinstance(messages, list):
-        return []
+def _collect_jsonl_messages(path: Path) -> tuple[list, str | None]:
+    """.jsonl 뮤테이션 로그에서 **소비 이벤트**(메시지)를 id 기준 union한다(last-wins).
 
-    session_id = doc.get("sessionId") or Path(path).stem
-    cwd = _project_root(Path(path))
+    tokenomy는 대화 상태가 아니라 토큰 소비를 추적한다 — 그래서 gemini-cli의
+    대화 재구성(loadConversationRecord)과 달리, 되감기·교체로 대화에서 사라진 턴도
+    **API는 이미 호출·소비됐으므로 계상에서 빼지 않는다**(claude/codex 원장과 동일
+    불변식: 메시지=소비 이벤트, dedup으로 1회, 삭제 없음 — ADR 0028). 규칙(줄 순서):
+      - `id`(문자열) 보유 → 메시지 union(last-wins: 같은 id 재기록 시 최신 토큰값 채택).
+      - `$set`(객체) → `$set.messages`의 각 메시지를 **clear 없이** union, sessionId 병합.
+      - 헤더(`sessionId`+`projectHash`) → sessionId 채택(messages 동반 시 union).
+      - `$rewindTo` → 무시(되감아도 소비 이벤트는 유지).
+    손상 라인·비dict는 건너뛴다(append-only라 마지막 줄이 잘려 있을 수 있음).
+    id별 last-wins라 수집 타이밍과 무관하게 결과가 결정적(전체 재파싱·dedup 멱등).
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return [], None
+    messages: dict[str, dict] = {}  # id → 메시지(union, last-wins, 삭제 없음)
+    session_id: str | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if isinstance(rec.get("id"), str):
+            messages[rec["id"]] = rec
+        elif isinstance(rec.get("$set"), dict):
+            s = rec["$set"]
+            msgs = s.get("messages")
+            if isinstance(msgs, list):
+                for m in msgs:
+                    if isinstance(m, dict) and isinstance(m.get("id"), str):
+                        messages[m["id"]] = m
+            if isinstance(s.get("sessionId"), str):
+                session_id = s["sessionId"]
+        elif isinstance(rec.get("sessionId"), str) and isinstance(rec.get("projectHash"), str):
+            session_id = rec["sessionId"]
+            msgs = rec.get("messages")
+            if isinstance(msgs, list):
+                for m in msgs:
+                    if isinstance(m, dict) and isinstance(m.get("id"), str):
+                        messages[m["id"]] = m
+    return list(messages.values()), session_id
+
+
+def _records_from_messages(messages: list, session_id: str, cwd: str | None) -> list[UsageRecord]:
+    """재구성된 messages[]를 gemini 메시지별 UsageRecord로 정규화(.json/.jsonl 공용)."""
     summary = _extract_first_prompt(messages)
 
     turns_by_day: dict[str, int] = {}
@@ -124,12 +172,43 @@ def parse_session_file(path: str) -> list[UsageRecord]:
     return records
 
 
+def parse_session_file(path: str) -> list[UsageRecord]:
+    """세션 파일 1개 → gemini 메시지별 UsageRecord 리스트. 손상/토큰없음이면 [].
+
+    옛 `.json`(단일 문서 {messages:[…]})과 새 `.jsonl`(append-only 뮤테이션 로그)을
+    모두 지원한다 — 후자는 _collect_jsonl_messages로 소비 이벤트를 모은 뒤 공용 경로로 흘린다.
+    """
+    p = Path(path)
+    if p.suffix == ".jsonl":
+        messages, sid = _collect_jsonl_messages(p)
+        session_id = sid or p.stem
+    else:
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        if not isinstance(doc, dict):
+            return []
+        messages = doc.get("messages")
+        if not isinstance(messages, list):
+            return []
+        session_id = doc.get("sessionId") or p.stem
+
+    return _records_from_messages(messages, session_id, _project_root(p))
+
+
 def discover_sessions(root: str | Path = GEMINI_ROOT) -> list[Path]:
-    """root 아래 완료 세션 .json 나열(정렬). 라이브 .jsonl은 제외."""
+    """root 아래 세션 파일 나열(정렬). 옛 `.json`과 새 `.jsonl`(v0.50~) 둘 다.
+
+    - `*/chats/*.json` — 옛 최상위 세션.
+    - `*/chats/**/*.jsonl` — 새 최상위 세션 + subagent 중첩(`chats/<parentSessionId>/*.jsonl`).
+      `**`는 0개 이상 하위 디렉터리를 매치하므로 최상위와 중첩을 한 패턴이 함께 잡는다.
+    glob `*.json`은 `.jsonl`을 매치하지 않으므로 둘을 각각 모아 합친다(중복 없음).
+    """
     root = Path(root).expanduser()
     if not root.exists():
         return []
-    return sorted(root.glob("*/chats/*.json"))
+    return sorted([*root.glob("*/chats/*.json"), *root.glob("*/chats/**/*.jsonl")])
 
 
 def ingest_gemini(conn, root: str | Path = GEMINI_ROOT, pricing: dict | None = None) -> int:

@@ -202,12 +202,162 @@ def test_ingest_gemini_idempotent_and_aggregated(tmp_path):
     assert "c:\\projects\\myproj" in projects
 
 
-def test_discover_ignores_jsonl(tmp_path):
+def test_discover_includes_both_json_and_jsonl(tmp_path):
+    # 새 gemini-cli는 .jsonl로 저장한다 — 둘 다 발견해야 한다(옛 .json + 새 .jsonl).
     proj = tmp_path / "p"
     (proj / "chats").mkdir(parents=True)
-    (proj / "chats" / "live.jsonl").write_text("{}", encoding="utf-8")
+    (proj / "chats" / "new.jsonl").write_text("{}", encoding="utf-8")
     (proj / "chats" / "done.json").write_text(
         json.dumps({"sessionId": "s", "messages": []}), encoding="utf-8")
     from tokenomy.gemini_parser import discover_sessions
-    found = [p.name for p in discover_sessions(tmp_path)]
-    assert found == ["done.json"]  # .jsonl 제외
+    found = {p.name for p in discover_sessions(tmp_path)}
+    assert found == {"done.json", "new.jsonl"}
+
+
+def test_discover_includes_nested_subagent_jsonl(tmp_path):
+    # subagent 세션은 chats/<parentSessionId>/<sub>.jsonl 로 한 단계 더 중첩된다.
+    proj = tmp_path / "p"
+    (proj / "chats" / "parent-sess").mkdir(parents=True)
+    (proj / "chats" / "main.jsonl").write_text("{}", encoding="utf-8")
+    (proj / "chats" / "parent-sess" / "sub.jsonl").write_text("{}", encoding="utf-8")
+    from tokenomy.gemini_parser import discover_sessions
+    found = {p.name for p in discover_sessions(tmp_path)}
+    assert found == {"main.jsonl", "sub.jsonl"}
+
+
+def test_nested_subagent_records_attributed_to_project(tmp_path):
+    # 중첩 subagent 파일도 cwd가 "chats"가 아니라 실제 프로젝트여야 한다(.project_root).
+    proj = tmp_path / "p"
+    (proj / "chats" / "parent-sess").mkdir(parents=True)
+    (proj / ".project_root").write_text("c:\\projects\\real", encoding="utf-8")
+    f = proj / "chats" / "parent-sess" / "sub.jsonl"
+    f.write_text("\n".join(json.dumps(r) for r in [
+        {"sessionId": "sub", "projectHash": "h", "kind": "subagent"},
+        _gemini_msg("g1", {"input": 100, "output": 5, "cached": 0, "thoughts": 0, "tool": 0, "total": 105}),
+    ]), encoding="utf-8")
+    recs = parse_session_file(str(f))
+    assert len(recs) == 1
+    assert recs[0].cwd == "c:\\projects\\real"
+
+
+# ─── 새 gemini-cli(.jsonl) 뮤테이션-로그 포맷 ──────────────────────────────
+# gemini-cli v0.50은 chats/session-*.jsonl로 append-only 이벤트 로그를 쓴다:
+# 줄=메시지 레코드(id 보유)·$rewindTo(되감기)·$set(메타/messages 치환)·헤더.
+# loadConversationRecord 규칙대로 replay해 최종 messages[]를 재구성한다.
+
+def _write_jsonl_session(tmp_path, records, with_root=True,
+                         name="session-2026-06-11T12-00-abc.jsonl",
+                         session_id="sess-jl", project="jlproj"):
+    """tmp/<proj>/chats/<name>.jsonl에 헤더 + 주어진 레코드들을 한 줄씩 쓴다."""
+    proj = tmp_path / project
+    (proj / "chats").mkdir(parents=True, exist_ok=True)
+    if with_root:
+        (proj / ".project_root").write_text("c:\\projects\\jlproj", encoding="utf-8")
+    header = {"sessionId": session_id, "projectHash": "deadbeef",
+              "startTime": "2026-06-11T12:00:00.000Z",
+              "lastUpdated": "2026-06-11T12:05:00.000Z", "kind": "main"}
+    lines = [header, *records]
+    f = proj / "chats" / name
+    f.write_text("\n".join(json.dumps(r) for r in lines), encoding="utf-8")
+    return f
+
+
+def test_jsonl_message_records_parsed(tmp_path):
+    f = _write_jsonl_session(tmp_path, [
+        _user_msg("u1", "첫 질문"),
+        _gemini_msg("g1", {"input": 1000, "output": 50, "cached": 200,
+                           "thoughts": 10, "tool": 0, "total": 1060}),
+    ])
+    recs = parse_session_file(str(f))
+    assert len(recs) == 1
+    r = recs[0]
+    assert r.provider == "gemini"
+    assert r.session_id == "sess-jl"
+    assert r.model == "gemini-3.1-pro-preview"
+    assert r.input_tokens == 800      # fresh = input - cached
+    assert r.cache_read == 200
+    assert r.output_tokens == 60      # output + thoughts
+    assert r.cache_creation == 0
+    assert r.message_id == "g1"
+    assert r.total_tokens == 1060
+    assert r.cwd == "c:\\projects\\jlproj"
+    assert r.summary == "첫 질문"
+
+
+def test_jsonl_set_messages_full_replace(tmp_path):
+    # $set.messages는 전체 배열을 치환한다(sandbox 실측 포맷).
+    f = _write_jsonl_session(tmp_path, [
+        {"$set": {"messages": [
+            _user_msg("u1", "q"),
+            _gemini_msg("g1", {"input": 300, "output": 20, "cached": 0,
+                               "thoughts": 0, "tool": 0, "total": 320}),
+        ], "lastUpdated": "2026-06-11T12:05:00.000Z"}},
+    ])
+    recs = parse_session_file(str(f))
+    assert [r.message_id for r in recs] == ["g1"]
+    assert recs[0].input_tokens == 300
+
+
+def test_jsonl_rewound_turns_still_counted(tmp_path):
+    # 되감기($rewindTo)는 대화 상태 편집일 뿐 — 소비된 토큰은 이미 API가 썼으므로
+    # 계상에서 빼지 않는다(ADR 0028: 메시지=소비 이벤트, 삭제 없음).
+    f = _write_jsonl_session(tmp_path, [
+        _gemini_msg("g1", {"input": 100, "output": 5, "cached": 0, "thoughts": 0, "tool": 0, "total": 105}),
+        _gemini_msg("g2", {"input": 200, "output": 8, "cached": 0, "thoughts": 0, "tool": 0, "total": 208}),
+        {"$rewindTo": "g2"},           # g2를 되감아도
+    ])
+    assert [r.message_id for r in parse_session_file(str(f))] == ["g1", "g2"]
+
+
+def test_jsonl_result_independent_of_ingest_timing(tmp_path):
+    # 같은 세션이 (되감기 전 수집)과 (되감기 후 전체 수집)에서 동일 계상 — 타이밍 무관.
+    before = _write_jsonl_session(tmp_path, [
+        _gemini_msg("g1", {"input": 100, "output": 5, "cached": 0, "thoughts": 0, "tool": 0, "total": 105}),
+    ], name="a.jsonl", project="p_before")
+    after = _write_jsonl_session(tmp_path, [
+        _gemini_msg("g1", {"input": 100, "output": 5, "cached": 0, "thoughts": 0, "tool": 0, "total": 105}),
+        {"$rewindTo": "g1"},
+    ], name="b.jsonl", project="p_after")
+    assert [r.message_id for r in parse_session_file(str(before))] == ["g1"]
+    assert [r.message_id for r in parse_session_file(str(after))] == ["g1"]
+
+
+def test_jsonl_message_upsert_by_id_last_wins(tmp_path):
+    # 같은 id를 두 번 기록(먼저 토큰 없음 → 나중 토큰 포함) → 마지막이 이긴다.
+    f = _write_jsonl_session(tmp_path, [
+        {"id": "g1", "timestamp": "2026-06-11T12:01:00.000Z", "type": "gemini", "content": ""},
+        _gemini_msg("g1", {"input": 400, "output": 10, "cached": 50, "thoughts": 0, "tool": 0, "total": 410}),
+    ])
+    recs = parse_session_file(str(f))
+    assert len(recs) == 1
+    assert recs[0].input_tokens == 350  # 400 - 50
+
+
+def test_jsonl_skips_corrupt_lines(tmp_path):
+    # append-only라 마지막 줄이 잘릴 수 있다 — 손상 라인은 건너뛰고 나머지는 파싱.
+    proj = tmp_path / "p"
+    (proj / "chats").mkdir(parents=True)
+    f = proj / "chats" / "session-bad.jsonl"
+    f.write_text("\n".join([
+        json.dumps({"sessionId": "s", "projectHash": "h", "kind": "main"}),
+        "{not json",
+        json.dumps(_gemini_msg("g1", {"input": 100, "output": 5, "cached": 0,
+                                      "thoughts": 0, "tool": 0, "total": 105})),
+    ]), encoding="utf-8")
+    assert [r.message_id for r in parse_session_file(str(f))] == ["g1"]
+
+
+def test_ingest_gemini_jsonl_end_to_end(tmp_path):
+    _write_jsonl_session(tmp_path, [
+        _user_msg("u1", "q"),
+        _gemini_msg("g1", {"input": 1000, "output": 50, "cached": 200,
+                           "thoughts": 10, "tool": 0, "total": 1060}),
+    ], name="session-jl.jsonl")
+    conn = connect(":memory:")
+    assert ingest_gemini(conn, root=tmp_path) == 1
+    assert conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"] == 1
+    # 재수집 멱등(gemini:<id> dedup)
+    ingest_gemini(conn, root=tmp_path)
+    assert conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"] == 1
+    projects = {p.project for p in by_project(conn, "gemini", datetime(2026, 6, 15, tzinfo=KST))}
+    assert "c:\\projects\\jlproj" in projects
