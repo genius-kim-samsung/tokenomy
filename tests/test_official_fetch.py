@@ -15,9 +15,9 @@ from tokenomy.db import (
     get_official_raw, list_official_raw,
 )
 from tokenomy.official_fetch import (
-    AuthError, FetchResult, _auto_refresh_allowed, _gemini_expiry_ms, _gemini_fetch,
-    _read_claude_token, _read_codex_auth, _read_gemini_token, ensure_fresh_claude_token,
-    fetch_provider, refresh_claude_token, refresh_gemini_token,
+    AuthError, FetchResult, PROVIDER_SPECS, _auto_refresh_allowed, _gemini_expiry_ms,
+    _gemini_fetch, _read_claude_token, _read_codex_auth, _read_gemini_token,
+    ensure_fresh_claude_token, fetch_provider, refresh_claude_token, refresh_gemini_token,
 )
 
 
@@ -1181,6 +1181,31 @@ def test_gemini_fetch_no_project_raises(monkeypatch):
         return _FakeResp({"currentTier": {"id": "free-tier"}})   # cloudaicompanionProject 없음
     with pytest.raises(AuthError):
         _gemini_fetch(None, {"Authorization": "Bearer t"}, urlopen=fake_urlopen)
+
+
+def test_gemini_no_project_error_hints_gui_env_gotcha(monkeypatch):
+    """project 미확인 에러는 'GUI 실행이 셸 env를 못 읽는' 함정과 해결 위치를 안내한다.
+
+    앱 아이콘/메뉴 실행은 ~/.bashrc를 안 읽어 GOOGLE_CLOUD_PROJECT를 못 물려받는다 —
+    이미 셸에 설정한 사용자가 "설정 필요"만 보면 오해하므로 /etc/environment 재배치를 짚어준다.
+    """
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+
+    def fake_urlopen(req, timeout=None):
+        return _FakeResp({"currentTier": {"id": "free-tier"}})
+    with pytest.raises(AuthError) as exc:
+        _gemini_fetch(None, {"Authorization": "Bearer t"}, urlopen=fake_urlopen)
+    msg = str(exc.value)
+    assert "GOOGLE_CLOUD_PROJECT" in msg
+    assert "/etc/environment" in msg          # 구체적 해결 위치
+    assert len(msg) <= 200                     # last_error 저장 cap 내
+
+
+def test_gemini_auth_note_hints_gui_env_gotcha():
+    """gemini auth_note(카드 안내)도 같은 함정·해결을 담는다 — 사용자가 처음 보는 문구."""
+    note = PROVIDER_SPECS["gemini"].auth_note
+    assert "GOOGLE_CLOUD_PROJECT" in note
+    assert "/etc/environment" in note
 
 
 def test_gemini_fetch_env_project_wins_over_response(monkeypatch):

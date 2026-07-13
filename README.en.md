@@ -93,9 +93,12 @@ Wayland-clean).
 ### Prerequisites
 
 - Ubuntu 24.04 LTS desktop (GNOME). You need `git` and `sudo` access.
-- An account that has used Claude Code / Codex CLI — official usage is read from
-  `~/.claude/.credentials.json` and `~/.codex/auth.json` automatically (it still works
-  without them, using local logs only).
+- An account that has used Claude Code / Codex CLI / gemini-cli — official usage is read from
+  `~/.claude/.credentials.json`, `~/.codex/auth.json`, and `~/.gemini/oauth_creds.json`
+  automatically (it still works without them, using local logs only).
+- Enterprise Gemini additionally needs the `GOOGLE_CLOUD_PROJECT` (GCP project) env var —
+  but **launching from the app menu does not read `~/.bashrc`**, so follow the placement in
+  [Troubleshooting](#troubleshooting) below.
 
 ### Install
 
@@ -156,6 +159,22 @@ git pull
 - **Official usage is empty** — if you've never logged in with Claude Code / Codex there are
   no credential files, so only local-log data shows. Log in / use them once and official
   numbers fill in on the next run.
+- **Only Gemini official usage is missing (claude/codex are fine)** — enterprise Gemini needs
+  the GCP project set via the `GOOGLE_CLOUD_PROJECT` env var. But **launching from the app menu
+  (icon) does not read `~/.bashrc`**, so a value you only `export`ed in your shell never reaches
+  the app (`echo $GOOGLE_CLOUD_PROJECT` shows it in a terminal, yet it's absent from the app
+  process). Put it where both the GUI and terminal read it, then **log out / back in** of the
+  desktop session:
+  ```bash
+  # System-wide (recommended, sudo once) — applies to GUI, terminal, and SSH
+  echo "GOOGLE_CLOUD_PROJECT=<your-project>" | sudo tee -a /etc/environment
+  # or per-user without sudo: echo 'export GOOGLE_CLOUD_PROJECT=<value>' >> ~/.profile
+  ```
+  Verify after re-login:
+  ```bash
+  tr '\0' '\n' < /proc/"$(pgrep -f tokenomy.launcher | head -1)"/environ | grep GOOGLE_CLOUD_PROJECT
+  ```
+  The existing line in `~/.bashrc` is harmless to keep (after re-login new terminals get this value too).
 
 ## Configuration
 

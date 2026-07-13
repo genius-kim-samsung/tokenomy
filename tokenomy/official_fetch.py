@@ -513,7 +513,11 @@ def _gemini_fetch(spec, headers, *, urlopen) -> tuple[str, int]:
         except (ValueError, TypeError, AttributeError):
             pass
     if not project:
-        raise AuthError("gemini project 미확인 — GOOGLE_CLOUD_PROJECT 설정이 필요합니다")
+        # GUI(앱 아이콘/메뉴) 실행은 ~/.bashrc를 안 읽어 셸에 export한 GOOGLE_CLOUD_PROJECT를
+        # 못 물려받는다 — 이미 설정한 사용자가 "설정 필요"만 보면 오해하므로 재배치 위치를 짚어준다.
+        raise AuthError(
+            "gemini project 미확인 — GOOGLE_CLOUD_PROJECT가 앱 프로세스에 없습니다. "
+            "앱을 아이콘/메뉴로 켜면 ~/.bashrc를 안 읽으니 /etc/environment에 등록 후 재로그인하세요")
     return _http_post_json(f"{_GEMINI_ENDPOINT}:retrieveUserQuota", {"project": project}, headers, urlopen)
 
 
@@ -540,7 +544,9 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     ),
     "gemini": ProviderSpec(
         usage_url=f"{_GEMINI_ENDPOINT}:retrieveUserQuota",   # 명목(fetch가 2-step URL 자체 조립)
-        auth_note="gemini-cli 로그인 또는 GOOGLE_CLOUD_PROJECT 설정이 필요합니다",
+        auth_note=("gemini-cli 로그인 또는 GOOGLE_CLOUD_PROJECT 설정이 필요합니다. "
+                   "앱을 아이콘/메뉴로 켜면 ~/.bashrc를 못 읽으니, 이미 설정했다면 "
+                   "/etc/environment에 등록 후 재로그인하세요"),
         headers=_gemini_headers,
         refresh=lambda *, now_ms, urlopen: refresh_gemini_token(GEMINI_CREDS, now_ms=now_ms, urlopen=urlopen),
         expiry_ms=lambda: _gemini_expiry_ms(GEMINI_CREDS),
