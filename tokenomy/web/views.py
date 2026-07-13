@@ -604,19 +604,33 @@ def share_context(conn, config: dict, now_kst: datetime | None = None, *,
     used)·한도%(월간 버킷 util)로 ShareRow를 만들고, 풀 합산 글랜스 + 복사 문구를 함께 돌려준다.
     게이트는 view.pool_limit_usd(글랜스·전망 히어로와 동일 — 개인 구독제·온보딩은 None).
     공식 뷰 팬아웃은 outlook 중간 산물(views) 재사용 — ol 주입 시 재계산 없음(카드와 동일 규약).
+
+    USD 풀 없는 활성 provider(gemini 등)는 rate_window 이용률 줄(UtilShareRow)로만 문구에
+    실린다 — 풀·합계·providers(페이스 멤버)엔 미기여, rows 없으면 여전히 None(게이트 불변).
     """
     now = now_kst or datetime.now(KST)
     ol = ol or outlook(conn, config, now)
     fp = ol.params
     is_pooled = fp.is_pooled
     rows: list[ShareRow] = []
+    util_rows: list[UtilShareRow] = []
     pool_providers: list[str] = []
     for p in PROVIDERS:
         view = ol.views.get(p)
-        if view is None or view.pool_limit_usd is None:
+        if view is None:
+            continue
+        meta = _PROVIDER_STYLE.get(p, {"label": p.title()})
+        if view.pool_limit_usd is None:
+            # USD 풀 없음 — rate_window 이용률(%)만 공식으로 알 수 있는 provider(gemini 등).
+            # 카드의 클래스별 게이지와 같은 원천(view.buckets)을 이용률 줄로 미러링한다.
+            utils = sorted(
+                ((b["label"], round(b["utilization"])) for b in view.buckets
+                 if b["bucket_kind"] == "rate_window" and b["utilization"] is not None),
+                key=lambda t: t[1], reverse=True)
+            if utils:
+                util_rows.append(UtilShareRow(label=meta["label"], utils=utils))
             continue
         pool_providers.append(p)
-        meta = _PROVIDER_STYLE.get(p, {"label": p.title()})
         g = official_period_glance(conn, p, now, is_pooled=is_pooled)
         # 한도%(util) = 위치(라이브 누적 pool_used/pool_limit) — 만료형 크레딧이 있어도 "지금 한도의
         # 몇 % 소진"이라 누적이 맞다(크레딧 만료 임박을 계속 알린다). ADR 0024.
@@ -635,7 +649,7 @@ def share_context(conn, config: dict, now_kst: datetime | None = None, *,
     date_label = f"{now.astimezone(KST):%Y-%m-%d}"
     return {
         "pool": pool_glance(rows),
-        "text": build_share_text(rows, date_label),
+        "text": build_share_text(rows, date_label, util_rows=util_rows),
         "date_label": date_label,
         "providers": pool_providers,   # 풀 멤버 provider 키(기간별 카드 공식 페이스용, ADR 0017)
     }

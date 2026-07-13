@@ -112,6 +112,37 @@ def test_share_context_builds_from_official_pool():
     assert ctx["pool"].month_usd == 30.0
 
 
+def _seed_gemini_rate_window(conn, utils):
+    """gemini rate_window 버킷들(USD 없음, 클래스 util%)을 NOW6 스냅샷으로 적재. utils=[(라벨, util)]."""
+    insert_official_buckets(
+        conn, provider="gemini", fetched_at=NOW6.isoformat(), created_at=NOW6.isoformat(),
+        buckets=[OfficialBucket(
+            bucket_key="rate_window", raw_key=label.lower(), bucket_kind="rate_window",
+            label=label, native_unit="percent", used_native=None, limit_native=None,
+            remaining_native=None, used_usd=None, limit_usd=None, remaining_usd=None,
+            utilization=util, resets_at=None) for label, util in utils])
+
+
+def test_share_context_gemini_util_line_from_official():
+    """DB 공식 스냅샷에서 gemini 이용률 줄 조립 — util 내림차순·정수 반올림, 풀 멤버는 USD만."""
+    conn = connect(":memory:")
+    _seed_day(conn, "claude", 9, 20.0)
+    _seed_day(conn, "claude", 10, 30.0)
+    _seed_gemini_rate_window(conn, [("Flash", 3.4), ("Pro", 12.3456), ("Flash-Lite", 0.0)])
+    ctx = share_context(conn, {"tracked_providers": ["claude", "gemini"]}, NOW6)
+    assert ctx is not None
+    assert "· Gemini 이용률 Pro 12% · Flash 3% · Flash-Lite 0%" in ctx["text"]
+    assert ctx["providers"] == ["claude"]      # 페이스용 풀 멤버는 USD 풀 provider만
+    assert ctx["pool"].month_usd == 30.0       # 합계에 gemini 미기여
+
+
+def test_share_context_gemini_only_still_none():
+    """이용률 줄만으로는 카드를 만들지 않는다 — USD 풀 rows 없으면 여전히 None(게이트 불변)."""
+    conn = connect(":memory:")
+    _seed_gemini_rate_window(conn, [("Pro", 12.0)])
+    assert share_context(conn, {"tracked_providers": ["gemini"]}, NOW6) is None
+
+
 def test_share_context_none_without_usd_pool():
     """rate-window-only(개인 구독제)는 USD 풀 없음 → None(카드·복사 모두 숨김)."""
     conn = connect(":memory:")
