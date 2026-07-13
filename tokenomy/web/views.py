@@ -694,7 +694,7 @@ def _local_share_rows(conn, active: list[str], now: datetime, windows: list[tupl
 
 
 _LOCAL_SOURCE = "이 기기 · 추정"
-_LOCAL_DISCLAIMER = "공개 API 단가 기준 추정 · 이 기기의 Claude Code와 Codex만 · 수집 시 갱신"
+_LOCAL_DISCLAIMER = "공개 API 단가 기준 추정 · 이 기기의 Claude Code·Codex·Gemini CLI만 · 수집 시 갱신"
 
 
 def period_card_context(conn, config: dict, now_kst: datetime | None = None, *,

@@ -1526,21 +1526,21 @@ def test_overview_enterprise_codex_credit_gauge_renders(tmp_path, monkeypatch):
 
 
 def test_dashboard_disclaimer_names_surface_axis(tmp_path, monkeypatch):
-    """로컬 사용량 단서가 기기 축뿐 아니라 표면 축(Code/Codex)도 말해야 한다(ADR 0009)."""
+    """로컬 사용량 단서가 기기 축뿐 아니라 표면 축(Code/Codex/Gemini)도 말해야 한다(ADR 0009)."""
     client, conn_factory = _client(tmp_path, monkeypatch)
     conn = conn_factory()
     conn.execute("INSERT INTO messages (dedup_key,provider,session_id,ts,cost_usd,priced) "
                  "VALUES ('a','claude','s','2026-06-10T10:00:00Z',5.0,1)")
     conn.commit()
     html = client.get("/").text
-    assert "이 기기의 Claude Code와 Codex만" in html
+    assert "이 기기의 Claude Code·Codex·Gemini CLI만" in html
     assert "이 기기 데이터만" not in html
 
 
 def test_analysis_disclaimer_names_surface_axis(tmp_path, monkeypatch):
     client, _ = _client(tmp_path, monkeypatch)
     html = client.get("/analysis").text
-    assert "이 기기의 Claude Code와 Codex만" in html
+    assert "이 기기의 Claude Code·Codex·Gemini CLI만" in html
     assert "이 기기 데이터만" not in html
 
 
