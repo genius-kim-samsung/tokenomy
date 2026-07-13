@@ -483,6 +483,17 @@ class ShareRow:
 
 
 @dataclass
+class UtilShareRow:
+    """공유 문구 이용률 전용 줄 = USD 풀 없는 provider의 rate_window 이용률(%).
+
+    gemini 공식 quota는 모델 클래스별 이용률뿐(USD 없음, ADR 0027) — 풀·합계에 못 섞이므로
+    별도 줄로만 고지한다. utils=[(버킷 라벨, util% 정수)] — util 내림차순.
+    """
+    label: str
+    utils: list
+
+
+@dataclass
 class PoolGlance:
     """풀 합산 오늘/이번주/이번달 — partial 전염(any partial→partial, all none→none)."""
     today: PeriodSpend
@@ -555,13 +566,15 @@ def _month_cell(month_usd: float | None) -> str:
     return f"이번달 {_usd(month_usd)}"
 
 
-def build_share_text(rows: list[ShareRow], date_label: str, *, note: str | None = None) -> str:
+def build_share_text(rows: list[ShareRow], date_label: str, *, note: str | None = None,
+                     util_rows: list[UtilShareRow] | None = None) -> str:
     """사용량 공유 문구(CONTEXT.md) — 메신저 붙여넣기용 클립보드 텍스트.
 
     AI별 줄(오늘·이번주·이번달·한도%) + 합계 줄(한도% 없음). partial 경고는 카드가
     보내는 사람에게만 하고, 복사 문구 자체엔 △·주석을 넣지 않는다. none 기간은 '데이터 없음'.
     note(구독/로컬, ADR 0017)는 헤더 꼬리표로 출처를 고지한다(예: 'API 단가 환산').
     한도% 생략은 ShareRow.util_pct=None으로 자연 처리된다(구독은 한도 없음).
+    util_rows(USD 풀 없는 provider의 이용률 줄)는 AI 줄들 뒤·합계 앞 — 합계(USD)엔 미기여.
     """
     pool = pool_glance(rows)
     header = f"AI 사용량 ({date_label}, KST)"
@@ -574,6 +587,8 @@ def build_share_text(rows: list[ShareRow], date_label: str, *, note: str | None 
             f"· {r.label} {_period_cell('오늘', r.today)} · "
             f"{_period_cell('이번주', r.week)} · {_month_cell(r.month_usd)}{util}"
         )
+    for u in util_rows or []:
+        lines.append(f"· {u.label} 이용률 " + " · ".join(f"{lbl} {pct}%" for lbl, pct in u.utils))
     lines.append(
         f"합계 {_period_cell('오늘', pool.today)} · "
         f"{_period_cell('이번주', pool.week)} · {_month_cell(pool.month_usd)}"

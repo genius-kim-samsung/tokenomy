@@ -12,7 +12,7 @@ from tokenomy.official_aggregate import PeriodSpend
 from tokenomy.db import connect, insert_official_buckets
 from tokenomy.official_parser import OfficialBucket
 from tokenomy.web.views import (
-    PoolGlance, ShareRow, build_share_text, pool_glance, share_context,
+    PoolGlance, ShareRow, UtilShareRow, build_share_text, pool_glance, share_context,
 )
 
 NOW6 = datetime(2026, 6, 10, 12, 0, tzinfo=KST)   # 6/10(수) — 차트/글랜스 픽스처와 정렬
@@ -123,3 +123,16 @@ def test_share_context_none_without_usd_pool():
             remaining_native=50.0, used_usd=None, limit_usd=None, remaining_usd=None,
             utilization=50.0, resets_at=None)])
     assert share_context(conn, {"tracked_providers": ["claude"]}, NOW6) is None
+
+
+def test_share_text_util_row_line_before_pool():
+    """USD 풀 없는 provider(gemini)는 이용률 전용 줄 — AI 줄들 뒤·합계 앞, 합계엔 미기여."""
+    rows = [ShareRow(label="Claude", today=_ps(3.10), week=_ps(14.00), month_usd=112.00, util_pct=28)]
+    util_rows = [UtilShareRow(label="Gemini", utils=[("Pro", 12), ("Flash", 3)])]
+    text = build_share_text(rows, "2026-06-24", util_rows=util_rows)
+    assert text == (
+        "AI 사용량 (2026-06-24, KST)\n"
+        "· Claude 오늘 $3.1 · 이번주 $14.0 · 이번달 $112.0 (한도 28%)\n"
+        "· Gemini 이용률 Pro 12% · Flash 3%\n"
+        "합계 오늘 $3.1 · 이번주 $14.0 · 이번달 $112.0"
+    )
