@@ -336,6 +336,12 @@ def _bucket_gauge(b: dict, view, now_kst: datetime, *, curation=None) -> dict:
     }
 
 
+def _bucket_expired(b: dict, now_kst: datetime) -> bool:
+    """resets_at이 설정됐고 이미 과거면 만료 — 더 이상 actionable이 아니라 표시에서 뺀다."""
+    r = parse_ts(b["resets_at"]) if b["resets_at"] else None
+    return r is not None and r < now_kst
+
+
 def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime,
                    *, curation=None, is_pooled=None) -> dict:
     """OfficialView + fetch 상태 → 카드 1개 표시 모델.
@@ -354,8 +360,7 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime,
     if has_official:
         for b in view.buckets:
             # 만료(resets_at 과거) 버킷은 더 이상 actionable이 아니므로 숨긴다.
-            r = parse_ts(b["resets_at"]) if b["resets_at"] else None
-            if r is not None and r < now_kst:
+            if _bucket_expired(b, now_kst):
                 continue
             # 큐레이션 hidden 버킷(유령 천장 등, ADR 0016)도 게이지에서 제외.
             if curation is not None and curation(provider, b["raw_key"], b["bucket_kind"])["hidden"]:
@@ -622,10 +627,12 @@ def share_context(conn, config: dict, now_kst: datetime | None = None, *,
         meta = _PROVIDER_STYLE.get(p, {"label": p.title()})
         if view.pool_limit_usd is None:
             # USD 풀 없음 — rate_window 이용률(%)만 공식으로 알 수 있는 provider(gemini 등).
-            # 카드의 클래스별 게이지와 같은 원천(view.buckets)을 이용률 줄로 미러링한다.
+            # 카드의 클래스별 게이지와 같은 원천(view.buckets)을 미러링한다 —
+            # 카드가 숨기는 만료 버킷(resets_at 과거)은 여기서도 제외한다.
             utils = sorted(
                 ((b["label"], round(b["utilization"])) for b in view.buckets
-                 if b["bucket_kind"] == "rate_window" and b["utilization"] is not None),
+                 if b["bucket_kind"] == "rate_window" and b["utilization"] is not None
+                 and not _bucket_expired(b, now)),
                 key=lambda t: t[1], reverse=True)
             if utils:
                 util_rows.append(UtilShareRow(label=meta["label"], utils=utils))
