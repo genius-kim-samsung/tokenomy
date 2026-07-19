@@ -51,6 +51,28 @@ driven by local JSONL logs.
 - Runs fully locally. The web dashboard binds to `127.0.0.1` only — do not
   expose it to a network.
 
+## Viewing from another device (SSH tunnel)
+
+If you use multiple machines (e.g. a Windows laptop for general work, an Ubuntu
+desktop for AI development/builds) and want to see the usage of a headless
+machine from another, **don't expose the dashboard to the network — pull it over
+an SSH tunnel instead.** The app still binds to `127.0.0.1` only, and `ssh -L`
+binds to 127.0.0.1 on both ends, so data stays local end to end (see ADR 0029).
+
+```bash
+# On the client (e.g. Windows laptop) — forward the remote (e.g. Ubuntu) 8765 locally
+ssh -L 8765:127.0.0.1:8765 <remote-host>
+# then open http://localhost:8765 in the client browser
+```
+
+- The port is usually `8765` but drifts to `8766`~`8784` if taken — if so, check
+  the actual port in the remote's `<data>/runtime.json` (source runs use
+  `<repo>/data/runtime.json`).
+- The remote app just needs to be running (the server keeps serving on
+  `127.0.0.1` even when the window is hidden to the tray).
+- The reverse direction (e.g. viewing Windows from Ubuntu) is symmetric — enable
+  **OpenSSH Server** on Windows (off by default) and use the same one-liner.
+
 ## Quick start (non-developer — Windows)
 
 1. Download `Tokenomy.exe` from
