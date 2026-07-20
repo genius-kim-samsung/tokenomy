@@ -227,6 +227,7 @@
   .provider-refresh { @apply text-muted text-[13px] leading-none px-1 py-0.5 rounded; }
   .provider-refresh:hover { @apply text-body bg-card; }
   .provider-note { @apply text-[12px] text-exceeds mt-2; }
+  .provider-note.info { @apply text-muted; }   /* 미로그인 안내 — 오류가 아니라 상태 */
 
   .gauge-row { @apply mt-2; }
   .gauge-line { @apply flex items-center gap-2 text-[13px]; }
@@ -412,6 +413,16 @@
   .onboarding-steps li { @apply pl-1; }
   .onboarding-steps li::marker { color: var(--color-accent); font-weight: 600; }
   .onboarding-card form { @apply my-4; }
+  /* 갈래 둘(이 기기에서 씀 / 다른 기기에서만 씀) — 구분선으로 나눠 나란히 읽게 한다. */
+  .onboarding-path { @apply mt-5 pt-4 border-t border-line; }
+  .onboarding-path h3 { @apply text-[15px] font-semibold mb-2; }
+  .onboarding-path p { @apply text-muted leading-relaxed my-1.5; }
+  .onboarding-path a.btn { @apply no-underline text-white mt-1; }
+  .onboarding-cmds { @apply flex gap-2 items-baseline; }
+  .onboarding-cmds code {
+    @apply bg-elev rounded px-2 py-1 text-[13px] font-mono;
+    color: var(--color-accent);
+  }
 
   /* ── 창 우선 기동: 첫 수집 중 배너(ADR 0023) ── */
   .ingest-banner {

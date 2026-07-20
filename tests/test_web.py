@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from tokenomy import paths
 from tokenomy.clock import KST
 from tokenomy.db import connect, insert_official_buckets, insert_official_raw
 from tokenomy.web import app as app_module
@@ -44,6 +45,9 @@ def _client(tmp_path, monkeypatch):
     cfg.write_text('{"tracked_providers": ["claude", "codex"]}', encoding="utf-8")
     monkeypatch.setenv("TOKENOMY_CONFIG", str(cfg))  # 개인 config 격리
     monkeypatch.setenv("TOKENOMY_SKIP_UPDATE_CHECK", "1")  # 웹 테스트는 업데이트 네트워크 미사용
+    # 기기 로그인도 같은 이유로 고정 — 크레덴셜 유무가 카드 안내 문구를 가르므로(미로그인이면
+    # auth_error보다 우선) 실행 기기의 실제 ~/.claude·~/.codex에 결과가 좌우되면 안 된다.
+    monkeypatch.setattr(paths, "creds_present", lambda p: True)
 
     def fake_connect(*a, **k):
         return connect(str(db))

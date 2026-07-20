@@ -29,7 +29,7 @@ from tokenomy.forecast import Outlook, outlook
 from tokenomy.freshness import LAST_INGEST_KEY
 from tokenomy.pricing import apply_pricing_overrides, load_pricing
 from tokenomy.web import control
-from tokenomy import official_fetch
+from tokenomy import official_fetch, paths
 
 # provider 표시 스타일 — label·accent(추세 선 색=카드 액센트)·fill(추세 밴드 채움[반투명]).
 # 카드 크롬·추세 밴드에 쓰고 게이지 fill엔 절대 쓰지 않는다(fill 색은 임계 전용).
@@ -41,18 +41,30 @@ _PROVIDER_STYLE: dict[str, dict] = {
 }
 
 
-def _remediation(provider: str, status: str | None) -> str | None:
+def _remediation(provider: str, status: str | None, *, logged_in: bool = True) -> str | None:
     """fetch 상태 코드에 따른 사용자 안내 문자열을 반환한다. 정상/없음이면 None.
 
+    **기기 로그인이 없으면 그게 최우선 안내다** — 크레덴셜 부재는 취득 실패가 아니라 아직
+    로그인하지 않은 상태라(fetch가 시도조차 없이 조용히 skip한다) 재로그인 경고가 아니라 최초
+    로그인 안내를 띄운다. 옛 auth_error state가 남아 있어도 마찬가지다(크레덴셜이 사라진 뒤라면
+    '토큰 갱신'이 아니라 '로그인'이 할 일). 실행할 명령은 spec.cli_cmd가 정본.
     auth_error 문구는 official_fetch.PROVIDER_SPECS의 provider별 auth_note가 정본(중복 제거).
     미등록 provider는 기존 폴백 문구를 쓴다.
     """
+    spec = official_fetch.PROVIDER_SPECS.get(provider)
+    if not logged_in:
+        cmd = spec.cli_cmd if spec else provider
+        return f"이 기기에서 {cmd}를 1회 실행·로그인하면 공식 사용량이 보입니다"
     if status == "auth_error":
-        spec = official_fetch.PROVIDER_SPECS.get(provider)
         return spec.auth_note if spec else "재로그인이 필요합니다"
     if status == "http_error":
         return "취득 실패 — 잠시 후 다시 시도하세요"
     return None
+
+
+def any_device_login() -> bool:
+    """이 기기에 공식 취득용 크레덴셜이 하나라도 있는지(빈 상태 문구 분기용)."""
+    return any(paths.creds_present(p) for p in OFFICIAL_PROVIDERS)
 
 
 def _provider_has_data(conn, provider: str) -> bool:
@@ -353,7 +365,10 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime,
     """
     meta = _PROVIDER_STYLE.get(provider, {"label": provider.title(), "accent": "#6c6a64"})
     fs_status = fetch_state["last_status"] if fetch_state else None
-    note = _remediation(provider, fs_status)
+    # 기기 로그인(크레덴셜) 유무는 네트워크 시도 결과가 아니라 로컬 사실이라 fetch_state가 아니라
+    # 파일에서 직접 읽는다 — fetch가 아직 안 돌았거나 throttle된 상태에서도 즉시 정확하다.
+    logged_in = paths.creds_present(provider)
+    note = _remediation(provider, fs_status, logged_in=logged_in)
     has_official = view.status == "ok" and bool(view.buckets)
 
     gauges: list[dict] = []
@@ -366,7 +381,9 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime,
             if curation is not None and curation(provider, b["raw_key"], b["bucket_kind"])["hidden"]:
                 continue
             gauges.append(_bucket_gauge(b, view, now_kst, curation=curation))
-        status = "error" if fs_status in ("auth_error", "http_error") else "ok"
+        # 미로그인이면 남아 있는 옛 fetch 오류를 상태로 올리지 않는다 — 크레덴셜이 사라진 뒤의
+        # auth_error를 'error'로 두면 빨간 '갱신 실패' 칩이 중립 로그인 안내와 함께 떠 모순된다.
+        status = "error" if logged_in and fs_status in ("auth_error", "http_error") else "ok"
     else:
         status = "no_data"
 
@@ -380,6 +397,8 @@ def _provider_card(conn, provider: str, view, fetch_state, now_kst: datetime,
         "label": meta["label"],
         "accent": meta["accent"],
         "status": status,
+        # 미로그인이면 ↻를 눌러도 취득 시도 자체가 없다 — 템플릿이 '위 ↻로 갱신' 유도를 접는다.
+        "needs_login": not logged_in,
         "fresh": _fresh_label(view.stale_minutes),   # JS 미실행 시 서버 초기 텍스트(폴백)
         "fetched_at": view.fetched_at,                # 절대 ISO — JS rel-time tick의 기준
         "note": note,
@@ -795,6 +814,8 @@ def official_section_context(conn, config: dict, now_kst: datetime | None = None
         "period_card": period_card_context(conn, config, now, ol=ol),
         # 개인구독제(ADR 0015 D4): rate-window 게이지를 '이용 한도(스로틀)'로 프레이밍하는 분기 신호.
         "account_mode": account_mode(config),
+        # 활성 0개 빈 상태 문구 분기 — 기기 로그인이 하나도 없으면 '켜면 가져옵니다'가 거짓 약속이다.
+        "any_device_login": any_device_login(),
     }
 
 
@@ -821,6 +842,9 @@ def mini_view_context(conn, config: dict, now_kst: datetime | None = None) -> di
     return {
         "cards": cards,
         "interval": official_fetch_settings(config)["min_interval_minutes"],
+        # 활성 0개 빈 상태 문구 분기 — 기기 로그인이 없으면 '설정에서 켜기'가 거짓 약속이라
+        # 안내를 복제하지 않고 큰 창으로 보낸다(좁은 창이라 명령어 나열은 큰 창 몫).
+        "any_device_login": any_device_login(),
         # 사용량 공유 문구(큰 창과 동일 산출물) — 미니 헤더 📋가 #mini-section의 .share-src를 읽는다.
         "share": share_context(conn, config, now, ol=ol),
     }
@@ -922,6 +946,7 @@ def overview_context(conn, sort: str, now_kst: datetime | None = None) -> dict:
         "forecast_actual": forecast_actual,
         "official_cards": official_cards(conn, config, now, ol=ol),
         "official_interval": official_fetch_settings(config)["min_interval_minutes"],
+        "any_device_login": any_device_login(),   # 활성 0개 빈 상태 문구 분기(섹션 partial과 동일)
         # 기간별 사용량 카드(ADR 0017) — 초기 로드 시 즉시 표시(이후 섹션 폴링이 갱신).
         "period_card": period_card_context(conn, config, now, ol=ol),
         "projects": projects, "sessions": sessions, "insights": coach,

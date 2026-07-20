@@ -11,6 +11,7 @@ from tokenomy.aggregate import (
     daily_series, insights, month_spend, normalize_project, pricing_coverage,
     session_detail, sidechain_split, stacked_trend, token_composition,
 )
+from tokenomy import paths
 from tokenomy.clock import KST, month_bounds, period_bounds
 from tokenomy.db import connect, ingest_records
 from tokenomy.parser import UsageRecord
@@ -18,6 +19,12 @@ from tokenomy.web.views import build_date_tree, history_context, dimension_conte
 
 # June 2026 has 30 days
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=KST)  # day 10 of 30
+
+
+@pytest.fixture(autouse=True)
+def _device_login(monkeypatch):
+    """기기 로그인 기본값=있음 — overview_context의 빈 상태 분기가 실행 기기의 크레덴셜을 안 읽게."""
+    monkeypatch.setattr(paths, "creds_present", lambda p: True)
 
 
 def _insert(conn, ts, cost, project="/p", session="s", cache_read=0, input_t=0,

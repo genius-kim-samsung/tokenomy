@@ -6,12 +6,21 @@
 """
 from datetime import datetime
 
+import pytest
+
+from tokenomy import paths
 from tokenomy.clock import KST
 from tokenomy.db import connect, insert_official_buckets
 from tokenomy.official_parser import OfficialBucket
 from tokenomy.web.views import mini_view_context
 
 NOW = datetime(2026, 6, 21, 12, 0, tzinfo=KST)
+
+
+@pytest.fixture(autouse=True)
+def _device_login(monkeypatch):
+    """기기 로그인 기본값=있음 — 카드 조립이 실행 기기의 실제 크레덴셜을 읽지 않게 고정."""
+    monkeypatch.setattr(paths, "creds_present", lambda p: True)
 
 
 def _conn():
@@ -91,6 +100,14 @@ def test_empty_active_yields_no_cards():
     _seed(conn, "claude", [_bucket()])
     ctx = mini_view_context(conn, {"tracked_providers": []}, NOW)
     assert ctx["cards"] == []
+    assert ctx["any_device_login"] is True
+
+
+def test_empty_active_without_creds_flags_device_login(monkeypatch):
+    # 기기 로그인이 없으면 미니의 '설정에서 켜기'도 거짓 약속이다 — 큰 창으로 보내야 한다.
+    monkeypatch.setattr(paths, "creds_present", lambda p: False)
+    ctx = mini_view_context(_conn(), {"tracked_providers": []}, NOW)
+    assert ctx["any_device_login"] is False
 
 
 def test_interval_reflects_config():

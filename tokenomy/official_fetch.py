@@ -458,6 +458,7 @@ class ProviderSpec:
     """
     usage_url: str
     auth_note: str                 # 인증 오류 안내(옛 _auth_note)
+    cli_cmd: str                   # 기기 로그인용 CLI 진입 명령(미로그인 안내 문구가 조립)
     headers: Callable              # (config, conn, *, now, urlopen) -> dict
     refresh: Callable              # (*, now_ms, urlopen) -> str | None
     expiry_ms: Callable            # () -> int | None — 크레덴셜 파일의 만료 시각(ms), 판정 불가면 None
@@ -526,7 +527,7 @@ def _gemini_fetch(spec, headers, *, urlopen) -> tuple[str, int]:
 PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "claude": ProviderSpec(
         usage_url=CLAUDE_USAGE_URL,
-        auth_note="재로그인이 필요합니다", headers=_claude_headers,
+        auth_note="재로그인이 필요합니다", cli_cmd="claude", headers=_claude_headers,
         refresh=lambda *, now_ms, urlopen: refresh_claude_token(
             CLAUDE_CREDS, now_ms=now_ms, urlopen=urlopen),
         expiry_ms=lambda: _claude_expiry_ms(CLAUDE_CREDS),
@@ -535,7 +536,8 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     ),
     "codex": ProviderSpec(
         usage_url=CODEX_USAGE_URL,
-        auth_note="Codex CLI를 1회 실행해 토큰을 갱신하세요", headers=_codex_headers,
+        auth_note="Codex CLI를 1회 실행해 토큰을 갱신하세요", cli_cmd="codex",
+        headers=_codex_headers,
         refresh=lambda *, now_ms, urlopen: refresh_codex_token(
             CODEX_AUTH, now_ms=now_ms, urlopen=urlopen),
         expiry_ms=lambda: _codex_expiry_ms(CODEX_AUTH),
@@ -547,7 +549,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         auth_note=("gemini-cli 로그인 또는 GOOGLE_CLOUD_PROJECT 설정이 필요합니다. "
                    "앱을 아이콘/메뉴로 켜면 ~/.bashrc를 못 읽으니, 이미 설정했다면 "
                    "/etc/environment에 등록 후 재로그인하세요"),
-        headers=_gemini_headers,
+        cli_cmd="gemini", headers=_gemini_headers,
         refresh=lambda *, now_ms, urlopen: refresh_gemini_token(GEMINI_CREDS, now_ms=now_ms, urlopen=urlopen),
         expiry_ms=lambda: _gemini_expiry_ms(GEMINI_CREDS),
         parse=lambda raw, *, credit_to_usd: parse_gemini(raw, credit_to_usd=credit_to_usd),

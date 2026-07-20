@@ -29,11 +29,14 @@
           {% elif c.fetched_at %}
             <span class="provider-fresh">갱신: <time class="rel-time" data-ts="{{ c.fetched_at }}">{{ c.fresh }}</time></span>
           {% endif %}
+          {# 미로그인 provider는 갱신이 시도조차 안 되므로 ↻ 자체를 감춘다(헛수고 유도 금지). #}
+          {% if not c.needs_login %}
           <form hx-post="/official/refresh" hx-target="#official-section" hx-swap="innerHTML" class="provider-refresh-form">
             <input type="hidden" name="provider" value="{{ c.provider }}">
             <button class="provider-refresh" type="submit"
                     title="{{ c.label }} 갱신" aria-label="{{ c.label }} 갱신">↻</button>
           </form>
+          {% endif %}
         </span>
       </header>
 
@@ -76,15 +79,24 @@
       </div>
       {% endfor %}
 
-      {# 공식 미취득(no_data) — 로컬 추정으로 폴백하지 않고 깨끗한 빈 상태(ADR 0015 D8). #}
-      {% if c.status == "no_data" and not c.gauges %}
+      {# 공식 미취득(no_data) — 로컬 추정으로 폴백하지 않고 깨끗한 빈 상태(ADR 0015 D8).
+         단 기기 로그인이 없으면 ↻가 취득을 시도조차 않으므로 갱신 유도를 접고 note만 남긴다. #}
+      {% if c.status == "no_data" and not c.gauges and not c.needs_login %}
       <p class="provider-empty muted">공식 사용량 미취득 — 위 ↻로 갱신하세요</p>
       {% endif %}
 
-      {% if c.note %}<p class="provider-note">⚠ {{ c.note }}</p>{% endif %}
+      {# 미로그인은 오류가 아니라 상태라 경고(⚠·적색) 대신 중립 안내로 띄운다(CONTEXT '기기 로그인'). #}
+      {% if c.note %}<p class="provider-note{% if c.needs_login %} info{% endif %}">{{ "ⓘ" if c.needs_login else "⚠" }} {{ c.note }}</p>{% endif %}
     </article>
     {% else %}
+    {% if any_device_login %}
     <p class="muted">표시할 AI가 없습니다 — <a href="/settings">설정</a>에서 켜면 공식 사용량을 자동으로 가져옵니다.</p>
+    {% else %}
+    {# 기기 로그인 0개 — 켜도 못 가져오므로 '설정에서 켜세요'는 거짓 약속이다(CONTEXT '기기 로그인'). #}
+    <p class="muted">표시할 AI가 없습니다 — 이 기기에 로그인된 CLI가 없습니다.
+      <code>claude</code> · <code>codex</code> · <code>gemini</code> 중 쓰는 것을 1회 실행해 로그인한 뒤
+      <a href="/settings">설정</a>에서 켜세요.</p>
+    {% endif %}
     {% endfor %}
   </div>
   <p class="disclaimer">ⓘ <span class="src-official">공식</span> AI별 공식 API 사용량 · 계정 전체(전 기기 합)</p>

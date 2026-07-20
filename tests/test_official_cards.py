@@ -1,6 +1,9 @@
 """공식 사용량 provider 카드 조립(views.official_cards) 단위 테스트 — ADR 0002."""
 from datetime import datetime, timedelta
 
+import pytest
+
+from tokenomy import paths
 from tokenomy.aggregate import DayPoint
 from tokenomy.clock import KST
 from tokenomy.db import connect, insert_official_buckets, upsert_fetch_state
@@ -14,6 +17,12 @@ from datetime import date as _date
 
 NOW = datetime(2026, 6, 21, 12, 0, tzinfo=KST)
 NOW6 = datetime(2026, 6, 10, 12, 0, tzinfo=KST)   # 6/10(수): 차트 인덱스 9가 오늘
+
+
+@pytest.fixture(autouse=True)
+def _device_login(monkeypatch):
+    """기기 로그인 기본값=있음 — 카드 note가 실행 기기의 실제 크레덴셜에 좌우되지 않게 고정."""
+    monkeypatch.setattr(paths, "creds_present", lambda p: True)
 
 
 def _conn():
@@ -107,6 +116,62 @@ def test_card_stale_gauge_on_fetch_error():
     assert card["status"] == "error"
     assert card["gauges"]                       # 직전 스냅샷 게이지 유지
     assert "Codex CLI" in (card["note"] or "")
+    assert card["needs_login"] is False         # 로그인은 돼 있고 토큰만 죽은 상태
+
+
+# ── 카드: 기기 로그인 없음(크레덴셜 부재) → 최초 로그인 안내(취득 실패가 아님) ────
+def test_card_login_note_when_creds_absent(monkeypatch):
+    monkeypatch.setattr(paths, "creds_present", lambda p: False)
+    card = _card(official_cards(_conn(), {"tracked_providers": ["codex"]}, NOW), "codex")
+    assert card["needs_login"] is True
+    assert card["note"] == "이 기기에서 codex를 1회 실행·로그인하면 공식 사용량이 보입니다"
+
+
+def test_card_login_note_uses_provider_cli_command(monkeypatch):
+    monkeypatch.setattr(paths, "creds_present", lambda p: False)
+    cards = official_cards(_conn(), {"tracked_providers": ["claude", "gemini"]}, NOW)
+    assert "claude를 1회 실행" in _card(cards, "claude")["note"]
+    assert "gemini를 1회 실행" in _card(cards, "gemini")["note"]
+
+
+def test_card_login_note_wins_over_auth_error(monkeypatch):
+    # 크레덴셜이 사라진 뒤 남은 옛 auth_error state — '재로그인'이 아니라 최초 로그인 안내가 맞다.
+    monkeypatch.setattr(paths, "creds_present", lambda p: False)
+    conn = _conn()
+    upsert_fetch_state(conn, "codex", last_attempt_at=NOW.isoformat(), last_success_at=None,
+                       last_status="auth_error", last_error="HTTP 401")
+    note = _card(official_cards(conn, {"tracked_providers": ["codex"]}, NOW), "codex")["note"]
+    assert "이 기기에서" in note
+    assert "토큰을 갱신" not in note
+
+
+def test_card_keeps_snapshot_gauges_when_creds_absent(monkeypatch):
+    # 예전 스냅샷은 숨기지 않는다 — 안내만 얹는다.
+    monkeypatch.setattr(paths, "creds_present", lambda p: False)
+    conn = _conn()
+    _seed(conn, "claude", [_bucket()])
+    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    assert card["gauges"]
+    assert card["needs_login"] is True
+
+
+def test_card_creds_absent_is_not_error_status(monkeypatch):
+    # 스냅샷 + 옛 auth_error가 남은 채 크레덴셜만 사라진 조합 — status가 error면 템플릿이
+    # 빨간 '⚠ 갱신 실패' 칩을 중립 로그인 안내와 함께 띄워 '미로그인은 오류가 아니다'를 깬다.
+    monkeypatch.setattr(paths, "creds_present", lambda p: False)
+    conn = _conn()
+    _seed(conn, "claude", [_bucket()])
+    upsert_fetch_state(conn, "claude", last_attempt_at=NOW.isoformat(), last_success_at=None,
+                       last_status="auth_error", last_error="HTTP 401")
+    card = _card(official_cards(conn, {"tracked_providers": ["claude"]}, NOW), "claude")
+    assert card["status"] == "ok"               # error 아님 — 미로그인은 취득 실패가 아니다
+    assert card["needs_login"] is True
+
+
+def test_card_logged_in_has_no_login_note():
+    card = _card(official_cards(_conn(), {"tracked_providers": ["claude"]}, NOW), "claude")
+    assert card["needs_login"] is False
+    assert card["note"] is None
 
 
 # ── 카드: 추정 주간 게이지 제거(ADR 0012) — 공식 카드는 공식 수치만 ──────────────

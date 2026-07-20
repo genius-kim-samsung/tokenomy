@@ -35,7 +35,12 @@
   {% endif %}
 </div>
 {% else %}
+{% if any_device_login %}
 <p class="mini-empty">활성 AI 없음 · <a href="/settings">설정</a>에서 켜기</p>
+{% else %}
+{# 기기 로그인 0개 — 켜도 못 가져온다. 좁은 창이라 안내를 복제하지 않고 큰 창으로 보낸다. #}
+<p class="mini-empty">로그인된 CLI 없음 · <a href="/">큰 창</a>에서 안내</p>
+{% endif %}
 {% endfor %}
 {# 사용량 공유 문구 소스(숨김) — 헤더 바 📋 버튼이 data-copy-target으로 읽는다. 풀 있을 때만. #}
 {% if share %}<pre class="share-src" hidden>{{ share.text }}</pre>{% endif %}
